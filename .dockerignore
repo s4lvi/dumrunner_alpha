@@ -1,0 +1,40 @@
+# Files excluded from the Docker build context. Keeps the image small and
+# avoids invalidating layer caches on irrelevant changes.
+
+# Node + build outputs
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+out
+**/out
+*.tsbuildinfo
+
+# Env files — secrets come from Fly, not the image
+.env
+.env.*
+!.env.example
+
+# Git + IDE + OS
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+
+# Client workspace — not deployed to Fly. Keep package.json so npm
+# workspace resolution succeeds during the install step.
+packages/client
+!packages/client/package.json
+
+# Repo docs / planning that don't ship in the image
+GDD.md
+README.md
+*.md
+packages/asset_gen
+supabase
+
+# Claude / agent metadata
+.claude

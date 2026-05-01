@@ -16,7 +16,7 @@ import { env } from './env.js';
 import { supabase } from './supabase.js';
 import { registry } from './registry.js';
 
-const wss = new WebSocketServer({ port: env.port, host: '127.0.0.1' });
+const wss = new WebSocketServer({ port: env.port, host: env.host });
 
 wss.on('listening', () => {
   const addr = wss.address();
