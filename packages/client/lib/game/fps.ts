@@ -154,6 +154,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   let selfX = init.self.x;
   let selfY = init.self.y;
   let yaw = 0;
+  // Pseudo-pitch (radians). Doom-style: doesn't rotate the actual rays —
+  // just slides the horizon line up/down so you can aim at floor or
+  // ceiling. Positive = looking down, negative = looking up. Clamped to
+  // ±60° so the world doesn't flip.
+  let pitch = 0;
+  const PITCH_LIMIT = (Math.PI / 180) * 60;
 
   // ---------- input state ----------
   const keys = new Set<string>();
@@ -250,6 +256,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   function onMouseMove(e: MouseEvent) {
     if (!pointerLocked) return;
     yaw = (yaw + e.movementX * POINTER_SENSITIVITY) % (Math.PI * 2);
+    // Y-axis: mouse-down = look-down. movementY is positive when the mouse
+    // moves down on screen; in our coord system pitch>0 = looking up, so
+    // we subtract. Pitch is faux (horizon shift only) so over-tilting
+    // just slides the world off-screen — clamp tightly.
+    pitch = Math.max(
+      -PITCH_LIMIT,
+      Math.min(PITCH_LIMIT, pitch - e.movementY * POINTER_SENSITIVITY)
+    );
   }
   function onKeyDown(e: KeyboardEvent) {
     keys.add(e.code);
@@ -295,7 +309,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   function render() {
     const W = app.screen.width;
     const H = app.screen.height;
-    const halfH = H / 2;
+    // Pitch shifts the horizon line up/down. Walls + sprites + the sky/
+    // floor gradient boundary all hang off this y-coordinate.
+    const pitchPixels = (pitch * H) / FOV;
+    const horizonY = Math.max(0, Math.min(H, H / 2 + pitchPixels));
 
     wallLayer.clear();
     spriteLayer.clear();
@@ -304,26 +321,30 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // a dungeon. Both gradients meet at the horizon line so walls & sprites
     // can fog into the same colour as they recede.
     const palette = paletteForScene();
-    drawVerticalGradient(
-      wallLayer,
-      0,
-      0,
-      W,
-      halfH,
-      palette.skyTop,
-      palette.skyBottom,
-      SKY_GRADIENT_STEPS
-    );
-    drawVerticalGradient(
-      wallLayer,
-      0,
-      halfH,
-      W,
-      halfH,
-      palette.floorTop,
-      palette.floorBottom,
-      FLOOR_GRADIENT_STEPS
-    );
+    if (horizonY > 0) {
+      drawVerticalGradient(
+        wallLayer,
+        0,
+        0,
+        W,
+        horizonY,
+        palette.skyTop,
+        palette.skyBottom,
+        SKY_GRADIENT_STEPS
+      );
+    }
+    if (horizonY < H) {
+      drawVerticalGradient(
+        wallLayer,
+        0,
+        horizonY,
+        W,
+        H - horizonY,
+        palette.floorTop,
+        palette.floorBottom,
+        FLOOR_GRADIENT_STEPS
+      );
+    }
 
     // Per-column raycast.
     const numCols = Math.ceil(W / COLUMN_STEP_PX);
@@ -344,7 +365,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       zBuffer[i] = perp;
 
       const lineH = (WALL_HEIGHT_WORLD * H) / perp;
-      const top = halfH - lineH / 2;
+      const top = horizonY - lineH / 2;
 
       const baseColor = hit.isBuilding
         ? hit.faceNS
@@ -360,8 +381,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       wallLayer.rect(screenX, top, COLUMN_STEP_PX, lineH).fill({ color });
     }
 
-    drawSprites(W, H, palette.fog);
-    drawBuildGhost(W, H, palette.fog);
+    drawSprites(W, H, palette.fog, horizonY);
+    drawBuildGhost(W, H, palette.fog, horizonY);
     drawHud(W, H);
   }
 
@@ -370,7 +391,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // there, and resolve any queued click. With no pitch, "the tile in
   // front of the player" is a fixed forward-distance pick — predictable
   // and matches the GDD's tile-grid placement semantics.
-  function drawBuildGhost(W: number, H: number, fogColor: number) {
+  function drawBuildGhost(W: number, H: number, fogColor: number, horizonY: number) {
     if (buildKind === null || !layout) {
       pendingBuildAction = null;
       return;
@@ -381,10 +402,22 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       return;
     }
 
-    // Project a ray forward at a fixed reach to find the target tile.
+    // Project a ray forward to find the target tile. Looking down
+    // (pitch < a small negative threshold — pitch > 0 is up in our coord
+    // system) makes the ray hit the ground at a finite distance; we use
+    // trig to land the reticle wherever the player is pointing on the
+    // floor. Looking level/up falls back to a fixed reach (1.5 tiles)
+    // since a horizontal ray never hits the ground.
     const dirX = Math.cos(yaw);
     const dirY = Math.sin(yaw);
-    const reach = BUILD_REACH_TILES * tileSize;
+    const camHeight = WALL_HEIGHT_WORLD / 2;
+    const maxReach = (BUILD_RADIUS_TILES + 0.5) * tileSize;
+    let reach: number;
+    if (pitch < -0.08) {
+      reach = Math.min(maxReach, camHeight / Math.tan(-pitch));
+    } else {
+      reach = BUILD_REACH_TILES * tileSize;
+    }
     const targetX = selfX + dirX * reach;
     const targetY = selfY + dirY * reach;
     const tileX = Math.floor(targetX / tileSize);
@@ -413,7 +446,6 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // Draw a billboard ghost at the tile centre, sized like a wall. We
     // re-use the sprite math so it z-tests against the wall depth buffer
     // (so the ghost gets clipped behind walls correctly).
-    const halfH = H / 2;
     const halfFov = FOV / 2;
     const halfPlane = Math.tan(halfFov);
     const planeX = -dirY * halfPlane;
@@ -429,7 +461,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         const screenCenterX = (W / 2) * (1 + transformX / transformY);
         const ghostH = Math.abs(Math.floor((WALL_HEIGHT_WORLD * H) / transformY));
         const ghostW = Math.abs(Math.floor((tileSize * H) / transformY));
-        const top = halfH - ghostH / 2;
+        const top = horizonY - ghostH / 2;
         const left = Math.floor(screenCenterX - ghostW / 2);
         const right = left + ghostW;
         const ghostColor = applyFog(
@@ -508,9 +540,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   };
   const spritesScratch: Sprite[] = [];
 
-  function drawSprites(W: number, H: number, fogColor: number) {
+  function drawSprites(W: number, H: number, fogColor: number, horizonY: number) {
     spritesScratch.length = 0;
-    const halfH = H / 2;
     const halfFov = FOV / 2;
     const halfPlane = Math.tan(halfFov);
     const dirX = Math.cos(yaw);
@@ -600,7 +631,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // bottom edge of a wall at that distance. Without this, sprites
       // float at eye level instead of standing on the ground.
       const floorY =
-        halfH + (WALL_HEIGHT_WORLD * 0.5 * H) / transformY;
+        horizonY + (WALL_HEIGHT_WORLD * 0.5 * H) / transformY;
       const drawTop = Math.floor(floorY - spriteH);
       const drawLeft = Math.floor(screenCenterX - spriteW / 2);
       const drawRight = drawLeft + spriteW;
