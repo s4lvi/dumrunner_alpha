@@ -14,7 +14,7 @@
 # JOIN_TOKEN_SECRET MUST byte-match the value set in Vercel — clients sign
 # join tokens via the Next API route and this server verifies them.
 
-app = "dumrunner-alpha"
+app = "dumrunner-alpha-holy-pine-7754"
 primary_region = "iad"
 
 [build]
