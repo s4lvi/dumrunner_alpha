@@ -53,6 +53,37 @@ const WALL_COLOR_NS = 0x4f4f57;
 const BUILDING_WALL_COLOR_EW = 0x9a9aa3;
 const BUILDING_WALL_COLOR_NS = 0x747480;
 
+// ---------- entity visuals (Phase 2) ----------
+// Mirrors ENEMY_VISUALS in pixi.ts. Kept inline to avoid a coupling import.
+type EnemyVisual = { color: number; size: number };
+const ENEMY_VISUALS: Record<string, EnemyVisual> = {
+  dummy_target: { color: 0xef4444, size: 18 },
+  chaser_melee: { color: 0xa855f7, size: 16 },
+  shooter_drone: { color: 0x60a5fa, size: 14 },
+  brute_chaser: { color: 0xb45309, size: 26 },
+};
+const FALLBACK_ENEMY_VISUAL: EnemyVisual = ENEMY_VISUALS.dummy_target;
+const PLAYER_OTHER_COLOR = 0x4dd0e1;
+const PLAYER_SIZE = 14;
+const CORPSE_COLOR = 0x4a1d1d;
+const CORPSE_SIZE = 14;
+const PROJECTILE_DEFAULT_COLOR = 0xfde047;
+const MATERIAL_TINT: Record<string, number> = {
+  scrap: 0xc2410c,
+  wire: 0xeab308,
+  alloy: 0x94a3b8,
+  circuit: 0x10b981,
+  biotic: 0xa855f7,
+  crystal: 0x06b6d4,
+};
+const PART_TIER_COLOR: Record<string, number> = {
+  Mk1: 0x9ca3af,
+  Mk2: 0x22c55e,
+  Mk3: 0x3b82f6,
+  Mk4: 0xa855f7,
+  Alien: 0xf97316,
+};
+
 export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const app = new Application();
   let ready = false;
@@ -84,7 +115,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // ---------- lifecycle ----------
   const root = new Container();
   const wallLayer = new Graphics();
+  const spriteLayer = new Graphics();
   root.addChild(wallLayer);
+  root.addChild(spriteLayer);
+
+  // Per-column perpendicular distance to the wall hit. Indexed by column
+  // (i = screenX / COLUMN_STEP_PX). Sprites z-test against this so a wall
+  // in front of an enemy occludes the enemy.
+  let zBuffer: Float32Array = new Float32Array(0);
 
   const initPromise = app
     .init({
@@ -167,6 +205,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const halfH = H / 2;
 
     wallLayer.clear();
+    spriteLayer.clear();
 
     // Sky (top half) + floor (bottom half) — flat colours for now. Phase 4
     // turns the surface into a gradient horizon.
@@ -176,21 +215,20 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // Per-column raycast.
     const numCols = Math.ceil(W / COLUMN_STEP_PX);
     const halfFov = FOV / 2;
+    if (zBuffer.length !== numCols) zBuffer = new Float32Array(numCols);
+    zBuffer.fill(Infinity);
+
     for (let i = 0; i < numCols; i++) {
       const screenX = i * COLUMN_STEP_PX;
-      // -1..1 across the screen.
       const camNorm = (2 * screenX) / W - 1;
-      // Linear FOV mapping (slight fish-eye but acceptable; correct via
-      // perpendicular distance below).
       const rayAngle = yaw + camNorm * halfFov;
 
       const hit = castRay(selfX, selfY, rayAngle);
       if (!hit) continue;
 
-      // Fish-eye correction: project distance onto camera forward vector so
-      // walls at the edges don't bow.
       const perp = hit.dist * Math.cos(camNorm * halfFov);
       if (perp <= 0.0001) continue;
+      zBuffer[i] = perp;
 
       const lineH = (WALL_HEIGHT_WORLD * H) / perp;
       const top = halfH - lineH / 2;
@@ -204,6 +242,118 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           : WALL_COLOR_EW;
 
       wallLayer.rect(screenX, top, COLUMN_STEP_PX, lineH).fill({ color });
+    }
+
+    drawSprites(W, H);
+  }
+
+  // ---------- sprites (Phase 2) ----------
+  // Camera-facing billboards using the standard Lode raycaster sprite math.
+  // Each entity becomes a sprite with a world position, color, and ground-
+  // anchored height. We collect all entities, sort far→near, project, and
+  // per-column z-test against the wall depth buffer to handle occlusion.
+  type Sprite = {
+    x: number;
+    y: number;
+    color: number;
+    // Sprite world-height in the same units as walls. Smaller things sit
+    // closer to the floor; everything is anchored at the horizon (no pitch).
+    height: number;
+    distSq: number;
+  };
+  const spritesScratch: Sprite[] = [];
+
+  function drawSprites(W: number, H: number) {
+    spritesScratch.length = 0;
+    const halfH = H / 2;
+    const halfFov = FOV / 2;
+    const halfPlane = Math.tan(halfFov);
+    const dirX = Math.cos(yaw);
+    const dirY = Math.sin(yaw);
+    // Camera plane = perpendicular to dir, scaled so the screen edges
+    // correspond to ±halfPlane in camera space.
+    const planeX = -dirY * halfPlane;
+    const planeY = dirX * halfPlane;
+
+    // Collect every renderable entity. Self is skipped — we never see our
+    // own avatar in first person.
+    const selfId = init.self.characterId;
+    for (const p of players.values()) {
+      if (p.characterId === selfId) continue;
+      if (!p.alive) continue;
+      pushSprite(p.x, p.y, PLAYER_OTHER_COLOR, PLAYER_SIZE * 2);
+    }
+    for (const e of enemies.values()) {
+      const v = ENEMY_VISUALS[e.kind] ?? FALLBACK_ENEMY_VISUAL;
+      pushSprite(e.x, e.y, v.color, v.size * 2);
+    }
+    for (const c of corpses.values()) {
+      pushSprite(c.x, c.y, CORPSE_COLOR, CORPSE_SIZE);
+    }
+    for (const l of loot.values()) {
+      const color =
+        l.content.kind === 'material'
+          ? (MATERIAL_TINT[l.content.materialId] ?? 0xffffff)
+          : (PART_TIER_COLOR[l.content.part.tier] ?? 0xffffff);
+      // Loot sits on the floor — small height.
+      pushSprite(l.x, l.y, color, 14);
+    }
+    for (const pr of projectiles.values()) {
+      pushSprite(
+        pr.x,
+        pr.y,
+        pr.color ?? PROJECTILE_DEFAULT_COLOR,
+        8
+      );
+    }
+
+    // Far-to-near so closer sprites paint over farther ones.
+    spritesScratch.sort((a, b) => b.distSq - a.distSq);
+
+    // Determinant for the inverse camera transform. invDet is the same for
+    // every sprite this frame.
+    const det = planeX * dirY - dirX * planeY;
+    if (Math.abs(det) < 1e-6) return;
+    const invDet = 1 / det;
+
+    for (const s of spritesScratch) {
+      const relX = s.x - selfX;
+      const relY = s.y - selfY;
+      // Camera-space transform: transformX is left/right offset, transformY
+      // is depth (forward). Negative depth = behind us, skip.
+      const transformX = invDet * (dirY * relX - dirX * relY);
+      const transformY = invDet * (-planeY * relX + planeX * relY);
+      if (transformY <= 0.1) continue;
+
+      const screenCenterX = (W / 2) * (1 + transformX / transformY);
+      const spriteH = Math.abs(Math.floor((s.height * H) / transformY));
+      // Square-aspect billboard for now; Phase 7 may stretch by entity kind.
+      const spriteW = spriteH;
+
+      // Anchor the sprite's bottom at the horizon line so things "stand on
+      // the floor." Smaller sprites (loot) appear lower automatically.
+      const drawTop = halfH - spriteH;
+      const drawLeft = Math.floor(screenCenterX - spriteW / 2);
+      const drawRight = drawLeft + spriteW;
+
+      // Per-column z-test. Iterate at the column step so we match the wall
+      // pass; for each visible stripe, paint a rect.
+      const startStripe = Math.max(0, drawLeft);
+      const endStripe = Math.min(W, drawRight);
+      for (let stripe = startStripe; stripe < endStripe; stripe += COLUMN_STEP_PX) {
+        const colIdx = Math.floor(stripe / COLUMN_STEP_PX);
+        if (colIdx < 0 || colIdx >= zBuffer.length) continue;
+        if (transformY >= zBuffer[colIdx]) continue;
+        spriteLayer
+          .rect(stripe, drawTop, COLUMN_STEP_PX, spriteH)
+          .fill({ color: s.color });
+      }
+    }
+
+    function pushSprite(x: number, y: number, color: number, height: number) {
+      const dx = x - selfX;
+      const dy = y - selfY;
+      spritesScratch.push({ x, y, color, height, distSq: dx * dx + dy * dy });
     }
   }
 
