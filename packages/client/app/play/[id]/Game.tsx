@@ -75,6 +75,24 @@ export function Game({ serverId }: { serverId: string }) {
   const [nearWorkstations, setNearWorkstations] = useState<Set<BuildingKind>>(
     () => new Set()
   );
+  // Renderer pick. Initialised from URL param `?fps=1` for backwards-compat;
+  // the V hotkey toggles it at runtime.
+  const [useFps, setUseFps] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('fps') === '1';
+  });
+  // Captured WS-callback bundle so the toggle handler can re-instantiate
+  // the renderer without losing access to session.ws.
+  const rendererCallbacksRef = useRef<{
+    sendInput: (mx: number, my: number, sprint: boolean) => void;
+    sendFire: (dx: number, dy: number) => void;
+    sendBuild: (kind: BuildingKind, tx: number, ty: number) => void;
+    sendDemolish: (id: string) => void;
+    onNearInteractableChanged: (
+      near: { id: string; label: string } | null
+    ) => void;
+    onNearWorkstationsChanged: (kinds: BuildingKind[]) => void;
+  } | null>(null);
   // Holds the live ws so number-key handlers can send select_hotbar without
   // closing over render-time scope.
   const wsForHotbar = useRef<WebSocket | null>(null);
@@ -237,16 +255,47 @@ export function Game({ serverId }: { serverId: string }) {
         setSceneId(msg.sceneId);
         setKnownBlueprints(new Set(msg.knownBlueprints));
         wsForHotbar.current = session.ws;
+        // Capture the WS-bound callbacks once, in a ref. The renderer hot-
+        // swap (V key) uses this same bundle to re-instantiate without
+        // needing access to `session` outside the welcome closure.
+        rendererCallbacksRef.current = {
+          sendInput: (moveX, moveY, sprint) => {
+            const ws = session.ws;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const m: ClientMessage = { type: 'input', moveX, moveY, sprint };
+            ws.send(JSON.stringify(m));
+          },
+          sendFire: (dirX, dirY) => {
+            const ws = session.ws;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const m: ClientMessage = { type: 'fire', dirX, dirY };
+            ws.send(JSON.stringify(m));
+          },
+          sendBuild: (kind, tileX, tileY) => {
+            const ws = session.ws;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const m: ClientMessage = { type: 'build_request', kind, tileX, tileY };
+            ws.send(JSON.stringify(m));
+          },
+          sendDemolish: (buildingId) => {
+            const ws = session.ws;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const m: ClientMessage = { type: 'demolish_request', buildingId };
+            ws.send(JSON.stringify(m));
+          },
+          onNearInteractableChanged: (near) => {
+            nearInteractableRef.current = near;
+            setNearInteractable(near);
+          },
+          onNearWorkstationsChanged: (kinds) => {
+            setNearWorkstations(new Set(kinds));
+          },
+        };
         requestAnimationFrame(() => {
           if (session.cancelled) return;
           const host = canvasHostRef.current;
           if (!host || gameRef.current) return;
-          // Pick renderer. `?fps=1` in the URL spins up the raycaster for
-          // the 2.5d experiment. Default stays on the top-down view. Phase 6
-          // promotes this to a runtime toggle.
-          const useFps =
-            typeof window !== 'undefined' &&
-            new URLSearchParams(window.location.search).get('fps') === '1';
+          const cb = rendererCallbacksRef.current!;
           const runner = useFps ? runFpsGame : runGame;
           gameRef.current = runner(host, {
             self: msg.self,
@@ -257,37 +306,7 @@ export function Game({ serverId }: { serverId: string }) {
             corpses: msg.corpses,
             buildings: msg.buildings,
             layout: msg.layout,
-            sendInput: (moveX, moveY, sprint) => {
-              const ws = session.ws;
-              if (!ws || ws.readyState !== WebSocket.OPEN) return;
-              const m: ClientMessage = { type: 'input', moveX, moveY, sprint };
-              ws.send(JSON.stringify(m));
-            },
-            sendFire: (dirX, dirY) => {
-              const ws = session.ws;
-              if (!ws || ws.readyState !== WebSocket.OPEN) return;
-              const m: ClientMessage = { type: 'fire', dirX, dirY };
-              ws.send(JSON.stringify(m));
-            },
-            sendBuild: (kind, tileX, tileY) => {
-              const ws = session.ws;
-              if (!ws || ws.readyState !== WebSocket.OPEN) return;
-              const m: ClientMessage = { type: 'build_request', kind, tileX, tileY };
-              ws.send(JSON.stringify(m));
-            },
-            sendDemolish: (buildingId) => {
-              const ws = session.ws;
-              if (!ws || ws.readyState !== WebSocket.OPEN) return;
-              const m: ClientMessage = { type: 'demolish_request', buildingId };
-              ws.send(JSON.stringify(m));
-            },
-            onNearInteractableChanged: (near) => {
-              nearInteractableRef.current = near;
-              setNearInteractable(near);
-            },
-            onNearWorkstationsChanged: (kinds) => {
-              setNearWorkstations(new Set(kinds));
-            },
+            ...cb,
           });
         });
         break;
@@ -434,6 +453,48 @@ export function Game({ serverId }: { serverId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptJoin]);
 
+  // Hot-swap renderers when `useFps` flips. We snapshot scene state from
+  // the outgoing renderer, destroy it, then instantiate the other one with
+  // that state. Skips the very first run because the welcome handler is
+  // responsible for the initial mount.
+  const initialMountRef = useRef(true);
+  useEffect(() => {
+    if (initialMountRef.current) {
+      initialMountRef.current = false;
+      return;
+    }
+    const current = gameRef.current;
+    const cb = rendererCallbacksRef.current;
+    const host = canvasHostRef.current;
+    if (!current || !cb || !host) return;
+    const snapshot = current.currentSceneState();
+    current.destroy();
+    gameRef.current = null;
+    const runner = useFps ? runFpsGame : runGame;
+    gameRef.current = runner(host, {
+      self: snapshot.self,
+      others: snapshot.players,
+      enemies: snapshot.enemies,
+      projectiles: snapshot.projectiles,
+      loot: snapshot.loot,
+      corpses: snapshot.corpses,
+      buildings: snapshot.buildings,
+      layout: snapshot.layout,
+      ...cb,
+    });
+    // Reapply build/weapon mode against the new renderer so the equipped
+    // hotbar slot stays in sync.
+    const slot = inventory[hotbarSelection];
+    const kind =
+      sceneId === 'surface' && slot?.kind === 'placeable' && slot.count > 0
+        ? slot.buildingKind
+        : null;
+    gameRef.current.setBuildMode(kind);
+    gameRef.current.setEquippedWeapon(
+      slot?.kind === 'weapon' ? slot.weaponId : null
+    );
+  }, [useFps, hotbarSelection, inventory, sceneId]);
+
   // Build mode follows the selected hotbar slot: a placeable WITH stock + the
   // surface scene turns it on, anything else turns it off.
   useEffect(() => {
@@ -470,6 +531,13 @@ export function Game({ serverId }: { serverId: string }) {
         if (near) {
           sendOnLiveWs({ type: 'interact', interactableId: near.id });
         }
+        return;
+      }
+      // V toggles between top-down and FPS renderers. Swap is hot — we
+      // snapshot scene state from the old renderer and seed the new one.
+      if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        setUseFps((v) => !v);
         return;
       }
       // Hotbar selection: 1-9 maps to slots 0-8.

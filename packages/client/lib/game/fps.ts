@@ -551,6 +551,24 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     swapScene(state) {
       applySceneState(state);
     },
+    currentSceneState(): SceneState {
+      const self = players.get(init.self.characterId);
+      const otherPlayers: Player[] = [];
+      for (const p of players.values()) {
+        if (p.characterId === init.self.characterId) continue;
+        otherPlayers.push({ ...p });
+      }
+      return {
+        self: self ? { ...self } : { ...init.self, x: selfX, y: selfY },
+        players: otherPlayers,
+        enemies: [...enemies.values()].map((e) => ({ ...e })),
+        projectiles: [...projectiles.values()].map((p) => ({ ...p })),
+        loot: [...loot.values()].map((l) => ({ ...l })),
+        corpses: [...corpses.values()].map((c) => ({ ...c })),
+        buildings: [...buildings.values()].map((b) => ({ ...b })),
+        layout,
+      };
+    },
     destroy() {
       detachInputListeners();
       if (document.pointerLockElement === app.canvas) {

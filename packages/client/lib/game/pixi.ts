@@ -97,6 +97,9 @@ export type GameHandle = {
   // or null. Pixi gates fire/swing visuals + outbound fire messages on this.
   setEquippedWeapon(weaponId: 'pistol' | 'knife' | null): void;
   swapScene(state: SceneState): void;
+  // Snapshot of the renderer's current scene state. Used by the host to
+  // hot-swap renderers (FPS ↔ top-down) without losing position / entities.
+  currentSceneState(): SceneState;
   destroy(): void;
 };
 
@@ -1886,6 +1889,30 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         // Build mode is surface-only; if the new scene has no grid, exit it.
         if ((state.layout?.tileSize ?? 0) <= 0) buildKind = null;
       });
+    },
+    currentSceneState(): SceneState {
+      // Snapshot all entities for hot-swapping into the FPS renderer (or
+      // back). `self` is reconstructed from the players map keyed by our
+      // own characterId.
+      const selfRendered = players.get(init.self.characterId);
+      const self: Player = selfRendered
+        ? { ...selfRendered.data }
+        : { ...init.self };
+      const otherPlayers: Player[] = [];
+      for (const p of players.values()) {
+        if (p.data.characterId === init.self.characterId) continue;
+        otherPlayers.push({ ...p.data });
+      }
+      return {
+        self,
+        players: otherPlayers,
+        enemies: [...enemies.values()].map((e) => ({ ...e.data })),
+        projectiles: [...projectiles.values()].map((p) => ({ ...p.data })),
+        loot: [...loot.values()].map((l) => ({ ...l.data })),
+        corpses: [...corpses.values()].map((c) => ({ ...c.data })),
+        buildings: [...buildings.values()].map((b) => ({ ...b.data })),
+        layout: currentLayout,
+      };
     },
     destroy() {
       destroyed = true;
