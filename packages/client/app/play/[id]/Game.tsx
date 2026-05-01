@@ -24,6 +24,7 @@ import {
   type SuitSlotKind,
 } from '@dumrunner/shared';
 import { runGame, type GameHandle } from '@/lib/game/pixi';
+import { runFpsGame } from '@/lib/game/fps';
 
 type JoinResponse = {
   wsUrl: string;
@@ -240,7 +241,14 @@ export function Game({ serverId }: { serverId: string }) {
           if (session.cancelled) return;
           const host = canvasHostRef.current;
           if (!host || gameRef.current) return;
-          gameRef.current = runGame(host, {
+          // Pick renderer. `?fps=1` in the URL spins up the raycaster for
+          // the 2.5d experiment. Default stays on the top-down view. Phase 6
+          // promotes this to a runtime toggle.
+          const useFps =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('fps') === '1';
+          const runner = useFps ? runFpsGame : runGame;
+          gameRef.current = runner(host, {
             self: msg.self,
             others: msg.players.filter((p) => p.characterId !== msg.self.characterId),
             enemies: msg.enemies,
