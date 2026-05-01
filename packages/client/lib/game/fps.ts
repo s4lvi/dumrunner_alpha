@@ -43,15 +43,45 @@ const RAY_MAX_DIST = 1500;
 const WALL_HEIGHT_WORLD = 64; // arbitrary world units. Tunes apparent wall scale.
 const POINTER_SENSITIVITY = 0.0025; // rad per mouse pixel
 
-// Sky / floor colours (placeholder — Phase 4 makes the surface horizon nicer).
-const SKY_COLOR = 0x1a2332;
-const FLOOR_COLOR = 0x2a2622;
 // Wall faces: NS (north/south) shaded slightly darker than EW for depth cue.
 const WALL_COLOR_EW = 0x6b6b73;
 const WALL_COLOR_NS = 0x4f4f57;
 // Player buildings render in their own colour so they read as "yours."
 const BUILDING_WALL_COLOR_EW = 0x9a9aa3;
 const BUILDING_WALL_COLOR_NS = 0x747480;
+
+// Per-scene horizon palette. Sky fades from `skyTop` (zenith) down to
+// `skyBottom` (horizon line); floor fades from `floorTop` (horizon) down
+// to `floorBottom` (under the player). The horizon colour also drives the
+// distance fog — walls and sprites blend toward it as they recede so the
+// far cut doesn't hard-edge.
+type ScenePalette = {
+  skyTop: number;
+  skyBottom: number;
+  floorTop: number;
+  floorBottom: number;
+  fog: number;
+};
+const SURFACE_PALETTE: ScenePalette = {
+  skyTop: 0x0d1733,
+  skyBottom: 0xc46b3a, // dusty orange dusk
+  floorTop: 0x5a2f1a, // rust band at horizon
+  floorBottom: 0x1d1109, // dark soil under the camera
+  fog: 0xa05530, // desaturated horizon orange
+};
+const DUNGEON_PALETTE: ScenePalette = {
+  skyTop: 0x000000,
+  skyBottom: 0x171823,
+  floorTop: 0x231f1c,
+  floorBottom: 0x080808,
+  fog: 0x121218,
+};
+
+// Distance at which fog fully saturates. Sprites and walls past this look
+// the same as the horizon and effectively vanish.
+const FOG_FULL_DIST = 1100;
+const SKY_GRADIENT_STEPS = 14;
+const FLOOR_GRADIENT_STEPS = 10;
 
 // ---------- entity visuals (Phase 2) ----------
 // Mirrors ENEMY_VISUALS in pixi.ts. Kept inline to avoid a coupling import.
@@ -139,7 +169,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
   const initPromise = app
     .init({
-      background: SKY_COLOR,
+      background: 0x000000,
       antialias: false,
       resolution: 1,
       resizeTo: host,
@@ -249,10 +279,30 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     wallLayer.clear();
     spriteLayer.clear();
 
-    // Sky (top half) + floor (bottom half) — flat colours for now. Phase 4
-    // turns the surface into a gradient horizon.
-    wallLayer.rect(0, 0, W, halfH).fill({ color: SKY_COLOR });
-    wallLayer.rect(0, halfH, W, halfH).fill({ color: FLOOR_COLOR });
+    // Per-scene horizon palette: bright dusk on the surface, dark void in
+    // a dungeon. Both gradients meet at the horizon line so walls & sprites
+    // can fog into the same colour as they recede.
+    const palette = paletteForScene();
+    drawVerticalGradient(
+      wallLayer,
+      0,
+      0,
+      W,
+      halfH,
+      palette.skyTop,
+      palette.skyBottom,
+      SKY_GRADIENT_STEPS
+    );
+    drawVerticalGradient(
+      wallLayer,
+      0,
+      halfH,
+      W,
+      halfH,
+      palette.floorTop,
+      palette.floorBottom,
+      FLOOR_GRADIENT_STEPS
+    );
 
     // Per-column raycast.
     const numCols = Math.ceil(W / COLUMN_STEP_PX);
@@ -275,18 +325,21 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const lineH = (WALL_HEIGHT_WORLD * H) / perp;
       const top = halfH - lineH / 2;
 
-      const color = hit.isBuilding
+      const baseColor = hit.isBuilding
         ? hit.faceNS
           ? BUILDING_WALL_COLOR_NS
           : BUILDING_WALL_COLOR_EW
         : hit.faceNS
           ? WALL_COLOR_NS
           : WALL_COLOR_EW;
+      // Distance fog: blend the wall toward the horizon colour so the far
+      // edge of vision fades out instead of clipping to a flat hue.
+      const color = applyFog(baseColor, perp, palette.fog);
 
       wallLayer.rect(screenX, top, COLUMN_STEP_PX, lineH).fill({ color });
     }
 
-    drawSprites(W, H);
+    drawSprites(W, H, palette.fog);
     drawHud(W, H);
   }
 
@@ -333,7 +386,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   };
   const spritesScratch: Sprite[] = [];
 
-  function drawSprites(W: number, H: number) {
+  function drawSprites(W: number, H: number, fogColor: number) {
     spritesScratch.length = 0;
     const halfH = H / 2;
     const halfFov = FOV / 2;
@@ -430,6 +483,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const drawLeft = Math.floor(screenCenterX - spriteW / 2);
       const drawRight = drawLeft + spriteW;
 
+      // Distance fog: blend toward the horizon colour so distant sprites
+      // recede instead of popping at full saturation.
+      const fogged = applyFog(s.color, transformY, fogColor);
+
       // Per-column z-test. Iterate at the column step so we match the wall
       // pass; for each visible stripe, paint a rect.
       const startStripe = Math.max(0, drawLeft);
@@ -440,7 +497,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         if (transformY >= zBuffer[colIdx]) continue;
         spriteLayer
           .rect(stripe, drawTop, COLUMN_STEP_PX, spriteH)
-          .fill({ color: s.color });
+          .fill({ color: fogged });
       }
     }
 
@@ -449,6 +506,44 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const dy = y - selfY;
       spritesScratch.push({ x, y, color, height, distSq: dx * dx + dy * dy });
     }
+  }
+
+  // Pick the palette for the current scene. Surface = open sky / dusty
+  // dusk; dungeon = dark void / damp floor.
+  function paletteForScene(): ScenePalette {
+    return layout && layout.walkables.length > 0
+      ? DUNGEON_PALETTE
+      : SURFACE_PALETTE;
+  }
+
+  // Paint a vertical gradient as N horizontal strips. Pixi v8's Graphics
+  // doesn't have a single-call gradient fill, but stripe count of ~12-16
+  // is plenty cheap and reads as a smooth fade at typical canvas sizes.
+  function drawVerticalGradient(
+    g: Graphics,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    topColor: number,
+    bottomColor: number,
+    steps: number
+  ) {
+    const stripH = h / steps;
+    for (let i = 0; i < steps; i++) {
+      const t = steps === 1 ? 0 : i / (steps - 1);
+      const c = blendColor(topColor, bottomColor, t);
+      // +1 on the strip height so adjacent strips overlap by 1px and we
+      // don't get hairline gaps at fractional pixel boundaries.
+      g.rect(x, y + i * stripH, w, stripH + 1).fill({ color: c });
+    }
+  }
+
+  // Blend a base colour toward fog colour by distance / FOG_FULL_DIST.
+  function applyFog(base: number, dist: number, fog: number): number {
+    if (dist <= 0) return base;
+    const t = Math.min(1, dist / FOG_FULL_DIST);
+    return blendColor(base, fog, t);
   }
 
   // Lerp two RGB colours given a t in [0..1].
