@@ -1,6 +1,5 @@
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
-  verifyJoinToken,
   ClientMessageSchema,
   PROTOCOL_VERSION,
   emptyEquipment,
@@ -11,6 +10,7 @@ import {
   type ServerMessage,
   type Player,
 } from '@dumrunner/shared';
+import { verifyJoinToken } from '@dumrunner/shared/token';
 import { buildStarterInventory } from './starter.js';
 import { env } from './env.js';
 import { supabase } from './supabase.js';

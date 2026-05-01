@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { signJoinToken, DEFAULT_TOKEN_TTL_SECONDS } from '@dumrunner/shared';
+import { signJoinToken, DEFAULT_TOKEN_TTL_SECONDS } from '@dumrunner/shared/token';
 import { supabaseServer } from '@/lib/supabase/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { verifyPassword } from '@/lib/passwords';
