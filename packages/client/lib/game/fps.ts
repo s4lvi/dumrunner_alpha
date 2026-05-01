@@ -83,6 +83,16 @@ const FOG_FULL_DIST = 1100;
 const SKY_GRADIENT_STEPS = 14;
 const FLOOR_GRADIENT_STEPS = 10;
 
+// Build-mode tuning.
+const BUILD_RADIUS_TILES = 2;
+// Distance from the camera to the build reticle along the forward vector.
+// 1.5 tiles puts the ghost just past the player so they can drop a wall
+// right in front of them; bumping it higher means farther but flakier
+// targeting against rotation.
+const BUILD_REACH_TILES = 1.5;
+const BUILD_GHOST_VALID_COLOR = 0x22c55e;
+const BUILD_GHOST_INVALID_COLOR = 0xef4444;
+
 // ---------- entity visuals (Phase 2) ----------
 // Mirrors ENEMY_VISUALS in pixi.ts. Kept inline to avoid a coupling import.
 type EnemyVisual = { color: number; size: number };
@@ -152,6 +162,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   let equippedWeapon: 'pistol' | 'knife' | null = null;
   // Brief muzzle-flash window so the crosshair pulses on every fire frame.
   let lastFireFlashAt = 0;
+  // Build mode: kind to place, or null when not building. Pending action is
+  // resolved during the next render so a click reads the latest target tile.
+  let buildKind: import('@dumrunner/shared').BuildingKind | null = null;
+  let pendingBuildAction: 'place' | 'demolish' | null = null;
 
   // ---------- lifecycle ----------
   const root = new Container();
@@ -211,16 +225,23 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       return;
     }
     if (e.button === 0) {
-      mouseDown = true;
+      // In build mode, left-click = place. Otherwise it's hold-to-fire.
+      if (buildKind !== null) {
+        pendingBuildAction = 'place';
+      } else {
+        mouseDown = true;
+      }
+    } else if (e.button === 2 && buildKind !== null) {
+      // Right-click in build mode = demolish target.
+      pendingBuildAction = 'demolish';
     }
   }
   function onMouseUp(e: MouseEvent) {
     if (e.button === 0) mouseDown = false;
   }
   function onContextMenu(e: MouseEvent) {
-    // Right-click is reserved for demolish in the top-down view; for now in
-    // FPS we just swallow it so the browser context menu doesn't appear
-    // during pointer-lock acquisition.
+    // Always swallow the browser menu so right-clicks in build mode are
+    // exclusively a "demolish" gesture.
     e.preventDefault();
   }
   function onPointerLockChange() {
@@ -340,7 +361,104 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     }
 
     drawSprites(W, H, palette.fog);
+    drawBuildGhost(W, H, palette.fog);
     drawHud(W, H);
+  }
+
+  // ---------- build mode ----------
+  // Compute the tile under the camera reticle, draw a ghost billboard
+  // there, and resolve any queued click. With no pitch, "the tile in
+  // front of the player" is a fixed forward-distance pick — predictable
+  // and matches the GDD's tile-grid placement semantics.
+  function drawBuildGhost(W: number, H: number, fogColor: number) {
+    if (buildKind === null || !layout) {
+      pendingBuildAction = null;
+      return;
+    }
+    const tileSize = layout.tileSize;
+    if (tileSize <= 0) {
+      pendingBuildAction = null;
+      return;
+    }
+
+    // Project a ray forward at a fixed reach to find the target tile.
+    const dirX = Math.cos(yaw);
+    const dirY = Math.sin(yaw);
+    const reach = BUILD_REACH_TILES * tileSize;
+    const targetX = selfX + dirX * reach;
+    const targetY = selfY + dirY * reach;
+    const tileX = Math.floor(targetX / tileSize);
+    const tileY = Math.floor(targetY / tileSize);
+
+    // Validity: within build radius from player, no existing building on
+    // that tile. Server enforces stricter rules (overlapping players, etc.)
+    // — this is just a UX cue.
+    const tileCenterX = (tileX + 0.5) * tileSize;
+    const tileCenterY = (tileY + 0.5) * tileSize;
+    const reachR = (BUILD_RADIUS_TILES + 0.5) * tileSize;
+    const dxc = tileCenterX - selfX;
+    const dyc = tileCenterY - selfY;
+    const inRange = dxc * dxc + dyc * dyc <= reachR * reachR;
+    let occupied = false;
+    let occupiedId: string | null = null;
+    for (const b of buildings.values()) {
+      if (b.tileX === tileX && b.tileY === tileY) {
+        occupied = true;
+        occupiedId = b.id;
+        break;
+      }
+    }
+    const valid = inRange && !occupied;
+
+    // Draw a billboard ghost at the tile centre, sized like a wall. We
+    // re-use the sprite math so it z-tests against the wall depth buffer
+    // (so the ghost gets clipped behind walls correctly).
+    const halfH = H / 2;
+    const halfFov = FOV / 2;
+    const halfPlane = Math.tan(halfFov);
+    const planeX = -dirY * halfPlane;
+    const planeY = dirX * halfPlane;
+    const det = planeX * dirY - dirX * planeY;
+    if (Math.abs(det) >= 1e-6) {
+      const invDet = 1 / det;
+      const relX = tileCenterX - selfX;
+      const relY = tileCenterY - selfY;
+      const transformX = invDet * (dirY * relX - dirX * relY);
+      const transformY = invDet * (-planeY * relX + planeX * relY);
+      if (transformY > 6) {
+        const screenCenterX = (W / 2) * (1 + transformX / transformY);
+        const ghostH = Math.abs(Math.floor((WALL_HEIGHT_WORLD * H) / transformY));
+        const ghostW = Math.abs(Math.floor((tileSize * H) / transformY));
+        const top = halfH - ghostH / 2;
+        const left = Math.floor(screenCenterX - ghostW / 2);
+        const right = left + ghostW;
+        const ghostColor = applyFog(
+          valid ? BUILD_GHOST_VALID_COLOR : BUILD_GHOST_INVALID_COLOR,
+          transformY,
+          fogColor
+        );
+        const startStripe = Math.max(0, left);
+        const endStripe = Math.min(W, right);
+        for (let stripe = startStripe; stripe < endStripe; stripe += COLUMN_STEP_PX) {
+          const colIdx = Math.floor(stripe / COLUMN_STEP_PX);
+          if (colIdx < 0 || colIdx >= zBuffer.length) continue;
+          if (transformY >= zBuffer[colIdx]) continue;
+          spriteLayer
+            .rect(stripe, top, COLUMN_STEP_PX, ghostH)
+            .fill({ color: ghostColor, alpha: 0.45 });
+        }
+      }
+    }
+
+    // Resolve any queued click. Reads the latest tile, so the player can
+    // line up a placement during the same frame the click landed.
+    if (pendingBuildAction === 'place') {
+      pendingBuildAction = null;
+      if (valid) init.sendBuild(buildKind, tileX, tileY);
+    } else if (pendingBuildAction === 'demolish') {
+      pendingBuildAction = null;
+      if (occupiedId && inRange) init.sendDemolish(occupiedId);
+    }
   }
 
   // ---------- HUD overlay ----------
@@ -354,11 +472,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       hudLayer.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.35 });
     }
 
-    // Crosshair (fades to red briefly when firing).
+    // Crosshair: white in combat, green in build mode, red flash on fire.
     const cx = Math.round(W / 2);
     const cy2 = Math.round(H / 2);
     const flashing = performance.now() - lastFireFlashAt < 80;
-    const color = flashing ? 0xef4444 : 0xffffff;
+    const color = flashing
+      ? 0xef4444
+      : buildKind !== null
+        ? BUILD_GHOST_VALID_COLOR
+        : 0xffffff;
     const len = 7;
     hudLayer
       .moveTo(cx - len, cy2)
@@ -751,8 +873,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     removeBuilding(id) {
       buildings.delete(id);
     },
-    setBuildMode() {
-      // Phase 5 implements the floor-reticle ray pick.
+    setBuildMode(kind) {
+      buildKind = kind;
+      // Switching out of build mode discards a queued action so a stale
+      // click doesn't fire after the user just unequipped a placeable.
+      if (kind === null) pendingBuildAction = null;
     },
     setEquippedWeapon(weaponId) {
       equippedWeapon = weaponId;
