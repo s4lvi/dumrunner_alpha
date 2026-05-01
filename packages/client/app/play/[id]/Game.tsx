@@ -9,8 +9,10 @@ import {
   emptyInventory,
   HOTBAR_SIZE,
   listRecipes,
+  MATERIALS,
   PROTOCOL_VERSION,
   SUIT_SLOT_KINDS,
+  type BuildingKind,
   type CarriedPart,
   type ClientMessage,
   type Equipment,
@@ -62,6 +64,16 @@ export function Game({ serverId }: { serverId: string }) {
     secondsToPerihelion: number;
     hordeActive: boolean;
   } | null>(null);
+  // Blueprints the server says the player can craft from. Wiped + re-granted
+  // each cycle.
+  const [knownBlueprints, setKnownBlueprints] = useState<Set<string>>(
+    () => new Set()
+  );
+  // Workstation kinds the player is standing within crafting range of.
+  // Updated by pixi via onNearWorkstationsChanged.
+  const [nearWorkstations, setNearWorkstations] = useState<Set<BuildingKind>>(
+    () => new Set()
+  );
   // Holds the live ws so number-key handlers can send select_hotbar without
   // closing over render-time scope.
   const wsForHotbar = useRef<WebSocket | null>(null);
@@ -222,6 +234,7 @@ export function Game({ serverId }: { serverId: string }) {
         setEquipment(msg.equipment);
         setHotbarSelection(msg.hotbarSelection);
         setSceneId(msg.sceneId);
+        setKnownBlueprints(new Set(msg.knownBlueprints));
         wsForHotbar.current = session.ws;
         requestAnimationFrame(() => {
           if (session.cancelled) return;
@@ -263,6 +276,9 @@ export function Game({ serverId }: { serverId: string }) {
             onNearInteractableChanged: (near) => {
               nearInteractableRef.current = near;
               setNearInteractable(near);
+            },
+            onNearWorkstationsChanged: (kinds) => {
+              setNearWorkstations(new Set(kinds));
             },
           });
         });
@@ -395,6 +411,9 @@ export function Game({ serverId }: { serverId: string }) {
       case 'equipment_changed':
         setEquipment(msg.equipment);
         break;
+      case 'blueprints_changed':
+        setKnownBlueprints(new Set(msg.knownBlueprints));
+        break;
       case 'error':
         console.error('[server error]', msg.message);
         break;
@@ -503,6 +522,8 @@ export function Game({ serverId }: { serverId: string }) {
             inventory={inventory}
             equipment={equipment}
             selected={hotbarSelection}
+            knownBlueprints={knownBlueprints}
+            nearWorkstations={nearWorkstations}
             onClose={() => setShowInventory(false)}
             onSwap={(from, to) => sendOnLiveWs({ type: 'inventory_swap', from, to })}
             onSort={() => sendOnLiveWs({ type: 'inventory_sort' })}
@@ -758,6 +779,8 @@ function InventoryPanel({
   inventory,
   equipment,
   selected,
+  knownBlueprints,
+  nearWorkstations,
   onClose,
   onSwap,
   onSort,
@@ -769,6 +792,8 @@ function InventoryPanel({
   inventory: Inventory;
   equipment: Equipment;
   selected: number;
+  knownBlueprints: Set<string>;
+  nearWorkstations: Set<BuildingKind>;
   onClose: () => void;
   onSwap: (from: number, to: number) => void;
   onSort: () => void;
@@ -854,7 +879,12 @@ function InventoryPanel({
           <div className="text-[10px] text-zinc-500 leading-snug">
             Drag to move • Right-click to discard
           </div>
-          <CraftPanel inventory={inventory} onCraft={onCraft} />
+          <CraftPanel
+            inventory={inventory}
+            knownBlueprints={knownBlueprints}
+            nearWorkstations={nearWorkstations}
+            onCraft={onCraft}
+          />
         </div>
       </div>
     </div>
@@ -863,12 +893,21 @@ function InventoryPanel({
 
 function CraftPanel({
   inventory,
+  knownBlueprints,
+  nearWorkstations,
   onCraft,
 }: {
   inventory: Inventory;
+  knownBlueprints: Set<string>;
+  nearWorkstations: Set<BuildingKind>;
   onCraft: (recipeId: string) => void;
 }) {
-  const recipes = listRecipes();
+  // Hide blueprinted recipes the player hasn't learned. Showing them adds
+  // noise without giving the player any actionable info — they'll surface
+  // again the moment the blueprint is granted.
+  const recipes = listRecipes().filter(
+    (r) => r.blueprintId === null || knownBlueprints.has(r.blueprintId)
+  );
   return (
     <div className="pt-2 border-t border-[color:var(--panel-border)]">
       <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
@@ -880,6 +919,7 @@ function CraftPanel({
             key={r.id}
             recipe={r}
             inventory={inventory}
+            nearWorkstations={nearWorkstations}
             onCraft={onCraft}
           />
         ))}
@@ -888,21 +928,53 @@ function CraftPanel({
   );
 }
 
+const STATION_LABEL: Record<BuildingKind, string> = {
+  wall: 'wall',
+  turret: 'turret',
+  workbench: 'Workbench',
+  forge: 'Forge',
+  electronics_bench: 'Electronics Bench',
+};
+
 function CraftRow({
   recipe,
   inventory,
+  nearWorkstations,
   onCraft,
 }: {
   recipe: Recipe;
   inventory: Inventory;
+  nearWorkstations: Set<BuildingKind>;
   onCraft: (recipeId: string) => void;
 }) {
-  const haveEnough = recipe.inputs.every((input) => {
-    if (input.kind === 'material') {
-      return countMaterial(inventory, input.materialId) >= input.count;
-    }
-    return countAmmo(inventory, input.ammoId) >= input.count;
+  // Build a list of missing inputs so we can show the deficit explicitly.
+  const missingInputs = recipe.inputs.flatMap((input) => {
+    const have =
+      input.kind === 'material'
+        ? countMaterial(inventory, input.materialId)
+        : countAmmo(inventory, input.ammoId);
+    if (have >= input.count) return [];
+    return [
+      {
+        id: input.kind === 'material' ? input.materialId : input.ammoId,
+        need: input.count - have,
+      },
+    ];
   });
+
+  const stationOk =
+    recipe.workstation === null || nearWorkstations.has(recipe.workstation);
+
+  const reasons: string[] = [];
+  if (!stationOk && recipe.workstation) {
+    reasons.push(`At ${STATION_LABEL[recipe.workstation]}`);
+  }
+  if (missingInputs.length > 0) {
+    reasons.push(
+      'Need ' + missingInputs.map((m) => `${m.need}× ${m.id}`).join(', ')
+    );
+  }
+  const enabled = reasons.length === 0;
 
   const inputsLabel = recipe.inputs
     .map((i) => `${i.count} ${i.kind === 'material' ? i.materialId : i.ammoId}`)
@@ -915,15 +987,21 @@ function CraftRow({
 
   return (
     <li className="flex items-center justify-between gap-3 text-xs">
-      <div className="flex flex-col">
+      <div className="flex flex-col min-w-0">
         <span className="font-semibold text-zinc-200">{recipe.name}</span>
-        <span className="text-[10px] text-zinc-500">
+        <span className="text-[10px] text-zinc-500 truncate">
           {inputsLabel} → {outLabel}
         </span>
+        {!enabled && (
+          <span className="text-[10px] text-amber-400/80 truncate">
+            {reasons.join(' • ')}
+          </span>
+        )}
       </div>
       <button
         onClick={() => onCraft(recipe.id)}
-        disabled={!haveEnough}
+        disabled={!enabled}
+        title={enabled ? '' : reasons.join(' • ')}
         className="px-2 py-1 rounded text-[11px] border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed"
       >
         Craft
@@ -1116,7 +1194,7 @@ function SlotCell({
   onContextMenu?: (slot: number, x: number, y: number) => void;
   onArmorDrop?: (suitSlot: SuitSlotKind) => void;
 }) {
-  const dim = size === 'hotbar' ? 'w-12 h-12 text-xs' : 'w-11 h-11 text-[11px]';
+  const dim = size === 'hotbar' ? 'w-12 h-12 text-xs' : 'w-14 h-14 text-[11px]';
   const border = highlighted
     ? 'border-2 border-[color:var(--accent)]'
     : 'border border-[color:var(--panel-border)]';
@@ -1239,10 +1317,14 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
     );
   }
   if (slot.kind === 'material') {
+    const def = MATERIALS[slot.materialId];
     return (
       <div className="flex flex-col items-center leading-tight gap-0.5">
         <ItemIcon kind="material" subkind={slot.materialId} />
-        <span className="text-zinc-300 text-[10px]">{slot.count}</span>
+        <span className="text-zinc-200 text-[9px] capitalize">
+          {def?.name ?? slot.materialId}
+        </span>
+        <span className="text-zinc-400 text-[9px]">×{slot.count}</span>
       </div>
     );
   }
@@ -1372,7 +1454,83 @@ function ItemIcon({
     );
   }
   if (kind === 'material') {
-    // Hex nut
+    // Distinct shape + color per material. Falls through to a generic hex
+    // nut if we add a material before adding its icon.
+    if (subkind === 'wire') {
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24">
+          <path
+            d="M3 16 Q 7 10, 11 16 T 19 16"
+            fill="none"
+            stroke="#eab308"
+            strokeWidth="3"
+            strokeLinecap="round"
+          />
+          <circle cx="3" cy="16" r="2" fill="#a16207" />
+          <circle cx="21" cy="16" r="2" fill="#a16207" />
+        </svg>
+      );
+    }
+    if (subkind === 'alloy') {
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24">
+          <rect x="3" y="6" width="18" height="4" fill="#94a3b8" stroke="#0b0d10" strokeWidth={stroke} />
+          <rect x="3" y="11" width="18" height="4" fill="#cbd5e1" stroke="#0b0d10" strokeWidth={stroke} />
+          <rect x="3" y="16" width="18" height="4" fill="#94a3b8" stroke="#0b0d10" strokeWidth={stroke} />
+        </svg>
+      );
+    }
+    if (subkind === 'circuit') {
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24">
+          <rect x="5" y="5" width="14" height="14" fill="#10b981" stroke="#0b0d10" strokeWidth={stroke} />
+          <rect x="2" y="8" width="3" height="2" fill="#0b0d10" />
+          <rect x="2" y="14" width="3" height="2" fill="#0b0d10" />
+          <rect x="19" y="8" width="3" height="2" fill="#0b0d10" />
+          <rect x="19" y="14" width="3" height="2" fill="#0b0d10" />
+          <circle cx="12" cy="12" r="2.5" fill="#fbbf24" />
+        </svg>
+      );
+    }
+    if (subkind === 'biotic') {
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24">
+          <path
+            d="M6 14 Q 6 8, 12 6 Q 18 8, 18 14 Q 18 19, 12 19 Q 6 19, 6 14 Z"
+            fill="#a855f7"
+            stroke="#0b0d10"
+            strokeWidth={stroke}
+          />
+          <ellipse cx="10" cy="11" rx="2" ry="1.5" fill="#0b0d10" opacity="0.35" />
+        </svg>
+      );
+    }
+    if (subkind === 'crystal') {
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24">
+          <polygon
+            points="12,3 20,10 16,21 8,21 4,10"
+            fill="#06b6d4"
+            stroke="#0b0d10"
+            strokeWidth={stroke}
+            strokeLinejoin="round"
+          />
+          <polyline
+            points="12,3 12,21"
+            stroke="#0b0d10"
+            strokeWidth="0.5"
+            opacity="0.4"
+          />
+          <polyline
+            points="4,10 20,10"
+            stroke="#0b0d10"
+            strokeWidth="0.5"
+            opacity="0.4"
+          />
+        </svg>
+      );
+    }
+    // Default: scrap (and any unknown materials) — orange hex nut.
     return (
       <svg width={size} height={size} viewBox="0 0 24 24">
         <polygon

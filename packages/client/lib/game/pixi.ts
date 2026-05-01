@@ -48,6 +48,10 @@ export type GameInit = {
   onNearInteractableChanged: (
     near: { id: string; label: string } | null
   ) => void;
+  // Called whenever the set of workstation building kinds the player is
+  // standing within crafting range of changes. The host UI uses this to
+  // enable / disable recipes that require a station.
+  onNearWorkstationsChanged: (kinds: BuildingKind[]) => void;
 };
 
 // Subset of state we need to apply when the player transitions between scenes
@@ -508,6 +512,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
     // Nearest in-range interactable — drives the "Press E to …" prompt.
     updateNearInteractable();
+
+    // Workstation proximity — drives the crafting panel's enable/disable.
+    updateNearWorkstations();
 
     // Update self render.
     const selfP = players.get(init.self.characterId);
@@ -1215,6 +1222,47 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
             .fill({ color: 0x000000, alpha: 0.65 });
         }
       }
+    }
+  }
+
+  // Workstation kinds the player is currently within crafting range of.
+  // Mirrors the server's CRAFT_STATION_RANGE_PX gate (3 tiles ≈ 96px).
+  // Only fires the callback when the kind set changes, so it's cheap to call
+  // every frame.
+  const CRAFT_STATION_RANGE_PX = 96;
+  let lastWorkstationKey = '';
+  function updateNearWorkstations() {
+    const tileSize = currentLayout?.tileSize ?? 0;
+    if (tileSize <= 0 || buildings.size === 0) {
+      if (lastWorkstationKey !== '') {
+        lastWorkstationKey = '';
+        init.onNearWorkstationsChanged([]);
+      }
+      return;
+    }
+    const r2 = CRAFT_STATION_RANGE_PX * CRAFT_STATION_RANGE_PX;
+    const found = new Set<BuildingKind>();
+    for (const rb of buildings.values()) {
+      const b = rb.data;
+      if (
+        b.kind !== 'workbench' &&
+        b.kind !== 'forge' &&
+        b.kind !== 'electronics_bench'
+      ) {
+        continue;
+      }
+      const cx = (b.tileX + b.width / 2) * tileSize;
+      const cy = (b.tileY + b.height / 2) * tileSize;
+      const halfW = (b.width * tileSize) / 2;
+      const halfH = (b.height * tileSize) / 2;
+      const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
+      const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
+      if (dx * dx + dy * dy <= r2) found.add(b.kind);
+    }
+    const key = [...found].sort().join(',');
+    if (key !== lastWorkstationKey) {
+      lastWorkstationKey = key;
+      init.onNearWorkstationsChanged([...found]);
     }
   }
 

@@ -50,7 +50,6 @@ import {
   generateInitialLoot,
 } from './procgen.js';
 import type { SceneLayout } from '@dumrunner/shared';
-import { buildStarterInventory } from './starter.js';
 
 // Surface is an open scene (no walls) but ships a layout so the client knows
 // where the dungeon entrance is. Walkables are empty → collision is skipped.
@@ -360,6 +359,7 @@ export class World {
       equipment: conn.equipment,
       hotbarSelection: conn.hotbarSelection,
       layout: scene.layout,
+      knownBlueprints: mergedBlueprints(conn),
     });
 
     scene.broadcast(
@@ -450,18 +450,9 @@ export class World {
     conn.stamina = conn.maxStamina;
     conn.shield = conn.maxShield;
 
-    // Alpha quality-of-life: respawn restores the starter loadout. Real
-    // full-loot extraction would require recovering your corpse or crafting
-    // anew; for the alpha we don't want a dead player to be stuck weaponless.
-    const starter = buildStarterInventory();
-    for (let i = 0; i < conn.inventory.length; i++) {
-      conn.inventory[i] = i < starter.length ? starter[i] : { kind: 'empty' };
-    }
-    conn.inventoryDirty = true;
-    this.sendDirect(conn.ws, {
-      type: 'inventory_changed',
-      inventory: conn.inventory,
-    });
+    // Full-loot extraction: respawning naked is the point. Inventory was
+    // already cleared into a corpse on death (see Scene.killPlayer) — don't
+    // refill it here.
     if (conn.sceneId === SURFACE_SCENE_ID) {
       // Already on surface (e.g. died on surface) — just teleport to the
       // entrance and broadcast a respawn event without a scene swap.
@@ -649,10 +640,15 @@ export class World {
       }
     }
 
-    // Blueprint gate lands in the next pass — for now every recipe with a
-    // blueprintId is also rejected unconditionally to avoid players crafting
-    // things they shouldn't be able to yet.
-    if (recipe.blueprintId !== null) return;
+    // Blueprint gate. The recipe's blueprintId must be in either the
+    // per-cycle or persistent set.
+    if (
+      recipe.blueprintId !== null &&
+      !conn.knownBlueprints.has(recipe.blueprintId) &&
+      !conn.persistentBlueprints.has(recipe.blueprintId)
+    ) {
+      return;
+    }
 
     // Check inputs first; only commit if everything's there.
     for (const input of recipe.inputs) {
@@ -866,6 +862,17 @@ export class World {
       this.scenes.delete(sceneId);
     }
     surface?.wipeCorpsesAndLoot();
+
+    // Cycle reset: per-cycle blueprints wipe; persistent (legendary) ones
+    // stay. Re-grant the alpha starter set so testing isn't dead-ended once
+    // the artifact-trade store hasn't shipped yet — drop this once that does.
+    for (const conn of this.connections.values()) {
+      conn.knownBlueprints = new Set(STARTER_BLUEPRINTS);
+      this.sendDirect(conn.ws, {
+        type: 'blueprints_changed',
+        knownBlueprints: mergedBlueprints(conn),
+      });
+    }
   }
 
   private broadcastWorldClock(now: number): void {
@@ -1061,6 +1068,12 @@ export class World {
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function mergedBlueprints(conn: Connection): string[] {
+  const merged = new Set<string>(conn.knownBlueprints);
+  for (const id of conn.persistentBlueprints) merged.add(id);
+  return [...merged];
 }
 
 function toPlayer(conn: Connection): Player {
