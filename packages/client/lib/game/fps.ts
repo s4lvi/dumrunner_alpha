@@ -419,9 +419,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // Square-aspect billboard for now; Phase 7 may stretch by entity kind.
       const spriteW = spriteH;
 
-      // Anchor the sprite's bottom at the horizon line so things "stand on
-      // the floor." Smaller sprites (loot) appear lower automatically.
-      const drawTop = halfH - spriteH;
+      // Anchor the sprite's BOTTOM at the floor line at this distance.
+      // The camera sits at half wall-height, so the floor at depth d
+      // projects to halfH + (WALL_HEIGHT_WORLD/2 * H) / d — same as the
+      // bottom edge of a wall at that distance. Without this, sprites
+      // float at eye level instead of standing on the ground.
+      const floorY =
+        halfH + (WALL_HEIGHT_WORLD * 0.5 * H) / transformY;
+      const drawTop = Math.floor(floorY - spriteH);
       const drawLeft = Math.floor(screenCenterX - spriteW / 2);
       const drawRight = drawLeft + spriteW;
 
