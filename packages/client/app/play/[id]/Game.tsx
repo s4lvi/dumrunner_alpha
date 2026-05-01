@@ -453,6 +453,16 @@ export function Game({ serverId }: { serverId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptJoin]);
 
+  // Opening any UI overlay (inventory etc.) needs to release pointer lock
+  // so the cursor reappears for clicking. Closing the overlay leaves it
+  // released — browsers don't allow programmatic re-lock without a fresh
+  // user gesture, so the player clicks the canvas to re-engage FPS.
+  useEffect(() => {
+    if (!showInventory) return;
+    if (typeof document === 'undefined') return;
+    if (document.pointerLockElement) document.exitPointerLock?.();
+  }, [showInventory]);
+
   // Hot-swap renderers when `useFps` flips. We snapshot scene state from
   // the outgoing renderer, destroy it, then instantiate the other one with
   // that state. Skips the very first run because the welcome handler is

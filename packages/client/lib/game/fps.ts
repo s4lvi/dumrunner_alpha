@@ -95,13 +95,20 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const corpses = new Map<string, CorpseState>();
   const buildings = new Map<string, BuildingState>();
   const projectiles = new Map<string, ProjectileState>();
+  // Server only emits projectile_spawned + projectile_despawned; the client
+  // extrapolates motion locally using vx/vy from spawn time. Mirrors the
+  // top-down renderer's RenderedProjectile.spawnedAt.
+  const projectileSpawnedAt = new Map<string, number>();
 
   for (const p of [init.self, ...init.others]) players.set(p.characterId, p);
   for (const e of init.enemies) enemies.set(e.id, e);
   for (const l of init.loot) loot.set(l.id, l);
   for (const c of init.corpses) corpses.set(c.id, c);
   for (const b of init.buildings) buildings.set(b.id, b);
-  for (const p of init.projectiles) projectiles.set(p.id, p);
+  for (const p of init.projectiles) {
+    projectiles.set(p.id, p);
+    projectileSpawnedAt.set(p.id, performance.now());
+  }
 
   let layout: SceneLayout | null = init.layout;
   let selfX = init.self.x;
@@ -361,13 +368,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // Loot sits on the floor — small height.
       pushSprite(l.x, l.y, color, 14);
     }
+    const now = performance.now();
     for (const pr of projectiles.values()) {
-      pushSprite(
-        pr.x,
-        pr.y,
-        pr.color ?? PROJECTILE_DEFAULT_COLOR,
-        8
-      );
+      // Extrapolate from spawn time using vx/vy — server only sends spawn
+      // and despawn events, never per-tick positions.
+      const spawnedAt = projectileSpawnedAt.get(pr.id) ?? now;
+      const elapsed = (now - spawnedAt) / 1000;
+      const px = pr.x + pr.vx * elapsed;
+      const py = pr.y + pr.vy * elapsed;
+      pushSprite(px, py, pr.color ?? PROJECTILE_DEFAULT_COLOR, 8);
     }
 
     // Far-to-near so closer sprites paint over farther ones.
@@ -386,7 +395,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // is depth (forward). Negative depth = behind us, skip.
       const transformX = invDet * (dirY * relX - dirX * relY);
       const transformY = invDet * (-planeY * relX + planeX * relY);
-      if (transformY <= 0.1) continue;
+      // Cull anything closer than half a tile. Without this, a sprite at
+      // distance ~0 (e.g. a projectile on its first frame, before
+      // extrapolation has moved it forward) projects as a screen-filling
+      // square.
+      if (transformY < 6) continue;
 
       const screenCenterX = (W / 2) * (1 + transformX / transformY);
       const spriteH = Math.abs(Math.floor((s.height * H) / transformY));
@@ -487,12 +500,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     corpses.clear();
     buildings.clear();
     projectiles.clear();
+    projectileSpawnedAt.clear();
     for (const p of [state.self, ...state.players]) players.set(p.characterId, p);
     for (const e of state.enemies) enemies.set(e.id, e);
     for (const l of state.loot) loot.set(l.id, l);
     for (const c of state.corpses) corpses.set(c.id, c);
     for (const b of state.buildings) buildings.set(b.id, b);
-    for (const p of state.projectiles) projectiles.set(p.id, p);
+    for (const p of state.projectiles) {
+      projectiles.set(p.id, p);
+      projectileSpawnedAt.set(p.id, performance.now());
+    }
     selfX = state.self.x;
     selfY = state.self.y;
   }
@@ -576,9 +593,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     spawnProjectile(p) {
       projectiles.set(p.id, p);
+      projectileSpawnedAt.set(p.id, performance.now());
     },
     despawnProjectile(id) {
       projectiles.delete(id);
+      projectileSpawnedAt.delete(id);
     },
     spawnLoot(l) {
       loot.set(l.id, l);
