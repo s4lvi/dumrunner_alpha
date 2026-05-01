@@ -378,6 +378,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const py = pr.y + pr.vy * elapsed;
       pushSprite(px, py, pr.color ?? PROJECTILE_DEFAULT_COLOR, 8);
     }
+    // Interactables — stairs, extract pad. Rendered as tall, distinctive
+    // billboards so the player can spot them from across a room. Color by
+    // kind. Pulse over time for the "interactable" cue.
+    if (layout) {
+      const pulse = 0.7 + 0.3 * Math.sin(now / 250);
+      for (const it of layout.interactables) {
+        const color =
+          it.kind === 'stairs_down'
+            ? blendColor(0x3b82f6, 0xffffff, 1 - pulse)
+            : blendColor(0xfacc15, 0xffffff, 1 - pulse);
+        pushSprite(it.x, it.y, color, 36);
+      }
+    }
 
     // Far-to-near so closer sprites paint over farther ones.
     spritesScratch.sort((a, b) => b.distSq - a.distSq);
@@ -431,6 +444,20 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const dy = y - selfY;
       spritesScratch.push({ x, y, color, height, distSq: dx * dx + dy * dy });
     }
+  }
+
+  // Lerp two RGB colours given a t in [0..1].
+  function blendColor(a: number, b: number, t: number): number {
+    const ar = (a >> 16) & 0xff;
+    const ag = (a >> 8) & 0xff;
+    const ab = a & 0xff;
+    const br = (b >> 16) & 0xff;
+    const bg = (b >> 8) & 0xff;
+    const bb = b & 0xff;
+    const r = Math.round(ar + (br - ar) * t);
+    const g = Math.round(ag + (bg - ag) * t);
+    const bl = Math.round(ab + (bb - ab) * t);
+    return (r << 16) | (g << 8) | bl;
   }
 
   type RayHit = { dist: number; faceNS: boolean; isBuilding: boolean };

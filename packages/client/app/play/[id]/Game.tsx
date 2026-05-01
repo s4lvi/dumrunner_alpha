@@ -467,6 +467,13 @@ export function Game({ serverId }: { serverId: string }) {
   // the outgoing renderer, destroy it, then instantiate the other one with
   // that state. Skips the very first run because the welcome handler is
   // responsible for the initial mount.
+  //
+  // CRITICAL: depend ONLY on useFps. Adding inventory / hotbarSelection /
+  // sceneId here looks tempting (we read them inside) but it makes the
+  // effect re-run on every inventory mutation — which destroys and rebuilds
+  // the renderer mid-firefight, exits pointer lock, and dims the screen.
+  // The values we read inside the closure are the React-current ones at
+  // toggle time, which is what we want.
   const initialMountRef = useRef(true);
   useEffect(() => {
     if (initialMountRef.current) {
@@ -503,7 +510,8 @@ export function Game({ serverId }: { serverId: string }) {
     gameRef.current.setEquippedWeapon(
       slot?.kind === 'weapon' ? slot.weaponId : null
     );
-  }, [useFps, hotbarSelection, inventory, sceneId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useFps]);
 
   // Build mode follows the selected hotbar slot: a placeable WITH stock + the
   // surface scene turns it on, anything else turns it off.
