@@ -111,13 +111,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // ---------- input state ----------
   const keys = new Set<string>();
   let pointerLocked = false;
+  let mouseDown = false;
+  let equippedWeapon: 'pistol' | 'knife' | null = null;
+  // Brief muzzle-flash window so the crosshair pulses on every fire frame.
+  let lastFireFlashAt = 0;
 
   // ---------- lifecycle ----------
   const root = new Container();
   const wallLayer = new Graphics();
   const spriteLayer = new Graphics();
+  const hudLayer = new Graphics();
   root.addChild(wallLayer);
   root.addChild(spriteLayer);
+  root.addChild(hudLayer);
 
   // Per-column perpendicular distance to the wall hit. Indexed by column
   // (i = screenX / COLUMN_STEP_PX). Sprites z-test against this so a wall
@@ -142,24 +148,43 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
   // ---------- input wiring ----------
   function attachInputListeners() {
-    app.canvas.addEventListener('click', onCanvasClick);
+    app.canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mouseup', onMouseUp);
     document.addEventListener('pointerlockchange', onPointerLockChange);
     document.addEventListener('mousemove', onMouseMove);
+    app.canvas.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
   }
   function detachInputListeners() {
-    app.canvas.removeEventListener('click', onCanvasClick);
+    app.canvas.removeEventListener('mousedown', onMouseDown);
+    window.removeEventListener('mouseup', onMouseUp);
     document.removeEventListener('pointerlockchange', onPointerLockChange);
     document.removeEventListener('mousemove', onMouseMove);
+    app.canvas.removeEventListener('contextmenu', onContextMenu);
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('keyup', onKeyUp);
   }
 
-  function onCanvasClick() {
+  function onMouseDown(e: MouseEvent) {
     if (!pointerLocked) {
       app.canvas.requestPointerLock?.();
+      // Don't fire on the very click that's just acquiring the lock —
+      // matches the FPS-genre "click to engage, click to shoot" feel.
+      return;
     }
+    if (e.button === 0) {
+      mouseDown = true;
+    }
+  }
+  function onMouseUp(e: MouseEvent) {
+    if (e.button === 0) mouseDown = false;
+  }
+  function onContextMenu(e: MouseEvent) {
+    // Right-click is reserved for demolish in the top-down view; for now in
+    // FPS we just swallow it so the browser context menu doesn't appear
+    // during pointer-lock acquisition.
+    e.preventDefault();
   }
   function onPointerLockChange() {
     pointerLocked = document.pointerLockElement === app.canvas;
@@ -175,20 +200,30 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     keys.delete(e.code);
   }
 
-  // Walk the keyboard state, emit `input` at the same cadence as pixi.ts
-  // (every frame; the wire layer dedupes). Phase 1 sends raw world-space
-  // input so the player can walk around to verify the raycaster from
-  // multiple angles. Phase 3 rotates this by yaw so WASD becomes
-  // forward/strafe relative to facing.
+  // Yaw-relative WASD: W/S = forward/back along facing, D/A = strafe right/
+  // left. We rotate the unit input vector into world space before handing
+  // it to the server, which still treats moveX/moveY as a world-space
+  // direction (no protocol change).
   function tickInput() {
-    let mx = 0;
-    let my = 0;
-    if (keys.has('KeyW') || keys.has('ArrowUp')) my -= 1;
-    if (keys.has('KeyS') || keys.has('ArrowDown')) my += 1;
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) mx -= 1;
-    if (keys.has('KeyD') || keys.has('ArrowRight')) mx += 1;
+    const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0)
+              - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+    const right = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0)
+                - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+    // y-down world coords: forward = (cos, sin); right = (-sin, cos).
+    const cy = Math.cos(yaw);
+    const sy = Math.sin(yaw);
+    const mx = fwd * cy + right * -sy;
+    const my = fwd * sy + right * cy;
     const sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
     init.sendInput(mx, my, sprint);
+
+    // Hold-to-fire while pointer-locked + a weapon equipped. Server gates
+    // by per-weapon fire interval, so it's safe to send every frame; it'll
+    // ignore the dropped requests.
+    if (mouseDown && pointerLocked && equippedWeapon !== null) {
+      init.sendFire(cy, sy);
+      lastFireFlashAt = performance.now();
+    }
   }
 
   // ---------- per-frame tick ----------
@@ -245,6 +280,34 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     }
 
     drawSprites(W, H);
+    drawHud(W, H);
+  }
+
+  // ---------- HUD overlay ----------
+  function drawHud(W: number, H: number) {
+    hudLayer.clear();
+
+    // Show a "click to look" hint while pointer lock isn't held — easy to
+    // miss otherwise, since FPS controls only kick in after the click.
+    if (!pointerLocked) {
+      // Dim the canvas slightly so the prompt reads.
+      hudLayer.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.35 });
+    }
+
+    // Crosshair (fades to red briefly when firing).
+    const cx = Math.round(W / 2);
+    const cy2 = Math.round(H / 2);
+    const flashing = performance.now() - lastFireFlashAt < 80;
+    const color = flashing ? 0xef4444 : 0xffffff;
+    const len = 7;
+    hudLayer
+      .moveTo(cx - len, cy2)
+      .lineTo(cx + len, cy2)
+      .moveTo(cx, cy2 - len)
+      .lineTo(cx, cy2 + len)
+      .stroke({ color, width: 2, alpha: 0.9 });
+    // Center dot.
+    hudLayer.circle(cx, cy2, 1.5).fill({ color, alpha: 0.9 });
   }
 
   // ---------- sprites (Phase 2) ----------
@@ -545,8 +608,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     setBuildMode() {
       // Phase 5 implements the floor-reticle ray pick.
     },
-    setEquippedWeapon() {
-      // Phase 3 gates fire/swing on this.
+    setEquippedWeapon(weaponId) {
+      equippedWeapon = weaponId;
+      // Releasing the weapon mid-hold should stop firing.
+      if (weaponId === null) mouseDown = false;
     },
     swapScene(state) {
       applySceneState(state);
