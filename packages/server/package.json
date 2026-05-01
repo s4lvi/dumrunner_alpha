@@ -1,0 +1,22 @@
+{
+  "name": "@dumrunner/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file=.env dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dumrunner/shared": "*",
+    "@supabase/supabase-js": "^2.45.4",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.1"
+  }
+}

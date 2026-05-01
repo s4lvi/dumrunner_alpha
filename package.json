@@ -1,0 +1,26 @@
+{
+  "name": "dumrunner",
+  "private": true,
+  "version": "0.0.1",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "dotenv -e .env.local -- npm-run-all --parallel dev:client dev:server",
+    "dev:client": "npm --workspace @dumrunner/client run dev",
+    "dev:server": "npm --workspace @dumrunner/server run dev",
+    "build": "npm-run-all --serial build:shared build:client build:server",
+    "build:shared": "npm --workspace @dumrunner/shared run build",
+    "build:client": "dotenv -e .env.local -- npm --workspace @dumrunner/client run build",
+    "build:server": "npm --workspace @dumrunner/server run build",
+    "typecheck": "npm-run-all --serial typecheck:shared typecheck:client typecheck:server",
+    "typecheck:shared": "npm --workspace @dumrunner/shared run typecheck",
+    "typecheck:client": "npm --workspace @dumrunner/client run typecheck",
+    "typecheck:server": "npm --workspace @dumrunner/server run typecheck"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.2",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.6.3"
+  }
+}
