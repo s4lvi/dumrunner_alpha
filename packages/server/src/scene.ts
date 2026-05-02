@@ -525,6 +525,7 @@ export class Scene {
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
+    this.bindings.onBuildingsChanged();
   }
 
   handleDemolishRequest(characterId: string, buildingId: string): void {
@@ -536,6 +537,7 @@ export class Scene {
     if (!b) return;
     this.buildings.delete(buildingId);
     this.broadcast({ type: 'building_destroyed', id: buildingId });
+    this.bindings.onBuildingsChanged();
 
     // Refund the placeable item itself (so demolish lets you reposition
     // without losing the wall). Demolish doesn't refund any of the scrap
@@ -647,12 +649,12 @@ export class Scene {
     if (this.buildings.size === 0) return;
     const tileSize = this.layout?.tileSize ?? 0;
     if (tileSize <= 0) return;
-    // Powered defences require an alive Power Link. When the Link is
-    // destroyed mid-cycle, every turret on the surface goes silent until
-    // perihelion rebuilds it.
-    if (!this.bindings.isPowerOnline()) return;
+    // Powered defences require an alive Power Link AND an available
+    // power slot under the depth-scaled capacity. Both conditions are
+    // checked per-building via isPowered.
     for (const b of this.buildings.values()) {
       if (b.kind !== 'turret') continue;
+      if (!this.bindings.isPowered(b.id)) continue;
       if (now - b.lastFireAt < COMBAT.TURRET_FIRE_INTERVAL_MS) continue;
 
       const cx = (b.tileX + b.width / 2) * tileSize;
@@ -1194,6 +1196,7 @@ export class Scene {
       // dungeon scenes, evict players, reset deepest-floor counter,
       // disable powered defences). World handles the cascade.
       if (wasPowerLink) this.bindings.onPowerLinkDestroyed();
+      this.bindings.onBuildingsChanged();
       return;
     }
     this.broadcast({
@@ -1589,6 +1592,7 @@ export class Scene {
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
+    this.bindings.onBuildingsChanged();
     return building;
   }
 
@@ -1606,6 +1610,19 @@ export class Scene {
       if (b.kind === kind) return { ...b };
     }
     return null;
+  }
+
+  // All alive buildings whose kind is in the requested set, sorted by
+  // building id for deterministic iteration. Used by the power system to
+  // pick which turrets fit under capacity.
+  findBuildingsByKind(kinds: BuildingKind[]): BuildingState[] {
+    const allowed = new Set(kinds);
+    const out: BuildingState[] = [];
+    for (const b of this.buildings.values()) {
+      if (allowed.has(b.kind)) out.push({ ...b });
+    }
+    out.sort((a, b) => a.id.localeCompare(b.id));
+    return out;
   }
 
   private populateSurface(): void {
@@ -1690,6 +1707,13 @@ export interface SceneBindings {
   // Read-only: whether the world's Power Link is alive. Scene's turret
   // tick gates fire on this so destroying the Link silences defences.
   isPowerOnline(): boolean;
+  // Read-only per-building powered state. World decides which consumers
+  // (turrets + Phase 4 craft jobs) fit under the depth-scaled capacity.
+  isPowered(buildingId: string): boolean;
+  // Called by Scene when a building is placed, destroyed, or has its
+  // kind/identity change. World recomputes power capacity / draw and
+  // broadcasts the new power state.
+  onBuildingsChanged(): void;
 }
 
 // ---------- helpers ----------

@@ -20,6 +20,7 @@ import {
   type BuildingKind,
   type CarriedPart,
   type ClientMessage,
+  type CraftJobState,
   type Equipment,
   type Inventory,
   type InventorySlot,
@@ -70,6 +71,25 @@ export function Game({ serverId }: { serverId: string }) {
     secondsToPerihelion: number;
     hordeActive: boolean;
   } | null>(null);
+  // Surface power state — capacity scales with deepest floor reached, draw
+  // is the count of consuming buildings (turrets + Phase-4 craft jobs).
+  // Powered set tells the renderer which buildings are currently online so
+  // the unpowered ones can render dimmed.
+  const [powerState, setPowerState] = useState<{
+    capacity: number;
+    draw: number;
+    online: boolean;
+    poweredBuildingIds: Set<string>;
+  }>({
+    capacity: 0,
+    draw: 0,
+    online: false,
+    poweredBuildingIds: new Set(),
+  });
+  // Active async craft jobs the player owns. Server pushes craft_job_started
+  // / completed deltas; we mirror them locally so the workstation modal
+  // can render progress bars without polling.
+  const [craftJobs, setCraftJobs] = useState<CraftJobState[]>([]);
   // Blueprints the server says the player can craft from. Wiped + re-granted
   // each cycle.
   const [knownBlueprints, setKnownBlueprints] = useState<Set<string>>(
@@ -486,6 +506,23 @@ export function Game({ serverId }: { serverId: string }) {
           hordeActive: msg.hordeActive,
         });
         break;
+      case 'power_state':
+        setPowerState({
+          capacity: msg.capacity,
+          draw: msg.draw,
+          online: msg.online,
+          poweredBuildingIds: new Set(msg.poweredBuildingIds),
+        });
+        break;
+      case 'craft_job_started':
+        setCraftJobs((jobs) => [...jobs, msg.job]);
+        break;
+      case 'craft_job_completed':
+        setCraftJobs((jobs) => jobs.filter((j) => j.id !== msg.jobId));
+        break;
+      case 'craft_jobs_state':
+        setCraftJobs(msg.jobs);
+        break;
       case 'horde_started':
         setWorldClock({
           cycle: msg.cycle,
@@ -700,6 +737,7 @@ export function Game({ serverId }: { serverId: string }) {
           onContextMenu={(slot, x, y) => setSlotMenu({ slot, x, y })}
         />
         {worldClock && <WorldClockHud clock={worldClock} />}
+        <PowerHud state={powerState} />
         {nearInteractable && (
           <InteractPrompt label={nearInteractable.label} />
         )}
@@ -769,6 +807,7 @@ export function Game({ serverId }: { serverId: string }) {
             inventory={inventory}
             knownBlueprints={knownBlueprints}
             nearWorkstations={nearWorkstations}
+            craftJobs={craftJobs}
             onClose={() => setStationModalKind(null)}
             onCraft={(recipeId) =>
               sendOnLiveWs({ type: 'craft_request', recipeId })
@@ -920,6 +959,46 @@ function ControlsHint({ useFps }: { useFps: boolean }) {
 
 // Top-centre clock + perihelion countdown. Switches into a red "siege"
 // state while the horde is active.
+// Compact "Power N/M" overlay. Sits below the cycle clock so the player
+// can read both at a glance. Goes red when capacity = 0 (Power Link
+// destroyed or never alive).
+function PowerHud({
+  state,
+}: {
+  state: {
+    capacity: number;
+    draw: number;
+    online: boolean;
+  };
+}) {
+  const overdrawn = state.draw > state.capacity;
+  return (
+    <div className="absolute top-12 left-1/2 -translate-x-1/2 pointer-events-none select-none">
+      <div
+        className={`px-2.5 py-1 rounded-full border text-[11px] flex items-center gap-2 ${
+          !state.online
+            ? 'bg-red-950/90 border-red-500 text-red-100'
+            : overdrawn
+              ? 'bg-amber-950/90 border-amber-500 text-amber-100'
+              : 'bg-[color:var(--panel)]/90 border-[color:var(--panel-border)] text-cyan-200'
+        }`}
+      >
+        <span className="text-zinc-400 uppercase tracking-wider text-[9px]">
+          Power
+        </span>
+        <span className="tabular-nums">
+          {state.draw}
+          <span className="text-zinc-500">/</span>
+          {state.capacity}
+        </span>
+        {!state.online && (
+          <span className="text-[9px] uppercase tracking-wider">offline</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WorldClockHud({
   clock,
 }: {
@@ -1266,6 +1345,7 @@ function WorkstationModal({
   inventory,
   knownBlueprints,
   nearWorkstations,
+  craftJobs,
   onClose,
   onCraft,
 }: {
@@ -1273,9 +1353,19 @@ function WorkstationModal({
   inventory: Inventory;
   knownBlueprints: Set<string>;
   nearWorkstations: Set<BuildingKind>;
+  craftJobs: CraftJobState[];
   onClose: () => void;
   onCraft: (recipeId: string) => void;
 }) {
+  // Jobs running at THIS station kind so the queue stays scoped.
+  const jobsAtStation = craftJobs.filter((j) => j.stationKind === kind);
+  // Tick a render token every 250ms so progress bars advance smoothly.
+  const [, forceRender] = useState(0);
+  useEffect(() => {
+    if (jobsAtStation.length === 0) return;
+    const t = setInterval(() => forceRender((x) => x + 1), 250);
+    return () => clearInterval(t);
+  }, [jobsAtStation.length]);
   const recipes = listRecipes().filter(
     (r) =>
       r.workstation === kind &&
@@ -1313,6 +1403,18 @@ function WorkstationModal({
           Move closer to the {STATION_LABEL[kind] ?? kind} to craft.
         </div>
       )}
+
+      {jobsAtStation.length > 0 && (
+        <div className="px-5 py-3 border-b border-[color:var(--panel-border)] flex flex-col gap-2">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+            In Progress
+          </div>
+          {jobsAtStation.map((job) => (
+            <CraftJobRow key={job.id} job={job} />
+          ))}
+        </div>
+      )}
+
       {recipes.length === 0 ? (
         <div className="px-5 py-8 text-zinc-500 text-sm text-center">
           No blueprints available for this station yet. <br />
@@ -1356,6 +1458,32 @@ function WorkstationModal({
         </div>
       )}
     </Modal>
+  );
+}
+
+// One row in the "In Progress" queue — recipe name, progress bar, and
+// remaining time. Re-renders are driven by the modal's interval ticker.
+function CraftJobRow({ job }: { job: CraftJobState }) {
+  const recipe = listRecipes().find((r) => r.id === job.recipeId);
+  const total = job.completesAt - job.startedAt;
+  const remaining = Math.max(0, job.completesAt - Date.now());
+  const t = total > 0 ? 1 - remaining / total : 1;
+  const seconds = Math.ceil(remaining / 1000);
+  return (
+    <div className="flex items-center gap-3 text-xs">
+      <span className="w-32 text-zinc-200 truncate">
+        {recipe?.name ?? job.recipeId}
+      </span>
+      <div className="flex-1 h-2 rounded bg-black/40 border border-[color:var(--panel-border)] overflow-hidden">
+        <div
+          className="h-full bg-cyan-400"
+          style={{ width: `${Math.round(t * 100)}%` }}
+        />
+      </div>
+      <span className="w-10 text-right text-zinc-500 tabular-nums">
+        {seconds}s
+      </span>
+    </div>
   );
 }
 

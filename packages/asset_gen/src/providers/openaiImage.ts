@@ -26,6 +26,7 @@ export class OpenAIImageGenerator implements ImageGenerator {
         size: input.size,
         quality: input.quality,
         output_format: 'png',
+        background: input.background,
         moderation: 'auto',
       }),
     });

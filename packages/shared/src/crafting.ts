@@ -35,6 +35,10 @@ export type Recipe = {
   workstation: WorkstationKind | null;
   // Required blueprint id, or null if always known.
   blueprintId: string | null;
+  // Async craft duration in milliseconds. 0 (or omitted) = instant — used
+  // for hand-craftable basics. Station recipes set this to give the dive
+  // / craft loop a real "queue and go scavenge" flow.
+  craftTimeMs?: number;
 };
 
 export const RECIPES: Record<string, Recipe> = {
@@ -67,6 +71,7 @@ export const RECIPES: Record<string, Recipe> = {
     output: { kind: 'placeable', buildingKind: 'forge', count: 1 },
     workstation: 'workbench',
     blueprintId: null,
+    craftTimeMs: 30_000,
   },
   electronics_bench: {
     id: 'electronics_bench',
@@ -79,6 +84,7 @@ export const RECIPES: Record<string, Recipe> = {
     output: { kind: 'placeable', buildingKind: 'electronics_bench', count: 1 },
     workstation: 'workbench',
     blueprintId: null,
+    craftTimeMs: 30_000,
   },
   artifact_uplink: {
     id: 'artifact_uplink',
@@ -91,6 +97,7 @@ export const RECIPES: Record<string, Recipe> = {
     output: { kind: 'placeable', buildingKind: 'artifact_uplink', count: 1 },
     workstation: 'workbench',
     blueprintId: null,
+    craftTimeMs: 45_000,
   },
   pistol_basic_ammo: {
     id: 'pistol_basic_ammo',
@@ -102,6 +109,7 @@ export const RECIPES: Record<string, Recipe> = {
     output: { kind: 'ammo', ammoId: 'pistol_basic', count: 50 },
     workstation: 'workbench',
     blueprintId: null,
+    craftTimeMs: 10_000,
   },
 
   // ---- Electronics bench tier: blueprinted gear. ----
@@ -116,6 +124,7 @@ export const RECIPES: Record<string, Recipe> = {
     output: { kind: 'placeable', buildingKind: 'turret', count: 1 },
     workstation: 'electronics_bench',
     blueprintId: 'bp_turret',
+    craftTimeMs: 60_000,
   },
 };
 

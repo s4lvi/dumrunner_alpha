@@ -37,7 +37,10 @@ export function compileAssetPrompt(request: AssetGenerateRequest): string {
       'Must avoid: text, letters, numbers, logos, watermark, UI frame, hands, floor shadow that cannot be removed',
       ...brief.mustAvoid,
     ].join('; ') + '.',
-    'Use a plain, high-contrast, easily removable background. Leave generous padding around the subject.',
+    request.style.transparentBackground
+      ? 'Use a fully transparent background if supported; otherwise use a plain, high-contrast, easily removable background.'
+      : 'Use a plain, high-contrast, easily removable background.',
+    'Leave generous padding around the subject.',
     'The result must be usable as a small game sprite after background removal.',
   ];
   return parts.filter(Boolean).join('\n');

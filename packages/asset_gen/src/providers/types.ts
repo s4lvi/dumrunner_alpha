@@ -9,6 +9,7 @@ export type ImageGenerationInput = {
   prompt: string;
   size: string;
   quality: 'low' | 'medium' | 'high' | 'auto';
+  background: 'transparent' | 'opaque' | 'auto';
 };
 
 export interface ImageGenerator {

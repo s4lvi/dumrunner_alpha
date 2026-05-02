@@ -82,6 +82,19 @@ export const COMBAT = {
   // Crafting station proximity. Player must be within this many pixels of a
   // workstation of the recipe's required kind to craft it. ~3 tiles.
   CRAFT_STATION_RANGE_PX: 96,
+
+  // ---------- power system ----------
+  // Power Link capacity = base + per-floor bonus × deepestFloorReached.
+  // Base 2 means a fresh server can support 2 turrets before any depth
+  // pushed; +1 per floor scales linearly so the dungeon push directly
+  // fuels surface defences. Power Link destruction sets capacity to 0.
+  POWER_BASE_CAPACITY: 2,
+  POWER_PER_DEPTH: 1,
+  // Per-consumer draw. Turrets draw 1 each; (Phase 4) each running craft
+  // job also draws 1. When draw > capacity, the lowest-priority
+  // consumers shut off (turrets sorted by id for determinism).
+  POWER_DRAW_TURRET: 1,
+  POWER_DRAW_CRAFT_JOB: 1,
 } as const;
 
 export const DUMMY_SPAWNS: { x: number; y: number }[] = [

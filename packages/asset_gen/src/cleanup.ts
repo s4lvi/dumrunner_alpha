@@ -21,7 +21,7 @@ export async function cleanImage(
     metadata: {
       width: dimensions.width,
       height: dimensions.height,
-      transparent: false,
+      transparent: request.style.transparentBackground,
       anchor,
       opaqueBounds: {
         x: request.constraints.safeMarginPx,

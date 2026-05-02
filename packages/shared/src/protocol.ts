@@ -108,6 +108,22 @@ export type Interactable = {
   label: string;
 };
 
+// ---------- Async craft jobs ----------
+// Recipes whose Recipe.craftTimeMs > 0 don't materialize instantly — they
+// queue as a CraftJob at a workstation. Server holds the truth; client
+// renders progress bars from these.
+export type CraftJobState = {
+  id: string;
+  recipeId: string;
+  characterId: string;
+  // The station kind this job runs at. Currently informational; future
+  // rules (e.g. "destroying the station cancels its jobs") use it.
+  stationKind: 'workbench' | 'forge' | 'electronics_bench';
+  // Epoch ms.
+  startedAt: number;
+  completesAt: number;
+};
+
 // ---------- Buildings (player-placed structures) ----------
 // Defenses (wall, turret), crafting stations (workbench, forge,
 // electronics_bench), and — later — storage / artifact uplink. All share the
@@ -405,6 +421,16 @@ export type ServerMessage =
       hordeActive: boolean;
     }
   | {
+      // Surface power state — sent whenever capacity, draw, or the
+      // powered subset changes. Client renders a Power N/M HUD line and
+      // dims unpowered buildings.
+      type: 'power_state';
+      capacity: number;
+      draw: number;
+      online: boolean;
+      poweredBuildingIds: string[];
+    }
+  | {
       // Sent at the moment perihelion fires. Client can play a stinger /
       // colour shift / camera shake.
       type: 'horde_started';
@@ -426,6 +452,25 @@ export type ServerMessage =
       dirX: number;
       dirY: number;
     }
+  | {
+      // A craft job has begun at a station. Client adds it to its local
+      // job queue so the workstation modal can render a progress bar.
+      type: 'craft_job_started';
+      job: CraftJobState;
+    }
+  | {
+      // Craft job finished and the output landed in the player's
+      // inventory (the server also sends an inventory_changed alongside).
+      type: 'craft_job_completed';
+      jobId: string;
+    }
+  | {
+      // Full snapshot of currently-running jobs for this client. Sent on
+      // welcome / scene change so the modal can paint progress bars
+      // mid-job for cycles where the player reconnected.
+      type: 'craft_jobs_state';
+      jobs: CraftJobState[];
+    }
   | { type: 'inventory_changed'; inventory: Inventory }
   | { type: 'equipment_changed'; equipment: Equipment }
   | { type: 'hotbar_selection'; slot: number }
@@ -440,4 +485,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 21;

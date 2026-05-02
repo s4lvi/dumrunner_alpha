@@ -19,6 +19,26 @@ This service must not sit in the realtime simulation path. The game server can
 request missing assets, but normal gameplay should render cached assets or
 fallback placeholders while generation jobs run asynchronously.
 
+## Current Implementation Slice
+
+The first implementation pass now exists under `packages/asset_gen/src`:
+
+- `server.ts` exposes the HTTP API with Node's built-in server.
+- `schemas.ts` owns the Zod request/response domain.
+- `service.ts` owns cache lookup, job creation, and async queue processing.
+- `prompt.ts` compiles game-domain requests into image prompts.
+- `providers/openaiImage.ts` calls OpenAI's image generation endpoint with
+  `gpt-image-1.5` by default.
+- `cleanup.ts` and `verifier.ts` are explicit boundaries for the heavier
+  production work: background removal, alpha validation, crop/framing, and
+  VLM grading.
+- `gameRequests.ts` provides request builders for enemies, parts, materials,
+  and buildings using the existing shared game schemas.
+
+This version is intentionally an API/queue skeleton. It can call the image API,
+but approved production output still depends on replacing the placeholder
+cleanup and heuristic verifier with real image-processing and VLM stages.
+
 ## Package Boundary
 
 This package should own:
@@ -153,6 +173,49 @@ Returns job state:
 
 Returns approved asset metadata and URLs. Raw generated attempts should not be
 served to the game by default.
+
+### `POST /v1/assets/prewarm`
+
+Queues a batch of deterministic future asset requests. This is the preferred
+game integration path: when the server boots a world, rolls a new cycle, or a
+player approaches/discovers a deeper floor, it can ask for all likely enemy,
+material, part, and building assets in the background.
+
+```jsonc
+{
+  "requestId": "world-prewarm-01",
+  "reason": "world_boot",
+  "worldSeed": 12345,
+  "cycle": 3,
+  "floorIndices": [1, 2, 3],
+  "requests": [
+    {
+      "assetKind": "enemy",
+      "renderTarget": "world_sprite",
+      "size": 64,
+      "style": {
+        "camera": "top_down",
+        "renderStyle": "painted_sprite",
+        "outline": true,
+        "transparentBackground": true
+      },
+      "gameObject": {
+        "id": "chaser_melee",
+        "label": "rat-like tunnel scavenger",
+        "faction": "catacombs",
+        "biome": "Irradiated Catacombs"
+      },
+      "visualBrief": {
+        "subject": "rat-like mutant scavenger",
+        "materials": ["patchy fur", "rusted implants"],
+        "colors": ["#7c3aed", "#22c55e", "#111827"],
+        "mustInclude": ["readable top-down silhouette"],
+        "mustAvoid": ["text", "background scene"]
+      }
+    }
+  ]
+}
+```
 
 ## Domain-Specific Request Types
 
@@ -308,9 +371,22 @@ type PartAssetContext = {
    - Convert structured fields into a constrained prompt.
    - Include camera angle, scale, silhouette, transparency, and exclusions.
    - Avoid style references to living artists or copyrighted franchises.
+   - For OpenAI, use `gpt-image-1.5` by default because isolated sprites need
+     native transparent-background support more than Image 2's broader size
+     flexibility.
+   - Set `ASSET_GEN_IMAGE_MODEL=gpt-image-1.5-2025-12-16` when we want
+     version-locked production behavior.
 
 5. **Image Generation**
-   - Request transparent output if the provider supports it.
+   - Current OpenAI docs list `gpt-image-1.5` and `gpt-image-2` for
+     `v1/images/generations` and `v1/images/edits`.
+   - `gpt-image-1.5` is the default for alpha sprites. The provider requests
+     `background: "transparent"` for models that support it.
+   - `gpt-image-2` does not currently support `background: "transparent"`.
+     If configured, the service falls back to `background: "auto"` and cleanup
+     must produce alpha.
+   - Source images should still be generated larger than the final sprite,
+     usually 1024 px square.
    - Generate multiple candidates per job, usually 2-4.
    - Store raw attempts privately for debugging, not for game use.
 
@@ -323,6 +399,9 @@ type PartAssetContext = {
    - Resize to exact target size.
    - Quantize or sharpen if `renderStyle` is `pixel_art`.
    - Export PNG with alpha. Optionally export WebP for web delivery.
+   - Production implementation should use `sharp` for resizing/metadata and a
+     dedicated matting/removal step for alpha. The current code only records
+     dimensions and makes this boundary explicit.
 
 7. **Mechanical Validation**
    - Exact dimensions match requested size.

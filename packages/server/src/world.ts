@@ -177,6 +177,18 @@ export class World {
   // Powered defences (auto-turrets) require an alive Power Link. When the
   // Link is destroyed mid-cycle this flips false; cycle reset rebuilds it.
   private powerOnline = true;
+  // Computed power state. Capacity scales with deepestFloorReached when
+  // the Link is alive; otherwise 0. Draw is the count of currently-
+  // consuming buildings (turrets + Phase-4 active craft jobs). Powered
+  // set is the deterministic subset of consumers that fit under capacity.
+  private powerCapacity = 0;
+  private powerDraw = 0;
+  private poweredBuildings = new Set<string>();
+  // Async craft jobs in flight, keyed by job id. Each job draws 1 power
+  // for its duration; output materializes to the requesting player's
+  // inventory when completesAt elapses.
+  private activeCraftJobs = new Map<string, import('@dumrunner/shared').CraftJobState>();
+  private nextCraftJobId = 0;
   // Last clock broadcast time, throttled to WORLD_CLOCK_INTERVAL_MS.
   private lastClockBroadcastAt = 0;
 
@@ -192,6 +204,8 @@ export class World {
       onPlayerRespawn: (id) => this.respawnPlayerToSurface(id),
       onPowerLinkDestroyed: () => this.handlePowerLinkDestroyed(),
       isPowerOnline: () => this.powerOnline,
+      isPowered: (id: string) => this.poweredBuildings.has(id),
+      onBuildingsChanged: () => this.recomputePowerState(),
     };
     // Surface always exists so cold servers spawn enemies immediately.
     const surface = new Scene(
@@ -422,6 +436,25 @@ export class World {
       player.characterId
     );
 
+    // Sync any in-flight craft jobs the player owns so the workstation
+    // modal can render their progress bars on reconnect / mid-cycle join.
+    const myJobs: import('@dumrunner/shared').CraftJobState[] = [];
+    for (const job of this.activeCraftJobs.values()) {
+      if (job.characterId === player.characterId) myJobs.push(job);
+    }
+    if (myJobs.length > 0) {
+      this.sendDirect(ws, { type: 'craft_jobs_state', jobs: myJobs });
+    }
+    // Same for the current power state — newly-joined client wouldn't
+    // otherwise know the capacity / draw until something changes.
+    this.sendDirect(ws, {
+      type: 'power_state',
+      capacity: this.powerCapacity,
+      draw: this.powerDraw,
+      online: this.powerCapacity > 0,
+      poweredBuildingIds: [...this.poweredBuildings],
+    });
+
     this.ensureTimers();
   }
 
@@ -588,9 +621,11 @@ export class World {
       const targetScene = this.requireScene(targetSceneId);
       const spawn = targetScene.layout?.spawn ?? { x: 0, y: 0 };
       this.transition(characterId, targetSceneId, spawn.x, spawn.y);
-      // Update the depth marker if this push extends the frontier.
+      // Update the depth marker if this push extends the frontier;
+      // power capacity scales with the new value.
       if (nextFloor > this.deepestFloorReached) {
         this.deepestFloorReached = nextFloor;
+        this.recomputePowerState();
       }
       return;
     }
@@ -731,6 +766,25 @@ export class World {
         if (countAmmo(conn.inventory, input.ammoId) < input.count) return;
       }
     }
+
+    const craftTimeMs = recipe.craftTimeMs ?? 0;
+    const isAsync = craftTimeMs > 0 && recipe.workstation !== null;
+
+    if (isAsync) {
+      // Power budget gate: a queued craft job costs 1 power for its
+      // duration. Reject if it would exceed the Link's capacity.
+      if (
+        this.powerDraw + COMBAT.POWER_DRAW_CRAFT_JOB >
+        this.powerCapacity
+      ) {
+        this.sendDirect(conn.ws, {
+          type: 'error',
+          message: 'insufficient_power',
+        });
+        return;
+      }
+    }
+
     // Deduct inputs.
     for (const input of recipe.inputs) {
       if (input.kind === 'material') {
@@ -739,19 +793,80 @@ export class World {
         consumeAmmo(conn.inventory, input.ammoId, input.count);
       }
     }
-    // Add output.
+
+    if (isAsync) {
+      // Queue an async job. Output materializes when completesAt elapses
+      // (see tickCraftJobs in the world tick loop).
+      const now = Date.now();
+      const jobId = `cj${this.nextCraftJobId++}`;
+      const job = {
+        id: jobId,
+        recipeId,
+        characterId,
+        stationKind: recipe.workstation as
+          | 'workbench'
+          | 'forge'
+          | 'electronics_bench',
+        startedAt: now,
+        completesAt: now + craftTimeMs,
+      };
+      this.activeCraftJobs.set(jobId, job);
+      this.sendDirect(conn.ws, { type: 'craft_job_started', job });
+      this.sendDirect(conn.ws, {
+        type: 'inventory_changed',
+        inventory: conn.inventory,
+      });
+      // Job draw counts toward capacity so subsequent power-budget
+      // checks see the new total.
+      this.recomputePowerState();
+      return;
+    }
+
+    // Instant craft (basics + any recipe without craftTimeMs).
     const out = recipe.output;
     if (out.kind === 'placeable') {
       addPlaceable(conn.inventory, out.buildingKind, out.count);
     } else {
       addAmmo(conn.inventory, out.ammoId, out.count);
     }
-
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
       inventory: conn.inventory,
     });
+  }
+
+  // Run each tick. Materializes finished craft jobs into the requesting
+  // player's inventory and removes them from the active map.
+  private tickCraftJobs(now: number): void {
+    if (this.activeCraftJobs.size === 0) return;
+    const finished: string[] = [];
+    for (const job of this.activeCraftJobs.values()) {
+      if (job.completesAt <= now) finished.push(job.id);
+    }
+    if (finished.length === 0) return;
+    for (const jobId of finished) {
+      const job = this.activeCraftJobs.get(jobId);
+      if (!job) continue;
+      this.activeCraftJobs.delete(jobId);
+      const conn = this.connections.get(job.characterId);
+      if (!conn) continue; // owner dropped — output silently lost
+      const recipe = RECIPES[job.recipeId];
+      if (!recipe) continue;
+      const out = recipe.output;
+      if (out.kind === 'placeable') {
+        addPlaceable(conn.inventory, out.buildingKind, out.count);
+      } else {
+        addAmmo(conn.inventory, out.ammoId, out.count);
+      }
+      conn.inventoryDirty = true;
+      this.sendDirect(conn.ws, { type: 'craft_job_completed', jobId });
+      this.sendDirect(conn.ws, {
+        type: 'inventory_changed',
+        inventory: conn.inventory,
+      });
+    }
+    this.recomputePowerState();
   }
 
   // Player spends artifacts at an artifact_uplink to learn a blueprint.
@@ -932,6 +1047,7 @@ export class World {
     this.lastTickAt = now;
 
     this.tickHordeClock(now);
+    this.tickCraftJobs(now);
 
     for (const scene of this.scenes.values()) {
       scene.tick(dt, now);
@@ -964,6 +1080,42 @@ export class World {
     }
   }
 
+  // Recompute and broadcast the surface power state. Capacity scales
+  // with deepestFloorReached when the Power Link is alive, otherwise 0.
+  // Draw is the count of currently-consuming buildings (turrets in
+  // alpha; Phase 4 adds active craft jobs). Powered set picks consumers
+  // in deterministic id order until capacity is exhausted.
+  private recomputePowerState(): void {
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    const linkAlive =
+      surface?.findBuildingByKind('power_link') !== null && this.powerOnline;
+    this.powerCapacity = linkAlive
+      ? COMBAT.POWER_BASE_CAPACITY +
+        COMBAT.POWER_PER_DEPTH * this.deepestFloorReached
+      : 0;
+
+    const consumers = surface?.findBuildingsByKind(['turret']) ?? [];
+    this.powerDraw =
+      consumers.length * COMBAT.POWER_DRAW_TURRET +
+      this.activeCraftJobs.size * COMBAT.POWER_DRAW_CRAFT_JOB;
+
+    this.poweredBuildings.clear();
+    let remaining = this.powerCapacity;
+    for (const c of consumers) {
+      if (remaining < COMBAT.POWER_DRAW_TURRET) break;
+      this.poweredBuildings.add(c.id);
+      remaining -= COMBAT.POWER_DRAW_TURRET;
+    }
+
+    this.broadcastAll({
+      type: 'power_state',
+      capacity: this.powerCapacity,
+      draw: this.powerDraw,
+      online: this.powerCapacity > 0,
+      poweredBuildingIds: [...this.poweredBuildings],
+    });
+  }
+
   // Power Link destroyed mid-cycle. Cascades a heavy reset: any players
   // currently in a dungeon scene get evicted to the surface, every
   // dungeon scene drops (procgen reseeds on the next descent), the
@@ -993,6 +1145,8 @@ export class World {
       if (sceneId === SURFACE_SCENE_ID) continue;
       this.scenes.delete(sceneId);
     }
+    // Capacity is now 0 (Link gone) — broadcast so client HUD reflects.
+    this.recomputePowerState();
   }
 
   private startHorde(now: number): void {
@@ -1065,6 +1219,7 @@ export class World {
     }
     this.powerOnline = true;
     this.deepestFloorReached = 1;
+    this.recomputePowerState();
 
     // Cycle reset: per-cycle blueprints wipe; persistent (legendary) ones
     // stay. Re-grant the alpha starter set so testing isn't dead-ended once
