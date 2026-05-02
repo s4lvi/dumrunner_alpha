@@ -285,7 +285,23 @@ Crafting in the alpha is **station-driven, blueprint-gated, and (planned) time-a
 - **Inventory's "Field Craft" tab** lists hand-craftable basics only.
 - **Each workstation opens its own modal** (E to interact when in range). The modal is two-column: blueprint list on the left, full requirement / output / craft button on the right. Each ingredient row shows `have/need` so deficits read at a glance.
 
-**Async crafting (planned).** Each recipe will gain a `craftTimeMs`. Crafting at a station starts a job; output materializes when the timer expires. Jobs draw power for their duration; multiple jobs queue at a station. Removes "instant gratification" from station crafting, makes power management strategic. Hand-craftable basics stay instant. (See [Power System](#power-system) below.)
+**Async crafting.** Each recipe with a workstation has a `craftTimeMs`. Crafting at a station starts a job; output materializes when the timer expires. Jobs draw power for their duration. Hand-craftable basics stay instant. (See [Power System](#power-system) below.)
+
+**Per-station parallel slots.** Each station building has its own queue capacity — by default **1 active job at a time** for every station kind. Want more parallelism? You either build another station or upgrade an existing one. Server binds each new job to a specific station building; if every nearby station of the kind is already saturated, the request is rejected with `station_busy`.
+
+The progression shape:
+
+| Tier | Parallel slots | Source |
+|------|----------------|--------|
+| Basic (alpha-shipped) | 1 | Default for every station |
+| Upgraded (planned) | 2–3 | Spend materials at the station to upgrade it; raises that specific building's slot count |
+| Advanced (planned) | 4+ | Higher-tier station kinds (e.g. "Industrial Workbench" blueprint sold at the Artifact Uplink) ship with more slots by default |
+
+The upgrade path is the long-term answer to "I want to mass-produce ammo while the turret recipe is also queued" — start with one bench, scale to a fabrication wing.
+
+**Station output buffers.** Crafted output does **not** drop straight into the player's inventory. Each station has an 8-slot output buffer that completed jobs deposit into (stack-merging materials / ammo / placeables of the same id). The player walks up, opens the modal, and taps **Take All** — every output slot across nearby stations of that kind transfers to their bag. Fallback: if a station was destroyed mid-craft (or the buffer is somehow saturated), the output spills directly to the requesting player so the craft is never silently lost.
+
+This is what makes "queue and go scavenge" feel right — you come back to a stocked rack of finished gear, not an inventory you have to micromanage during the dive.
 
 ### Artifacts & The Earth Trade Tree
 
