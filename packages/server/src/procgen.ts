@@ -422,10 +422,10 @@ export function generateLockedRoomMeta(
   for (let i = 1; i < layout.rooms.length; i++) {
     if (rng() > lockChance) continue;
     const room = layout.rooms[i];
-    const door = pickDoorTile(room, corridorRects, tileSize, rng);
-    if (!door) continue;
+    const tiles = pickDoorTilesForRoom(room, corridorRects, tileSize);
+    if (tiles.length === 0) continue;
     lockedSet.add(i);
-    doors.push(door);
+    doors.push(...tiles);
   }
 
   return { lockedRoomIndices: [...lockedSet], doors };
@@ -435,42 +435,40 @@ function sameRect(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
-// Walk the room's perimeter looking for a tile that overlaps a
-// corridor — that's the doorway. Falls back to a random perimeter tile
-// if no corridor adjacency exists (small rooms, edge cases).
-function pickDoorTile(
+// Find every perimeter tile of the room that overlaps an adjacent
+// corridor. Returns ALL such tiles so the door fully spans the
+// entrance — a 2-wide corridor placed against a room produces 2
+// adjacent doors that open as one (server flood-fills by adjacency).
+function pickDoorTilesForRoom(
   room: Rect,
   corridors: Rect[],
-  tileSize: number,
-  rng: () => number
-): InitialDoor | null {
+  tileSize: number
+): InitialDoor[] {
   const tx0 = Math.floor(room.x / tileSize);
   const ty0 = Math.floor(room.y / tileSize);
   const txEnd = Math.floor((room.x + room.w) / tileSize);
   const tyEnd = Math.floor((room.y + room.h) / tileSize);
 
-  const candidates: InitialDoor[] = [];
+  const tiles: InitialDoor[] = [];
   // Top + bottom edges.
   for (let tx = tx0; tx < txEnd; tx++) {
     if (tileTouchesCorridor(tx, ty0 - 1, corridors, tileSize)) {
-      candidates.push({ tileX: tx, tileY: ty0 });
+      tiles.push({ tileX: tx, tileY: ty0 });
     }
     if (tileTouchesCorridor(tx, tyEnd, corridors, tileSize)) {
-      candidates.push({ tileX: tx, tileY: tyEnd - 1 });
+      tiles.push({ tileX: tx, tileY: tyEnd - 1 });
     }
   }
   // Left + right edges.
   for (let ty = ty0; ty < tyEnd; ty++) {
     if (tileTouchesCorridor(tx0 - 1, ty, corridors, tileSize)) {
-      candidates.push({ tileX: tx0, tileY: ty });
+      tiles.push({ tileX: tx0, tileY: ty });
     }
     if (tileTouchesCorridor(txEnd, ty, corridors, tileSize)) {
-      candidates.push({ tileX: txEnd - 1, tileY: ty });
+      tiles.push({ tileX: txEnd - 1, tileY: ty });
     }
   }
-
-  if (candidates.length === 0) return null;
-  return candidates[Math.floor(rng() * candidates.length)];
+  return tiles;
 }
 
 function tileTouchesCorridor(

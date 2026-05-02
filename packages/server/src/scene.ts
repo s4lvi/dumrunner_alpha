@@ -1419,8 +1419,17 @@ export class Scene {
 
   private advanceProjectiles(dt: number, now: number): void {
     for (const [id, p] of this.projectiles) {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
+      // Swept-segment collision. With pistol speed at 1500 px/s and a
+      // 50ms tick, naïve point-in-radius leaves the projectile able to
+      // skip past a 12-radius drone in a single step (75px > 12+4).
+      // Test the full motion segment from old → new position against
+      // each potential target's radius and stop at the earliest hit.
+      const fromX = p.x;
+      const fromY = p.y;
+      const stepX = p.vx * dt;
+      const stepY = p.vy * dt;
+      const newX = fromX + stepX;
+      const newY = fromY + stepY;
 
       if (now >= p.expiresAt) {
         this.projectiles.delete(id);
@@ -1428,69 +1437,90 @@ export class Scene {
         continue;
       }
 
+      let hit = false;
+      let earliestT = 1;
+      let hitAction: (() => void) | null = null;
+
       if (p.ownerKind === 'player') {
-        let hit = false;
         for (const enemy of this.enemies.values()) {
           if (!enemy.alive) continue;
-          const dx = p.x - enemy.x;
-          const dy = p.y - enemy.y;
-          const reach = enemy.template.radius + p.radius;
-          if (dx * dx + dy * dy <= reach * reach) {
-            this.damageEnemy(enemy, p.damage, now);
-            this.projectiles.delete(id);
-            this.broadcast({ type: 'projectile_despawned', id, reason: 'hit' });
-            hit = true;
-            break;
+          const t = sweptCircleHit(
+            fromX,
+            fromY,
+            stepX,
+            stepY,
+            enemy.x,
+            enemy.y,
+            enemy.template.radius + p.radius
+          );
+          if (t !== null && t < earliestT) {
+            earliestT = t;
+            hitAction = () => this.damageEnemy(enemy, p.damage, now);
           }
         }
-        if (hit) continue;
       } else {
-        let hit = false;
-        // Enemy projectiles hit players first.
         for (const memberId of this.members) {
           const conn = this.bindings.connection(memberId);
           if (!conn || !conn.alive) continue;
-          const dx = p.x - conn.x;
-          const dy = p.y - conn.y;
-          const reach = COMBAT.PLAYER_RADIUS + p.radius;
-          if (dx * dx + dy * dy <= reach * reach) {
-            this.applyDamage(conn, p.damage, now);
-            if (conn.hp <= 0) {
-              this.killPlayer(conn, now);
-            }
-            this.projectiles.delete(id);
-            this.broadcast({ type: 'projectile_despawned', id, reason: 'hit' });
-            hit = true;
-            break;
+          const t = sweptCircleHit(
+            fromX,
+            fromY,
+            stepX,
+            stepY,
+            conn.x,
+            conn.y,
+            COMBAT.PLAYER_RADIUS + p.radius
+          );
+          if (t !== null && t < earliestT) {
+            earliestT = t;
+            hitAction = () => {
+              this.applyDamage(conn, p.damage, now);
+              if (conn.hp <= 0) this.killPlayer(conn, now);
+            };
           }
         }
-        if (hit) continue;
-        // Then buildings — so drones during a horde can actually erode
-        // the base from range, not just walk past walls.
+        // Enemy projectiles also damage buildings (drones erode the
+        // base during horde). AABB-vs-segment via expanded box test.
         const tileSize = this.layout?.tileSize ?? 0;
         if (tileSize > 0) {
           for (const b of this.buildings.values()) {
             const cx = (b.tileX + b.width / 2) * tileSize;
             const cy = (b.tileY + b.height / 2) * tileSize;
-            const halfW = (b.width * tileSize) / 2;
-            const halfH = (b.height * tileSize) / 2;
-            const dx = Math.max(Math.abs(p.x - cx) - halfW, 0);
-            const dy = Math.max(Math.abs(p.y - cy) - halfH, 0);
-            if (dx * dx + dy * dy <= p.radius * p.radius) {
-              this.damageBuilding(b, p.damage, now);
-              this.projectiles.delete(id);
-              this.broadcast({
-                type: 'projectile_despawned',
-                id,
-                reason: 'hit',
-              });
-              hit = true;
-              break;
+            const halfW = (b.width * tileSize) / 2 + p.radius;
+            const halfH = (b.height * tileSize) / 2 + p.radius;
+            const t = sweptAabbHit(
+              fromX,
+              fromY,
+              stepX,
+              stepY,
+              cx - halfW,
+              cy - halfH,
+              cx + halfW,
+              cy + halfH
+            );
+            if (t !== null && t < earliestT) {
+              earliestT = t;
+              hitAction = () => this.damageBuilding(b, p.damage, now);
             }
           }
-          if (hit) continue;
         }
       }
+
+      if (hitAction) {
+        // Land the projectile at the contact point so the despawn
+        // visual is at the actual hit location.
+        p.x = fromX + stepX * earliestT;
+        p.y = fromY + stepY * earliestT;
+        hitAction();
+        this.projectiles.delete(id);
+        this.broadcast({ type: 'projectile_despawned', id, reason: 'hit' });
+        hit = true;
+      }
+      if (hit) continue;
+
+      // No hit — commit the full step.
+      p.x = newX;
+      p.y = newY;
     }
   }
 
@@ -1828,15 +1858,29 @@ export class Scene {
     return building;
   }
 
-  // Open (remove) a door building. Used by the world's open_door
-  // handler after key validation. Broadcasts the building_destroyed
-  // message so clients drop the door from their state and the tile
-  // becomes walkable again.
+  // Open (remove) a door building AND every adjacent door connected to
+  // it via 4-connected adjacency. A 2-wide corridor produces 2 adjacent
+  // door tiles that the player perceives as a single door — flood-fill
+  // means one key opens the whole entrance instead of charging per tile.
   openDoor(buildingId: string): boolean {
-    const b = this.buildings.get(buildingId);
-    if (!b || b.kind !== 'door') return false;
-    this.buildings.delete(buildingId);
-    this.broadcast({ type: 'building_destroyed', id: buildingId });
+    const start = this.buildings.get(buildingId);
+    if (!start || start.kind !== 'door') return false;
+    const visited = new Set<string>();
+    const queue: BuildingRuntime[] = [start];
+    while (queue.length > 0) {
+      const b = queue.shift()!;
+      if (visited.has(b.id)) continue;
+      visited.add(b.id);
+      this.buildings.delete(b.id);
+      this.broadcast({ type: 'building_destroyed', id: b.id });
+      for (const other of this.buildings.values()) {
+        if (other.kind !== 'door') continue;
+        if (visited.has(other.id)) continue;
+        const dx = Math.abs(other.tileX - b.tileX);
+        const dy = Math.abs(other.tileY - b.tileY);
+        if (dx + dy === 1) queue.push(other);
+      }
+    }
     return true;
   }
 
@@ -1965,6 +2009,74 @@ export interface SceneBindings {
 }
 
 // ---------- helpers ----------
+
+// Swept circle-vs-circle. Origin (ox,oy), motion (mx,my), target circle
+// (cx,cy) of effective radius r. Returns the first t in [0,1] at which
+// the moving point enters the circle, or null on miss. Reduces to the
+// classic segment-vs-circle quadratic.
+function sweptCircleHit(
+  ox: number,
+  oy: number,
+  mx: number,
+  my: number,
+  cx: number,
+  cy: number,
+  r: number
+): number | null {
+  // Stationary moving point — fall back to a contains check.
+  if (mx === 0 && my === 0) {
+    const dx = ox - cx;
+    const dy = oy - cy;
+    return dx * dx + dy * dy <= r * r ? 0 : null;
+  }
+  const fx = ox - cx;
+  const fy = oy - cy;
+  const a = mx * mx + my * my;
+  const b = 2 * (fx * mx + fy * my);
+  const c = fx * fx + fy * fy - r * r;
+  // Already inside — hit at t = 0.
+  if (c <= 0) return 0;
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) return null;
+  const sq = Math.sqrt(disc);
+  const t1 = (-b - sq) / (2 * a);
+  if (t1 >= 0 && t1 <= 1) return t1;
+  return null;
+}
+
+// Swept point-vs-AABB. (ox,oy)+motion against the box [minX,minY,maxX,
+// maxY]. The projectile's radius is folded into the box (caller expands
+// the half-extents by r), so this is a plain point-vs-box ray clip.
+function sweptAabbHit(
+  ox: number,
+  oy: number,
+  mx: number,
+  my: number,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number
+): number | null {
+  // Slab method.
+  let tEnter = 0;
+  let tExit = 1;
+  const test = (origin: number, dir: number, lo: number, hi: number) => {
+    if (Math.abs(dir) < 1e-8) {
+      if (origin < lo || origin > hi) return false;
+      return true;
+    }
+    let t1 = (lo - origin) / dir;
+    let t2 = (hi - origin) / dir;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    tEnter = Math.max(tEnter, t1);
+    tExit = Math.min(tExit, t2);
+    return tEnter <= tExit;
+  };
+  if (!test(ox, mx, minX, maxX)) return null;
+  if (!test(oy, my, minY, maxY)) return null;
+  if (tEnter > 1 || tExit < 0) return null;
+  return Math.max(0, tEnter);
+}
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));

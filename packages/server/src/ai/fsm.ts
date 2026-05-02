@@ -87,8 +87,23 @@ export function tickEnemy(
   // ---------- target acquisition ----------
   // During a horde, building targets are passed in with priorities. The
   // AI picks the highest-priority building in sense range; otherwise it
-  // falls back to the nearest visible player.
-  const target = pickTarget(enemy, players, buildingTargets, env);
+  // falls back to the nearest visible player. If no player is visible
+  // but we lost LoS recently, push toward the last-known position for
+  // a grace window — keeps enemies from looking robotic when the
+  // player ducks behind a wall.
+  let target = pickTarget(enemy, players, buildingTargets, env);
+  if (target && target.kind === 'player') {
+    enemy.lastKnownTargetX = target.x;
+    enemy.lastKnownTargetY = target.y;
+    enemy.lastKnownTargetExpiresAt = now + AGGRO_MEMORY_MS;
+  } else if (!target && now < enemy.lastKnownTargetExpiresAt) {
+    target = {
+      kind: 'player',
+      characterId: '',
+      x: enemy.lastKnownTargetX,
+      y: enemy.lastKnownTargetY,
+    };
+  }
   enemy.targetCharacterId =
     target && target.kind === 'player' ? target.characterId : null;
 
@@ -114,7 +129,7 @@ export function tickEnemy(
   const prevY = enemy.y;
 
   if (!stunned && target && enemy.fsm === 'engaging') {
-    applyMovement(enemy, target, dt, env);
+    applyMovement(enemy, target, dt, now, env);
   } else if (!stunned && target && enemy.fsm === 'fleeing') {
     applyFlee(enemy, target, dt, env);
   } else if (!stunned && !target && enemy.template.moveSpeed > 0) {
@@ -243,6 +258,7 @@ function applyMovement(
   enemy: EnemyRuntime,
   target: AiTarget,
   dt: number,
+  now: number,
   env: AiEnvironment
 ): void {
   const m = enemy.template.movement;
@@ -266,8 +282,28 @@ function applyMovement(
       moveWithCollision(enemy, enemy.x - ux * speed, enemy.y - uy * speed, env);
     } else if (dist > m.maxRange) {
       moveWithCollision(enemy, enemy.x + ux * speed, enemy.y + uy * speed, env);
+    } else {
+      // Inside the comfort band: drift sideways so drones aren't
+      // visually frozen while firing. Strafe direction holds for a
+      // window then re-rolls.
+      if (now >= enemy.strafeUntil) {
+        enemy.strafeDirection = Math.random() < 0.5 ? -1 : 1;
+        enemy.strafeUntil =
+          now +
+          STRAFE_WINDOW_MIN_MS +
+          Math.random() * (STRAFE_WINDOW_MAX_MS - STRAFE_WINDOW_MIN_MS);
+      }
+      // Perpendicular to (ux,uy) is (-uy, ux). Half-speed sideways.
+      const sx = -uy * enemy.strafeDirection;
+      const sy = ux * enemy.strafeDirection;
+      const strafeSpeed = enemy.template.moveSpeed * 0.5 * dt;
+      moveWithCollision(
+        enemy,
+        enemy.x + sx * strafeSpeed,
+        enemy.y + sy * strafeSpeed,
+        env
+      );
     }
-    // Inside the comfort band: hold position.
   }
 }
 
@@ -279,6 +315,15 @@ const WANDER_REACH = 6;
 const WANDER_PAUSE_MIN_MS = 1500;
 const WANDER_PAUSE_MAX_MS = 4000;
 const WANDER_SPEED_MULT = 0.4;
+
+// How long after losing LoS the enemy keeps pushing toward the player's
+// last known position. Stops aggro from snapping off the moment the
+// player ducks behind a wall — the enemy investigates briefly first.
+const AGGRO_MEMORY_MS = 1500;
+// Strafe window for kite drones — pick a sideways drift direction and
+// hold it for this long before re-rolling.
+const STRAFE_WINDOW_MIN_MS = 700;
+const STRAFE_WINDOW_MAX_MS = 1600;
 
 function applyWander(
   enemy: EnemyRuntime,
@@ -407,5 +452,10 @@ export function instantiateEnemy(
     wanderTargetX: x,
     wanderTargetY: y,
     wanderPauseUntil: 0,
+    lastKnownTargetX: 0,
+    lastKnownTargetY: 0,
+    lastKnownTargetExpiresAt: 0,
+    strafeDirection: 1,
+    strafeUntil: 0,
   };
 }

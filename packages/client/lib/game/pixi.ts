@@ -119,18 +119,18 @@ export const TIER_COLORS: Record<PartTier, number> = {
 
 // Room floor palette. One entry per "theme bucket"; rooms hash to a
 // bucket via their xy origin so the same room always reads the same
-// way. Kept to subtle dark-tinted variants so the floor reads as
-// "lived-in alien architecture" instead of party colours. Add entries
-// here for more variety; the hash space is unlimited.
+// way. Kept dark enough to feel "alien architecture" but tuned for
+// visible contrast across rooms — earlier subtler palette was hard to
+// read against the neutral floor.
 const ROOM_FLOOR_PALETTE: number[] = [
-  0x1f242c, // default neutral
-  0x232027, // dusty plum
-  0x1c2630, // damp slate-blue
-  0x252521, // sand-brown
-  0x1d2b25, // moss-green
-  0x2a2228, // rust
-  0x1f2a2c, // teal-grey
-  0x2b251f, // amber-brown
+  0x2c2530, // dusty plum
+  0x1d2c3a, // slate-blue
+  0x2e2a1c, // sand-brown
+  0x1e3328, // moss-green
+  0x3a2126, // rust
+  0x1f3536, // teal
+  0x3a2d1c, // amber
+  0x2a1e2e, // wine
 ];
 
 function roomFloorColor(r: Rect): number {
@@ -1047,7 +1047,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     if (projectiles.has(p.id)) return;
     const g = new Graphics();
     const color = p.color ?? (p.ownerKind === 'enemy' ? 0xfbbf24 : PROJECTILE_COLOR);
-    g.circle(0, 0, 4).fill({ color });
+    drawProjectileShape(g, color, p.vx, p.vy);
     g.position.set(p.x, p.y);
     projectilesLayer.addChild(g);
     projectiles.set(p.id, {
@@ -1055,6 +1055,33 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       graphic: g,
       spawnedAt: performance.now(),
     });
+  }
+
+  // Small bright head + tapered trail behind it pointing back along the
+  // velocity vector. Reads as a fast-moving round at 1500 px/s.
+  function drawProjectileShape(
+    g: Graphics,
+    color: number,
+    vx: number,
+    vy: number
+  ) {
+    const TRAIL_LEN = 22;
+    const len = Math.hypot(vx, vy) || 1;
+    const ux = vx / len;
+    const uy = vy / len;
+    g.clear();
+    // Trail — thicker at the head, drawn in a couple of fading strokes
+    // to approximate a tapered streak with cheap Graphics calls.
+    const tailX = -ux * TRAIL_LEN;
+    const tailY = -uy * TRAIL_LEN;
+    g.moveTo(tailX, tailY)
+      .lineTo(0, 0)
+      .stroke({ color, width: 1, alpha: 0.35 });
+    g.moveTo(-ux * (TRAIL_LEN * 0.6), -uy * (TRAIL_LEN * 0.6))
+      .lineTo(0, 0)
+      .stroke({ color, width: 2, alpha: 0.6 });
+    // Bright head dot.
+    g.circle(0, 0, 2.5).fill({ color });
   }
 
   function addBuilding(b: BuildingState) {
