@@ -609,7 +609,7 @@ export function Game({ serverId }: { serverId: string }) {
         {nearInteractable && (
           <InteractPrompt label={nearInteractable.label} />
         )}
-        <ControlsHint />
+        <ControlsHint useFps={useFps} />
 
         {showInventory && (
           <InventoryPanel
@@ -742,9 +742,13 @@ function Overlay({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ControlsHint() {
+function ControlsHint({ useFps }: { useFps: boolean }) {
   return (
     <div className="absolute bottom-3 right-3 text-xs text-zinc-500 select-none pointer-events-none flex flex-col items-end gap-1">
+      <div>
+        <Kbd>V</Kbd>
+        <span className="ml-2">{useFps ? 'top-down' : 'first-person'}</span>
+      </div>
       <div>
         <Kbd>Tab</Kbd>
         <span className="ml-2">inventory</span>
@@ -753,6 +757,17 @@ function ControlsHint() {
         <Kbd>E</Kbd>
         <span className="ml-2">interact</span>
       </div>
+      {useFps ? (
+        <div>
+          <Kbd>WASD</Kbd>
+          <span className="ml-2">forward / strafe</span>
+        </div>
+      ) : (
+        <div>
+          <Kbd>WASD</Kbd>
+          <span className="ml-2">move</span>
+        </div>
+      )}
       <div>
         <Kbd>Shift</Kbd>
         <span className="ml-2">sprint</span>

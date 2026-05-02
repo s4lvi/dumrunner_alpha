@@ -22,7 +22,7 @@
 // (rooms + corridors of varying size), not a 1-bit grid map. Step is small
 // enough (TILE/4) that wall hit positions look pixel-stable.
 
-import { Application, Container, Graphics } from 'pixi.js';
+import { Application, Container, Graphics, Text } from 'pixi.js';
 import type {
   BuildingState,
   CorpseState,
@@ -182,9 +182,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const wallLayer = new Graphics();
   const spriteLayer = new Graphics();
   const hudLayer = new Graphics();
+  const hpText = new Text({
+    text: '',
+    style: { fill: '#e6e8eb', fontSize: 14, fontFamily: 'system-ui, sans-serif' },
+  });
   root.addChild(wallLayer);
   root.addChild(spriteLayer);
   root.addChild(hudLayer);
+  root.addChild(hpText);
 
   // Per-column perpendicular distance to the wall hit. Indexed by column
   // (i = screenX / COLUMN_STEP_PX). Sprites z-test against this so a wall
@@ -533,8 +538,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       hudLayer.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.35 });
     }
 
-    drawWeaponViewModel(W, H, now);
-    drawSelfStatusBars(W, H);
+    // Bottom-right weapon view model is parked until we have real
+    // weapon sprites — placeholder rectangles read as visual noise. The
+    // crosshair already conveys aim and fire state.
+    void now;
+    drawSelfStatusBars(H);
 
     // Crosshair: white in combat, green in build mode, red flash on fire.
     const cx = Math.round(W / 2);
@@ -556,112 +564,75 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     hudLayer.circle(cx, cy2, 1.5).fill({ color, alpha: 0.9 });
   }
 
-  // Bottom-right view model: a small placeholder shape so the player has
-  // a sense of what they're holding. Pulses brighter on each fire frame
-  // to fake a muzzle flash. Real art lives behind asset_gen later.
-  function drawWeaponViewModel(W: number, H: number, now: number) {
-    if (equippedWeapon === null) return;
-    const flashing = now - lastFireFlashAt < 80;
-    const baseX = W - 140;
-    const baseY = H - 100;
-
-    if (equippedWeapon === 'pistol') {
-      // Boxy pistol silhouette: grip + barrel.
-      hudLayer
-        .rect(baseX, baseY, 40, 60)
-        .fill({ color: 0x27272a })
-        .rect(baseX, baseY, 40, 60)
-        .stroke({ color: 0x09090b, width: 2 });
-      hudLayer
-        .rect(baseX + 20, baseY - 20, 60, 24)
-        .fill({ color: 0x3f3f46 })
-        .rect(baseX + 20, baseY - 20, 60, 24)
-        .stroke({ color: 0x09090b, width: 2 });
-      if (flashing) {
-        // Muzzle flash at the end of the barrel.
-        hudLayer
-          .circle(baseX + 84, baseY - 8, 14)
-          .fill({ color: 0xfacc15, alpha: 0.85 })
-          .circle(baseX + 84, baseY - 8, 6)
-          .fill({ color: 0xffffff, alpha: 0.95 });
-      }
-    } else if (equippedWeapon === 'knife') {
-      // Diagonal blade.
-      hudLayer
-        .moveTo(baseX, baseY + 50)
-        .lineTo(baseX + 70, baseY - 10)
-        .lineTo(baseX + 80, baseY)
-        .lineTo(baseX + 10, baseY + 60)
-        .closePath()
-        .fill({ color: 0xcbd5e1 })
-        .stroke({ color: 0x09090b, width: 2 });
-      // Handle.
-      hudLayer
-        .rect(baseX - 6, baseY + 50, 26, 14)
-        .fill({ color: 0x57534e })
-        .stroke({ color: 0x09090b, width: 2 });
-    }
-  }
-
-  // Three thin bars in the bottom-left: HP (red), Shield (cyan), Stamina
-  // (yellow). Drawn here so the FPS view doesn't need to depend on the
-  // React HUD overlay being mounted to read survivability at a glance.
-  function drawSelfStatusBars(W: number, H: number) {
-    void W; // bars are anchored to the left edge
+  // Bottom-left status stack: shield (top, only if maxShield > 0), HP
+  // (main), stamina (thin). Colours and layout deliberately mirror the
+  // top-down renderer so the HUD is identical between view modes.
+  function drawSelfStatusBars(H: number) {
     const self = players.get(init.self.characterId);
     if (!self) return;
-    const x0 = 16;
-    const baseY = H - 70;
-    const w = 200;
-    const h = 8;
+    const margin = 16;
+    const barW = 220;
+    const barH = 16;
+    const stamH = 8;
+    const shieldH = 8;
     const gap = 4;
-    drawBar(
-      x0,
-      baseY,
-      w,
-      h,
-      self.hp / Math.max(1, self.maxHp),
-      0x991b1b,
-      0xef4444
-    );
-    if (self.maxShield > 0) {
-      drawBar(
-        x0,
-        baseY + (h + gap),
-        w,
-        h,
-        self.shield / Math.max(1, self.maxShield),
-        0x0e7490,
-        0x22d3ee
-      );
-    }
-    drawBar(
-      x0,
-      baseY + (h + gap) * 2,
-      w,
-      h,
-      self.stamina / Math.max(1, self.maxStamina),
-      0xa16207,
-      0xfacc15
-    );
-  }
+    const hpY = H - margin - barH - stamH - gap;
+    const stamY = hpY + barH + gap;
+    const shieldY = hpY - shieldH - gap;
 
-  function drawBar(
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    fillRatio: number,
-    bg: number,
-    fg: number
-  ) {
-    const t = Math.max(0, Math.min(1, fillRatio));
+    // Numeric "HP X / Y" label above the bar — same style + position as
+    // the top-down renderer.
+    hpText.text = `HP ${Math.round(self.hp)} / ${self.maxHp}`;
+    hpText.position.set(margin + 8, hpY - 22);
+
+    // HP — green / yellow / red gradient by ratio.
+    const hpRatio = self.maxHp > 0 ? Math.max(0, self.hp / self.maxHp) : 0;
+    const hpColor = hpRatio > 0.4 ? 0x22c55e : hpRatio > 0.2 ? 0xeab308 : 0xef4444;
     hudLayer
-      .rect(x, y, w, h)
-      .fill({ color: 0x000000, alpha: 0.6 })
-      .rect(x, y, w, h)
-      .stroke({ color: bg, width: 1, alpha: 0.9 });
-    if (t > 0) hudLayer.rect(x + 1, y + 1, (w - 2) * t, h - 2).fill({ color: fg });
+      .roundRect(margin, hpY, barW, barH, 4)
+      .fill({ color: 0x1f2937 })
+      .roundRect(margin, hpY, barW, barH, 4)
+      .stroke({ color: 0x374151, width: 1 });
+    if (hpRatio > 0) {
+      hudLayer
+        .roundRect(margin + 2, hpY + 2, (barW - 4) * hpRatio, barH - 4, 3)
+        .fill({ color: hpColor });
+    }
+
+    // Stamina — thin yellow bar below HP.
+    const stamRatio =
+      self.maxStamina > 0 ? Math.max(0, self.stamina / self.maxStamina) : 0;
+    hudLayer
+      .roundRect(margin, stamY, barW, stamH, 3)
+      .fill({ color: 0x1f2937 })
+      .roundRect(margin, stamY, barW, stamH, 3)
+      .stroke({ color: 0x374151, width: 1 });
+    if (stamRatio > 0) {
+      hudLayer
+        .roundRect(margin + 2, stamY + 2, (barW - 4) * stamRatio, stamH - 4, 2)
+        .fill({ color: 0xfde68a });
+    }
+
+    // Shield — cyan bar above HP, only present when the suit grants any.
+    if (self.maxShield > 0) {
+      const shieldRatio = Math.max(0, self.shield / self.maxShield);
+      hudLayer
+        .roundRect(margin, shieldY, barW, shieldH, 3)
+        .fill({ color: 0x1f2937 })
+        .roundRect(margin, shieldY, barW, shieldH, 3)
+        .stroke({ color: 0x374151, width: 1 });
+      if (shieldRatio > 0) {
+        hudLayer
+          .roundRect(
+            margin + 2,
+            shieldY + 2,
+            (barW - 4) * shieldRatio,
+            shieldH - 4,
+            2
+          )
+          .fill({ color: 0x22d3ee });
+      }
+    }
   }
 
   // ---------- sprites (Phase 2) ----------
