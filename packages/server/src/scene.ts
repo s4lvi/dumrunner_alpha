@@ -105,6 +105,10 @@ export interface SceneConnection {
   // Bumped whenever the player sprints (so releasing Shift starts the
   // recovery clock) or when stamina drains to 0.
   staminaRegenAt: number;
+  // Suit-derived modifiers, recomputed by World whenever equipment
+  // changes. Scene reads them in the simulation tick.
+  suitSpeedMult: number; // additive to 1.0 (0.10 = +10%)
+  suitStaminaRegenBonus: number; // per second
 }
 
 type ProjectileRuntime = ProjectileState & {
@@ -845,7 +849,8 @@ export class Scene {
       } else if (now >= conn.staminaRegenAt) {
         conn.stamina = Math.min(
           conn.maxStamina,
-          conn.stamina + COMBAT.STAMINA_REGEN_PER_SEC * dt
+          conn.stamina +
+            (COMBAT.STAMINA_REGEN_PER_SEC + conn.suitStaminaRegenBonus) * dt
         );
       }
 
@@ -891,9 +896,10 @@ export class Scene {
 
       if (!moving) continue;
 
+      const baseSpeed = COMBAT.PLAYER_MOVE_SPEED * (1 + conn.suitSpeedMult);
       const speed = sprintActive
-        ? COMBAT.PLAYER_MOVE_SPEED * COMBAT.SPRINT_SPEED_MULTIPLIER
-        : COMBAT.PLAYER_MOVE_SPEED;
+        ? baseSpeed * COMBAT.SPRINT_SPEED_MULTIPLIER
+        : baseSpeed;
 
       const len = Math.hypot(ix, iy);
       const nx = len > 0 ? ix / len : 0;

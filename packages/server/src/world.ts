@@ -30,6 +30,7 @@ import {
   findEmptySlot,
   addAmmo,
   addPlaceable,
+  computeSuitStats,
   consumeAmmo,
   consumeMaterial,
   countAmmo,
@@ -328,6 +329,8 @@ export class World {
       lastStaminaSent: -1,
       lastShieldSent: -1,
       staminaRegenAt: 0,
+      suitSpeedMult: 0,
+      suitStaminaRegenBonus: 0,
       // Mild grace window so the surface stairs aren't triggered the moment
       // a returning player reconnects on top of them.
       interactCooldownUntil: Date.now() + TRANSITION_COOLDOWN_MS,
@@ -338,6 +341,20 @@ export class World {
       persistentBlueprints: new Set<string>(),
     };
     this.connections.set(player.characterId, conn);
+
+    // Apply any suit stats from equipment loaded with the character. Sets
+    // maxHp / maxShield / maxStamina + speed and regen modifiers off the
+    // gear they spawned in. Skips the broadcast (no scene members yet);
+    // the welcome message below carries the freshly-computed values.
+    const stats = computeSuitStats(conn.equipment);
+    conn.maxHp = COMBAT.PLAYER_MAX_HP + stats.hpBonus;
+    conn.maxShield = COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus;
+    conn.maxStamina = COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus;
+    conn.suitSpeedMult = stats.moveSpeedMult;
+    conn.suitStaminaRegenBonus = stats.staminaRegenBonus;
+    if (conn.hp > conn.maxHp) conn.hp = conn.maxHp;
+    if (conn.shield > conn.maxShield) conn.shield = conn.maxShield;
+    if (conn.stamina > conn.maxStamina) conn.stamina = conn.maxStamina;
 
     const scene = this.requireScene(sceneId);
     scene.addMember(player.characterId);
@@ -705,6 +722,7 @@ export class World {
       conn.inventory[fromInventoryIdx] = { kind: 'empty' };
     }
     conn.inventoryDirty = true;
+    this.recomputePlayerStats(conn);
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
       inventory: conn.inventory,
@@ -754,6 +772,7 @@ export class World {
       conn.equipment[suitSlot] = null;
     }
     conn.inventoryDirty = true;
+    this.recomputePlayerStats(conn);
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
       inventory: conn.inventory,
@@ -761,6 +780,41 @@ export class World {
     this.sendDirect(conn.ws, {
       type: 'equipment_changed',
       equipment: conn.equipment,
+    });
+  }
+
+  // Recompute the player's effective max HP / shield / stamina + movement
+  // and stamina-regen modifiers from their current suit equipment. Called
+  // on every equip/unequip and once at character spawn so equipment loaded
+  // from the DB takes effect immediately. Broadcasts updated stats so the
+  // client HUD reflects the new caps.
+  private recomputePlayerStats(conn: Connection): void {
+    const stats = computeSuitStats(conn.equipment);
+    conn.maxHp = COMBAT.PLAYER_MAX_HP + stats.hpBonus;
+    conn.maxShield = COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus;
+    conn.maxStamina = COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus;
+    conn.suitSpeedMult = stats.moveSpeedMult;
+    conn.suitStaminaRegenBonus = stats.staminaRegenBonus;
+    // Clamp current values to the new caps. Unequipping a chassis doesn't
+    // damage the player, but it does cap their hp at the new (lower) max.
+    if (conn.hp > conn.maxHp) conn.hp = conn.maxHp;
+    if (conn.shield > conn.maxShield) conn.shield = conn.maxShield;
+    if (conn.stamina > conn.maxStamina) conn.stamina = conn.maxStamina;
+    // Broadcast the changes — player_damaged carries hp/maxHp/shield/
+    // maxShield, player_stamina carries stamina/maxStamina.
+    const scene = this.scenes.get(conn.sceneId);
+    scene?.broadcast({
+      type: 'player_damaged',
+      characterId: conn.characterId,
+      hp: conn.hp,
+      maxHp: conn.maxHp,
+      shield: conn.shield,
+      maxShield: conn.maxShield,
+    });
+    this.sendDirect(conn.ws, {
+      type: 'player_stamina',
+      stamina: conn.stamina,
+      maxStamina: conn.maxStamina,
     });
   }
 

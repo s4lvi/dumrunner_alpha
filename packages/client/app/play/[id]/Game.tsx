@@ -10,6 +10,7 @@ import {
   HOTBAR_SIZE,
   listRecipes,
   MATERIALS,
+  partStatPreview,
   PROTOCOL_VERSION,
   SUIT_SLOT_KINDS,
   type BuildingKind,
@@ -1284,6 +1285,43 @@ const DRAG_MIME = 'application/x-dumrunner-slot';
 // Renders a single inventory slot. Used by both the bottom hotbar and the
 // inventory-panel grid. Handles drag-out, drop-onto (inventory swap or
 // armor unequip), and right-click context.
+// Native-title hover tooltip describing what's in the slot. Suit parts
+// expand into the stat bonuses they'd grant if equipped, so the player
+// can compare an Mk2 chassis on the ground vs. their Mk1 in the suit.
+function slotTooltip(slot: InventorySlot): string | undefined {
+  if (slot.kind === 'empty') return undefined;
+  if (slot.kind === 'weapon') return slot.weaponId;
+  if (slot.kind === 'material') {
+    const def = MATERIALS[slot.materialId];
+    return `${def?.name ?? slot.materialId} ×${slot.count}`;
+  }
+  if (slot.kind === 'ammo') {
+    return `${slot.ammoId.replace(/_/g, ' ')} ×${slot.count}`;
+  }
+  if (slot.kind === 'placeable') {
+    return `${slot.buildingKind.replace(/_/g, ' ')} ×${slot.count}`;
+  }
+  if (slot.kind === 'part') {
+    const part = slot.part;
+    const tag = `${part.tier} ${SLOT_LABELS[part.slot] ?? part.slot}`;
+    const preview = partStatPreview(part);
+    const bonuses: string[] = [];
+    if (preview.hpBonus) bonuses.push(`+${Math.round(preview.hpBonus)} max HP`);
+    if (preview.shieldBonus)
+      bonuses.push(`+${Math.round(preview.shieldBonus)} max shield`);
+    if (preview.staminaMaxBonus)
+      bonuses.push(`+${Math.round(preview.staminaMaxBonus)} max stamina`);
+    if (preview.staminaRegenBonus)
+      bonuses.push(`+${preview.staminaRegenBonus.toFixed(1)} stamina/s`);
+    if (preview.moveSpeedMult)
+      bonuses.push(`+${Math.round(preview.moveSpeedMult * 100)}% speed`);
+    const stats = bonuses.length ? `\n${bonuses.join('\n')}` : '';
+    const affixes = part.affixCount > 0 ? `\n${part.affixCount} affix${part.affixCount > 1 ? 'es' : ''}` : '';
+    return `${tag}${stats}${affixes}`;
+  }
+  return undefined;
+}
+
 function SlotCell({
   slot,
   index,
@@ -1309,10 +1347,12 @@ function SlotCell({
     : 'border border-[color:var(--panel-border)]';
 
   const draggable = slot.kind !== 'empty' && !!onSwap;
+  const title = slotTooltip(slot);
 
   return (
     <div
       className={`relative rounded ${dim} ${border} bg-[color:var(--bg)] flex items-center justify-center text-center`}
+      title={title}
       draggable={draggable}
       onDragStart={
         draggable

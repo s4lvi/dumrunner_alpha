@@ -6,7 +6,7 @@
 // hotbar (1–9 keys); the rest are bag slots accessible via the inventory
 // panel.
 
-import type { CarriedPart, BuildingKind, PartSlot } from './protocol';
+import type { CarriedPart, BuildingKind, PartSlot, PartTier } from './protocol';
 
 export const HOTBAR_SIZE = 9;
 export const INVENTORY_SIZE = 36;
@@ -89,6 +89,88 @@ export function emptyEquipment(): Equipment {
     utility_mod: null,
     cargo_grid: null,
   };
+}
+
+// ---------- suit stat bonuses ----------
+// Each suit slot has one primary stat that scales with tier. Affixes are a
+// later expansion (parts already carry an affixCount roll); for the alpha
+// every Mk1 chassis grants the same +HP, every Mk2 chassis grants 2× that,
+// and so on.
+//
+// Adding a new slot or new tier is one entry below — server +
+// client read these constants directly and re-derive everything.
+
+export type SuitStats = {
+  hpBonus: number;
+  shieldBonus: number;
+  staminaMaxBonus: number;
+  staminaRegenBonus: number; // per second
+  // Multiplier applied additively to base move speed: 0.10 = +10%.
+  moveSpeedMult: number;
+};
+
+export function emptySuitStats(): SuitStats {
+  return {
+    hpBonus: 0,
+    shieldBonus: 0,
+    staminaMaxBonus: 0,
+    staminaRegenBonus: 0,
+    moveSpeedMult: 0,
+  };
+}
+
+// Tier multipliers — exponential-ish curve so high-tier loot is
+// meaningfully better but not absurd at endgame.
+const TIER_MULT: Record<PartTier, number> = {
+  Mk1: 1,
+  Mk2: 2.2,
+  Mk3: 4,
+  Mk4: 7,
+  Alien: 12,
+};
+
+// Per-slot primary contribution at Mk1. Multiply by TIER_MULT[part.tier].
+type SlotContribution = (mult: number) => Partial<SuitStats>;
+const SLOT_CONTRIBUTION: Record<SuitSlotKind, SlotContribution> = {
+  // Chassis: bulk HP. Mk1 chassis ≈ +15hp, Alien ≈ +180hp.
+  chassis: (m) => ({ hpBonus: 15 * m }),
+  // Plating: shield max + a small regen rate kick.
+  plating: (m) => ({ shieldBonus: 12 * m }),
+  // Life support: stamina max + regen rate (max/4 per second).
+  life_support: (m) => ({
+    staminaMaxBonus: 8 * m,
+    staminaRegenBonus: 2 * m,
+  }),
+  // Utility mod: move-speed multiplier.
+  utility_mod: (m) => ({ moveSpeedMult: 0.04 * m }),
+  // Cargo grid is reserved for the future bag-size expansion. No stat
+  // contribution yet — equipping it is currently a no-op for V1.
+  cargo_grid: () => ({}),
+};
+
+export function computeSuitStats(equipment: Equipment): SuitStats {
+  const stats = emptySuitStats();
+  for (const slot of SUIT_SLOT_KINDS) {
+    const part = equipment[slot];
+    if (!part) continue;
+    const mult = TIER_MULT[part.tier];
+    const contrib = SLOT_CONTRIBUTION[slot](mult);
+    stats.hpBonus += contrib.hpBonus ?? 0;
+    stats.shieldBonus += contrib.shieldBonus ?? 0;
+    stats.staminaMaxBonus += contrib.staminaMaxBonus ?? 0;
+    stats.staminaRegenBonus += contrib.staminaRegenBonus ?? 0;
+    stats.moveSpeedMult += contrib.moveSpeedMult ?? 0;
+  }
+  return stats;
+}
+
+// Stat contribution from a single part at its current tier. Used for
+// inventory tooltips so the player knows what a part will grant before
+// equipping it.
+export function partStatPreview(part: CarriedPart): Partial<SuitStats> {
+  if (!isSuitPart(part.slot)) return {};
+  const mult = TIER_MULT[part.tier];
+  return SLOT_CONTRIBUTION[part.slot as SuitSlotKind](mult);
 }
 
 // Parts whose slot matches a SuitSlotKind are equippable on the suit.
