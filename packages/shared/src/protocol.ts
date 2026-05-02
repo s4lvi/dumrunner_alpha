@@ -35,6 +35,14 @@ export type WeaponClass =
   | 'heavy'
   | 'energy';
 
+// One rolled affix on a CarriedPart. `id` matches an entry in AFFIX_DEFS;
+// `value` is the rolled magnitude (already tier-scaled). Display text
+// comes from AFFIX_DEFS[id].label(value).
+export type Affix = {
+  id: string;
+  value: number;
+};
+
 export type CarriedPart = {
   id: string;
   slot: PartSlot;
@@ -42,8 +50,13 @@ export type CarriedPart = {
   // Class-locked weapon parts (barrel/frame/grip/magazine) carry a class.
   // Universal slots (weapon_mod, all suit slots) leave this null.
   weaponClass: WeaponClass | null;
-  // Number of randomly rolled affix slots. Real affix data lands later.
+  // Number of randomly rolled affix slots. Mirrors affixes.length for
+  // legacy parts that pre-date the real-rolls system.
   affixCount: number;
+  // Real rolled affixes. Optional so DB-loaded inventories from before
+  // affix rolling shipped don't fail to deserialize; treated as [] when
+  // missing.
+  affixes?: Affix[];
 };
 
 // Loot on the ground. Discriminated by `content.kind`:
@@ -425,4 +438,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;

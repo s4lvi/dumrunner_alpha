@@ -6,7 +6,7 @@
 // hotbar (1–9 keys); the rest are bag slots accessible via the inventory
 // panel.
 
-import type { CarriedPart, BuildingKind, PartSlot, PartTier } from './protocol';
+import type { Affix, CarriedPart, BuildingKind, PartSlot, PartTier } from './protocol';
 
 export const HOTBAR_SIZE = 9;
 export const INVENTORY_SIZE = 36;
@@ -113,6 +113,15 @@ export type SuitStats = {
   moveSpeedMult: number;
 };
 
+// Player base stats — must mirror the server's COMBAT constants. Used by
+// the character stats panel to render "base + suit" lines.
+export const PLAYER_BASE_STATS = {
+  maxHp: 100,
+  maxShield: 0,
+  maxStamina: 100,
+  staminaRegenPerSec: 25,
+};
+
 export function emptySuitStats(): SuitStats {
   return {
     hpBonus: 0,
@@ -164,17 +173,148 @@ export function computeSuitStats(equipment: Equipment): SuitStats {
     stats.staminaMaxBonus += contrib.staminaMaxBonus ?? 0;
     stats.staminaRegenBonus += contrib.staminaRegenBonus ?? 0;
     stats.moveSpeedMult += contrib.moveSpeedMult ?? 0;
+    // Stack rolled affix bonuses onto the same accumulator. Affixes use
+    // the same units as the primary stat so they just add.
+    for (const affix of part.affixes ?? []) {
+      const def = AFFIX_DEFS[affix.id];
+      if (def) def.apply(stats, affix.value);
+    }
   }
   return stats;
 }
 
+// Just the slot's primary stat contribution at this tier, no affixes.
+// Used by the tooltip to render the line under the part name before
+// listing each affix individually.
+export function partPrimaryStat(part: CarriedPart): Partial<SuitStats> {
+  if (!isSuitPart(part.slot)) return {};
+  return SLOT_CONTRIBUTION[part.slot as SuitSlotKind](TIER_MULT[part.tier]);
+}
+
 // Stat contribution from a single part at its current tier. Used for
 // inventory tooltips so the player knows what a part will grant before
-// equipping it.
+// equipping it. Includes both the slot's primary stat AND its rolled
+// affixes — they all stack.
 export function partStatPreview(part: CarriedPart): Partial<SuitStats> {
   if (!isSuitPart(part.slot)) return {};
   const mult = TIER_MULT[part.tier];
-  return SLOT_CONTRIBUTION[part.slot as SuitSlotKind](mult);
+  const primary = SLOT_CONTRIBUTION[part.slot as SuitSlotKind](mult);
+  const stats: SuitStats = { ...emptySuitStats(), ...primary };
+  for (const affix of part.affixes ?? []) {
+    const def = AFFIX_DEFS[affix.id];
+    if (def) def.apply(stats, affix.value);
+  }
+  // Strip zeroes so the caller can iterate non-empty entries cleanly.
+  const out: Partial<SuitStats> = {};
+  if (stats.hpBonus) out.hpBonus = stats.hpBonus;
+  if (stats.shieldBonus) out.shieldBonus = stats.shieldBonus;
+  if (stats.staminaMaxBonus) out.staminaMaxBonus = stats.staminaMaxBonus;
+  if (stats.staminaRegenBonus) out.staminaRegenBonus = stats.staminaRegenBonus;
+  if (stats.moveSpeedMult) out.moveSpeedMult = stats.moveSpeedMult;
+  return out;
+}
+
+// ---------- Affix system ----------
+//
+// One AFFIX_DEFS entry per modifier kind. label() formats the rolled value
+// for tooltips; apply() folds the value into a SuitStats accumulator. To
+// add a new affix: drop it in here, list its valid slots, set min/max
+// roll range. Server's loot roller filters AFFIX_DEFS by validSlots when
+// building affixes for a freshly-dropped part.
+
+export type AffixDef = {
+  id: string;
+  label: (value: number) => string;
+  apply: (stats: SuitStats, value: number) => void;
+  // Roll range. Real value = rand in [minRoll, maxRoll] × tier multiplier.
+  minRoll: number;
+  maxRoll: number;
+  validSlots: PartSlot[];
+};
+
+const SUIT_SLOTS_ALL: PartSlot[] = [...SUIT_SLOT_KINDS];
+
+export const AFFIX_DEFS: Record<string, AffixDef> = {
+  add_hp: {
+    id: 'add_hp',
+    label: (v) => `+${Math.round(v)} max HP`,
+    apply: (s, v) => {
+      s.hpBonus += v;
+    },
+    minRoll: 4,
+    maxRoll: 10,
+    validSlots: SUIT_SLOTS_ALL,
+  },
+  add_shield: {
+    id: 'add_shield',
+    label: (v) => `+${Math.round(v)} max shield`,
+    apply: (s, v) => {
+      s.shieldBonus += v;
+    },
+    minRoll: 3,
+    maxRoll: 9,
+    validSlots: SUIT_SLOTS_ALL,
+  },
+  add_stamina_max: {
+    id: 'add_stamina_max',
+    label: (v) => `+${Math.round(v)} max stamina`,
+    apply: (s, v) => {
+      s.staminaMaxBonus += v;
+    },
+    minRoll: 3,
+    maxRoll: 8,
+    validSlots: SUIT_SLOTS_ALL,
+  },
+  add_stamina_regen: {
+    id: 'add_stamina_regen',
+    label: (v) => `+${v.toFixed(1)} stamina/s`,
+    apply: (s, v) => {
+      s.staminaRegenBonus += v;
+    },
+    minRoll: 0.5,
+    maxRoll: 2,
+    validSlots: SUIT_SLOTS_ALL,
+  },
+  add_move_speed: {
+    id: 'add_move_speed',
+    label: (v) => `+${Math.round(v * 100)}% move speed`,
+    apply: (s, v) => {
+      s.moveSpeedMult += v;
+    },
+    minRoll: 0.01,
+    maxRoll: 0.04,
+    validSlots: SUIT_SLOTS_ALL,
+  },
+};
+
+export function affixIdsForSlot(slot: PartSlot): string[] {
+  const out: string[] = [];
+  for (const id of Object.keys(AFFIX_DEFS)) {
+    if (AFFIX_DEFS[id].validSlots.includes(slot)) out.push(id);
+  }
+  return out;
+}
+
+// Server loot roller calls this. Pure function so client can mirror for
+// previews if useful later.
+export function rollAffixesForPart(
+  slot: PartSlot,
+  tier: PartTier,
+  count: number,
+  rand: () => number = Math.random
+): Affix[] {
+  if (count <= 0) return [];
+  const pool = affixIdsForSlot(slot);
+  if (pool.length === 0) return [];
+  const tierMult = TIER_MULT[tier];
+  const out: Affix[] = [];
+  for (let i = 0; i < count; i++) {
+    const def = AFFIX_DEFS[pool[Math.floor(rand() * pool.length)]];
+    const rolled =
+      def.minRoll + rand() * (def.maxRoll - def.minRoll);
+    out.push({ id: def.id, value: rolled * tierMult });
+  }
+  return out;
 }
 
 // Parts whose slot matches a SuitSlotKind are equippable on the suit.

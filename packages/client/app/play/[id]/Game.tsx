@@ -7,11 +7,14 @@ import {
   countMaterial,
   emptyEquipment,
   emptyInventory,
+  AFFIX_DEFS,
+  computeSuitStats,
   HOTBAR_SIZE,
   listBlueprints,
   listRecipes,
   MATERIALS,
-  partStatPreview,
+  partPrimaryStat,
+  PLAYER_BASE_STATS,
   PROTOCOL_VERSION,
   SUIT_SLOT_KINDS,
   type BuildingKind,
@@ -86,6 +89,25 @@ export function Game({ serverId }: { serverId: string }) {
   const [stationModalKind, setStationModalKind] = useState<BuildingKind | null>(
     null
   );
+  // Self HP / shield / stamina mirror, kept in React state so the
+  // character panel can render the base + suit breakdown.
+  type SelfStats = {
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    stamina: number;
+    maxStamina: number;
+  };
+  const [selfStats, setSelfStats] = useState<SelfStats>(() => ({
+    hp: 100,
+    maxHp: 100,
+    shield: 0,
+    maxShield: 0,
+    stamina: 100,
+    maxStamina: 100,
+  }));
+  const selfIdRef = useRef<string | null>(null);
   // Renderer pick. Initialised from URL param `?fps=1` for backwards-compat;
   // the V hotkey toggles it at runtime.
   const [useFps, setUseFps] = useState<boolean>(() => {
@@ -265,6 +287,15 @@ export function Game({ serverId }: { serverId: string }) {
         setHotbarSelection(msg.hotbarSelection);
         setSceneId(msg.sceneId);
         setKnownBlueprints(new Set(msg.knownBlueprints));
+        selfIdRef.current = msg.self.characterId;
+        setSelfStats({
+          hp: msg.self.hp,
+          maxHp: msg.self.maxHp,
+          shield: msg.self.shield,
+          maxShield: msg.self.maxShield,
+          stamina: msg.self.stamina,
+          maxStamina: msg.self.maxStamina,
+        });
         wsForHotbar.current = session.ws;
         // Capture the WS-bound callbacks once, in a ref. The renderer hot-
         // swap (V key) uses this same bundle to re-instantiate without
@@ -341,9 +372,23 @@ export function Game({ serverId }: { serverId: string }) {
           msg.shield,
           msg.maxShield
         );
+        if (msg.characterId === selfIdRef.current) {
+          setSelfStats((s) => ({
+            ...s,
+            hp: msg.hp,
+            maxHp: msg.maxHp,
+            shield: msg.shield,
+            maxShield: msg.maxShield,
+          }));
+        }
         break;
       case 'player_stamina':
         gameRef.current?.setSelfStamina(msg.stamina, msg.maxStamina);
+        setSelfStats((s) => ({
+          ...s,
+          stamina: msg.stamina,
+          maxStamina: msg.maxStamina,
+        }));
         break;
       case 'player_died':
         gameRef.current?.setPlayerDead(msg.characterId);
@@ -360,6 +405,16 @@ export function Game({ serverId }: { serverId: string }) {
           msg.shield,
           msg.maxShield
         );
+        if (msg.characterId === selfIdRef.current) {
+          setSelfStats({
+            hp: msg.hp,
+            maxHp: msg.maxHp,
+            shield: msg.shield,
+            maxShield: msg.maxShield,
+            stamina: msg.stamina,
+            maxStamina: msg.maxStamina,
+          });
+        }
         break;
       case 'weapon_swung':
         gameRef.current?.showWeaponSwung(
@@ -674,6 +729,7 @@ export function Game({ serverId }: { serverId: string }) {
             inventory={inventory}
             equipment={equipment}
             selected={hotbarSelection}
+            stats={selfStats}
             knownBlueprints={knownBlueprints}
             onClose={() => setShowInventory(false)}
             onSwap={(from, to) => sendOnLiveWs({ type: 'inventory_swap', from, to })}
@@ -970,6 +1026,7 @@ function InventoryPanel({
   inventory,
   equipment,
   selected,
+  stats,
   knownBlueprints,
   onClose,
   onSwap,
@@ -982,6 +1039,14 @@ function InventoryPanel({
   inventory: Inventory;
   equipment: Equipment;
   selected: number;
+  stats: {
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    stamina: number;
+    maxStamina: number;
+  };
   knownBlueprints: Set<string>;
   onClose: () => void;
   onSwap: (from: number, to: number) => void;
@@ -995,12 +1060,9 @@ function InventoryPanel({
   const bag = inventory.slice(HOTBAR_SIZE);
 
   return (
-    <div
-      className="absolute top-3 left-1/2 -translate-x-1/2 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded shadow-lg pointer-events-auto"
-      style={{ width: 'fit-content' }}
-    >
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[color:var(--panel-border)] gap-6">
-        <h2 className="font-semibold">Inventory</h2>
+    <Modal onClose={onClose} width="fit-content">
+      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50 gap-6">
+        <h2 className="font-semibold text-base">Inventory</h2>
         <div className="flex items-center gap-2">
           <button
             onClick={onSort}
@@ -1020,6 +1082,7 @@ function InventoryPanel({
       <div className="p-3 flex gap-4">
         <CharacterPanel
           equipment={equipment}
+          stats={stats}
           onEquip={onEquip}
           onUnequip={onUnequip}
         />
@@ -1075,7 +1138,7 @@ function InventoryPanel({
           />
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1100,12 +1163,9 @@ function TradeModal({
   const blueprints = listBlueprints();
   const artifacts = countMaterial(inventory, 'artifact');
   return (
-    <div
-      className="absolute top-3 left-1/2 -translate-x-1/2 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded shadow-lg pointer-events-auto"
-      style={{ width: 'min(560px, 90vw)' }}
-    >
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[color:var(--panel-border)] gap-6">
-        <h2 className="font-semibold flex items-center gap-2">
+    <Modal onClose={onClose} width="min(640px, 92vw)">
+      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50 gap-4">
+        <h2 className="font-semibold flex items-center gap-2 text-base">
           <ItemIcon kind="material" subkind="artifact" />
           <span>Artifact Uplink</span>
         </h2>
@@ -1121,7 +1181,7 @@ function TradeModal({
         </button>
       </div>
       {!nearUplink && (
-        <div className="px-4 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
+        <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
           Move closer to the uplink to trade.
         </div>
       )}
@@ -1160,6 +1220,40 @@ function TradeModal({
           );
         })}
       </ul>
+    </Modal>
+  );
+}
+
+// Shared modal chrome: dimmed backdrop, accent border, drop shadow,
+// click-outside-to-close. All overlays (inventory, trade, workstation)
+// pass through this so the visual weight is consistent and the panel
+// reads as foregrounded against the gameworld behind it.
+function Modal({
+  children,
+  onClose,
+  width = 'min(640px, 92vw)',
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  width?: string;
+}) {
+  return (
+    <div
+      className="absolute inset-0 z-30 flex items-start justify-center pt-6 pointer-events-auto"
+      onMouseDown={(e) => {
+        // Click on the backdrop (not the panel) closes the modal.
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" />
+      {/* Panel */}
+      <div
+        className="relative bg-[color:var(--panel)] border-2 border-[color:var(--accent)] rounded-lg shadow-[0_24px_60px_rgba(0,0,0,0.6)] overflow-hidden"
+        style={{ width, maxHeight: 'calc(100vh - 64px)' }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -1188,13 +1282,22 @@ function WorkstationModal({
       (r.blueprintId === null || knownBlueprints.has(r.blueprintId))
   );
   const inRange = nearWorkstations.has(kind);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    recipes[0]?.id ?? null
+  );
+  // Keep selection valid if recipes shift (rare — happens when a new
+  // blueprint is unlocked while modal is open).
+  useEffect(() => {
+    if (selectedId && !recipes.find((r) => r.id === selectedId)) {
+      setSelectedId(recipes[0]?.id ?? null);
+    }
+  }, [recipes, selectedId]);
+  const selected = recipes.find((r) => r.id === selectedId) ?? null;
+
   return (
-    <div
-      className="absolute top-3 left-1/2 -translate-x-1/2 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded shadow-lg pointer-events-auto"
-      style={{ width: 'min(560px, 90vw)' }}
-    >
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[color:var(--panel-border)] gap-6">
-        <h2 className="font-semibold flex items-center gap-2">
+    <Modal onClose={onClose} width="min(720px, 94vw)">
+      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
+        <h2 className="font-semibold flex items-center gap-2 text-base">
           <ItemIcon kind="placeable" subkind={kind} />
           <span>{STATION_LABEL[kind] ?? kind}</span>
         </h2>
@@ -1206,28 +1309,130 @@ function WorkstationModal({
         </button>
       </div>
       {!inRange && (
-        <div className="px-4 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
+        <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
           Move closer to the {STATION_LABEL[kind] ?? kind} to craft.
         </div>
       )}
       {recipes.length === 0 ? (
-        <div className="px-4 py-6 text-zinc-500 text-xs">
-          No blueprints available for this station yet. Buy more at the
-          Artifact Uplink.
+        <div className="px-5 py-8 text-zinc-500 text-sm text-center">
+          No blueprints available for this station yet. <br />
+          Buy more at the Artifact Uplink.
         </div>
       ) : (
-        <ul className="divide-y divide-[color:var(--panel-border)] px-2">
-          {recipes.map((r) => (
-            <CraftRow
-              key={r.id}
-              recipe={r}
-              inventory={inventory}
-              nearWorkstations={nearWorkstations}
-              onCraft={onCraft}
-            />
-          ))}
-        </ul>
+        <div className="grid grid-cols-[200px_1fr] divide-x divide-[color:var(--panel-border)] min-h-[280px]">
+          {/* Left column — recipe list */}
+          <ul className="overflow-y-auto py-1 max-h-[60vh]">
+            {recipes.map((r) => {
+              const active = r.id === selectedId;
+              return (
+                <li key={r.id}>
+                  <button
+                    onClick={() => setSelectedId(r.id)}
+                    className={`w-full text-left px-3 py-2 text-sm border-l-2 ${
+                      active
+                        ? 'bg-[color:var(--bg)] border-[color:var(--accent)] text-zinc-100'
+                        : 'border-transparent text-zinc-400 hover:bg-[color:var(--bg)]/60'
+                    }`}
+                  >
+                    {r.name}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {/* Right column — selection details */}
+          <div className="p-5">
+            {selected ? (
+              <RecipeDetails
+                recipe={selected}
+                inventory={inventory}
+                inRange={inRange}
+                onCraft={onCraft}
+              />
+            ) : (
+              <div className="text-zinc-500 text-sm">Select a blueprint.</div>
+            )}
+          </div>
+        </div>
       )}
+    </Modal>
+  );
+}
+
+// Right-column recipe panel inside the workstation modal. Shows the
+// recipe name, output, the full ingredient list with have/need per row,
+// and a craft button that lights up only when everything is satisfied.
+function RecipeDetails({
+  recipe,
+  inventory,
+  inRange,
+  onCraft,
+}: {
+  recipe: Recipe;
+  inventory: Inventory;
+  inRange: boolean;
+  onCraft: (recipeId: string) => void;
+}) {
+  const inputRows = recipe.inputs.map((input) => {
+    const id = input.kind === 'material' ? input.materialId : input.ammoId;
+    const have =
+      input.kind === 'material'
+        ? countMaterial(inventory, input.materialId)
+        : countAmmo(inventory, input.ammoId);
+    return { id, have, need: input.count, satisfied: have >= input.count };
+  });
+  const allSatisfied = inputRows.every((r) => r.satisfied);
+  const enabled = inRange && allSatisfied;
+
+  const outLabel =
+    recipe.output.kind === 'placeable'
+      ? `${recipe.output.count}× ${STATION_LABEL[recipe.output.buildingKind] ?? recipe.output.buildingKind}`
+      : `${recipe.output.count}× ${recipe.output.ammoId.replace(/_/g, ' ')}`;
+
+  return (
+    <div className="flex flex-col h-full">
+      <h3 className="text-base font-semibold text-zinc-100">{recipe.name}</h3>
+      <div className="text-xs text-zinc-500 mt-1">→ {outLabel}</div>
+
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mt-4 mb-1">
+        Requirements
+      </div>
+      <ul className="space-y-1 text-xs">
+        {inputRows.map((r) => (
+          <li key={r.id} className="flex items-center justify-between">
+            <span className="capitalize text-zinc-300">
+              {r.id.replace(/_/g, ' ')}
+            </span>
+            <span
+              className={
+                r.satisfied
+                  ? 'tabular-nums text-emerald-400'
+                  : 'tabular-nums text-red-400/80'
+              }
+            >
+              {r.have}
+              <span className="text-zinc-600">/</span>
+              {r.need}
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      <div className="grow" />
+      <button
+        onClick={() => onCraft(recipe.id)}
+        disabled={!enabled}
+        title={
+          !inRange
+            ? 'Move closer to the station'
+            : !allSatisfied
+              ? 'Insufficient materials'
+              : ''
+        }
+        className="mt-4 px-3 py-2 rounded text-sm border border-[color:var(--panel-border)] text-zinc-100 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed self-start"
+      >
+        Craft
+      </button>
     </div>
   );
 }
@@ -1377,13 +1582,28 @@ const SUIT_LABELS: Record<SuitSlotKind, string> = {
 // drop target for its matching part kind, and a drag source for unequipping.
 function CharacterPanel({
   equipment,
+  stats,
   onEquip,
   onUnequip,
 }: {
   equipment: Equipment;
+  stats: {
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    stamina: number;
+    maxStamina: number;
+  };
   onEquip: (fromInventoryIdx: number, suitSlot: SuitSlotKind) => void;
   onUnequip: (suitSlot: SuitSlotKind, toInventoryIdx?: number) => void;
 }) {
+  // Compute the suit's contribution from the equipment so we can render
+  // each row as "current/max (+suit bonus)". The server has already
+  // applied the bonuses to maxHp/etc. — we recompute here purely to
+  // surface where the bonus came from.
+  const suit = computeSuitStats(equipment);
+  const baseRegen = PLAYER_BASE_STATS.staminaRegenPerSec;
   return (
     <div className="flex flex-col items-center gap-2 pr-3 border-r border-[color:var(--panel-border)]">
       <div className="text-xs uppercase tracking-wider text-zinc-500">Suit</div>
@@ -1438,9 +1658,100 @@ function CharacterPanel({
       <div className="text-[10px] text-zinc-500 leading-snug w-32 text-center">
         Drag a part here to equip
       </div>
+
+      {/* Stats block — base + suit modifiers. Bonus is shown in green next
+          to each total so the player can see where the upgrade came from. */}
+      <div className="w-40 text-[10px] flex flex-col gap-0.5 pt-2 border-t border-[color:var(--panel-border)]">
+        <StatLine
+          label="HP"
+          current={stats.hp}
+          max={stats.maxHp}
+          base={PLAYER_BASE_STATS.maxHp}
+        />
+        {stats.maxShield > 0 && (
+          <StatLine
+            label="Shield"
+            current={stats.shield}
+            max={stats.maxShield}
+            base={PLAYER_BASE_STATS.maxShield}
+          />
+        )}
+        <StatLine
+          label="Stamina"
+          current={stats.stamina}
+          max={stats.maxStamina}
+          base={PLAYER_BASE_STATS.maxStamina}
+        />
+        <StatRow
+          label="Stamina regen"
+          value={`${(baseRegen + suit.staminaRegenBonus).toFixed(1)}/s`}
+          bonus={
+            suit.staminaRegenBonus > 0
+              ? `+${suit.staminaRegenBonus.toFixed(1)}`
+              : null
+          }
+        />
+        <StatRow
+          label="Move speed"
+          value={`${Math.round((1 + suit.moveSpeedMult) * 100)}%`}
+          bonus={
+            suit.moveSpeedMult > 0
+              ? `+${Math.round(suit.moveSpeedMult * 100)}%`
+              : null
+          }
+        />
+      </div>
+
       {/* Suppress unused-var warning while SUIT_SLOT_KINDS is imported for
           potential future iteration helpers. */}
       <span className="hidden">{SUIT_SLOT_KINDS.join(',')}</span>
+    </div>
+  );
+}
+
+// Row for max-bounded stats (HP, Shield, Stamina). Renders current/max
+// plus the suit-bonus delta over the base.
+function StatLine({
+  label,
+  current,
+  max,
+  base,
+}: {
+  label: string;
+  current: number;
+  max: number;
+  base: number;
+}) {
+  const bonus = max - base;
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-zinc-400">{label}</span>
+      <span className="tabular-nums text-zinc-200">
+        {Math.round(current)}/{max}
+        {bonus > 0 && (
+          <span className="text-emerald-400 ml-1">+{Math.round(bonus)}</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function StatRow({
+  label,
+  value,
+  bonus,
+}: {
+  label: string;
+  value: string;
+  bonus: string | null;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-zinc-400">{label}</span>
+      <span className="tabular-nums text-zinc-200">
+        {value}
+        {bonus && <span className="text-emerald-400 ml-1">{bonus}</span>}
+      </span>
     </div>
   );
 }
@@ -1549,20 +1860,27 @@ function slotTooltip(slot: InventorySlot): string | undefined {
   if (slot.kind === 'part') {
     const part = slot.part;
     const tag = `${part.tier} ${SLOT_LABELS[part.slot] ?? part.slot}`;
-    const preview = partStatPreview(part);
-    const bonuses: string[] = [];
-    if (preview.hpBonus) bonuses.push(`+${Math.round(preview.hpBonus)} max HP`);
-    if (preview.shieldBonus)
-      bonuses.push(`+${Math.round(preview.shieldBonus)} max shield`);
-    if (preview.staminaMaxBonus)
-      bonuses.push(`+${Math.round(preview.staminaMaxBonus)} max stamina`);
-    if (preview.staminaRegenBonus)
-      bonuses.push(`+${preview.staminaRegenBonus.toFixed(1)} stamina/s`);
-    if (preview.moveSpeedMult)
-      bonuses.push(`+${Math.round(preview.moveSpeedMult * 100)}% speed`);
-    const stats = bonuses.length ? `\n${bonuses.join('\n')}` : '';
-    const affixes = part.affixCount > 0 ? `\n${part.affixCount} affix${part.affixCount > 1 ? 'es' : ''}` : '';
-    return `${tag}${stats}${affixes}`;
+    const lines: string[] = [tag];
+    // Primary stat — the part's slot contribution at its tier, no affixes.
+    const primary = partPrimaryStat(part);
+    if (primary.hpBonus) lines.push(`+${Math.round(primary.hpBonus)} max HP`);
+    if (primary.shieldBonus)
+      lines.push(`+${Math.round(primary.shieldBonus)} max shield`);
+    if (primary.staminaMaxBonus)
+      lines.push(`+${Math.round(primary.staminaMaxBonus)} max stamina`);
+    if (primary.staminaRegenBonus)
+      lines.push(`+${primary.staminaRegenBonus.toFixed(1)} stamina/s`);
+    if (primary.moveSpeedMult)
+      lines.push(`+${Math.round(primary.moveSpeedMult * 100)}% speed`);
+    // Each rolled affix gets its own line via AFFIX_DEFS.label(value).
+    if (part.affixes && part.affixes.length > 0) {
+      lines.push('— Affixes —');
+      for (const a of part.affixes) {
+        const def = AFFIX_DEFS[a.id];
+        if (def) lines.push(def.label(a.value));
+      }
+    }
+    return lines.join('\n');
   }
   return undefined;
 }

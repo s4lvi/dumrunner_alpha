@@ -4,6 +4,7 @@ import type {
   PartTier,
   WeaponClass,
 } from '@dumrunner/shared';
+import { rollAffixesForPart } from '@dumrunner/shared';
 
 // Roll a part-style drop on enemy kill. Slot, tier, and affix count are sampled
 // from the GDD's ontology; concrete stat values are deferred until crafting /
@@ -77,12 +78,14 @@ export function rollDropsForKill(killTierBias: number): CarriedPart[] {
   for (let i = 0; i < dropCount; i++) {
     const slot = rollSlot();
     const tier = rollTier(weights);
+    const affixCount = rollAffixCount(tier);
     drops.push({
       id: nextDropId(),
       slot,
       tier,
       weaponClass: CLASS_LOCKED_SLOTS.has(slot) ? rollClass() : null,
-      affixCount: rollAffixCount(tier),
+      affixCount,
+      affixes: rollAffixesForPart(slot, tier, affixCount),
     });
   }
   return drops;
