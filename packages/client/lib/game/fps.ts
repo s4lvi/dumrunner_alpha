@@ -37,8 +37,7 @@ import type { GameHandle, GameInit, SceneState } from './pixi';
 
 // ---------- tuning ----------
 const FOV = (Math.PI / 180) * 70; // 70deg horizontal FOV
-const COLUMN_STEP_PX = 2; // 1 ray per 2 screen pixels (downsample for perf)
-const RAY_STEP_PX = 8; // ray-march step. Smaller = sharper hits, costlier.
+const COLUMN_STEP_PX = 1; // 1 ray per pixel — sharpest possible.
 const RAY_MAX_DIST = 1500;
 const WALL_HEIGHT_WORLD = 64; // arbitrary world units. Tunes apparent wall scale.
 const POINTER_SENSITIVITY = 0.0025; // rad per mouse pixel
@@ -351,21 +350,37 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       );
     }
 
-    // Per-column raycast.
+    // Per-column raycast. Uses camera-plane rays (Lode-style) rather than
+    // an angular sweep so wall projection is linear-in-screen-x and the
+    // close-range curvature at the edges of the FOV disappears. Matches
+    // the sprite pass below so they share the same camera model exactly.
     const numCols = Math.ceil(W / COLUMN_STEP_PX);
     const halfFov = FOV / 2;
+    const halfPlane = Math.tan(halfFov);
+    const dirX = Math.cos(yaw);
+    const dirY = Math.sin(yaw);
+    const planeX = -dirY * halfPlane;
+    const planeY = dirX * halfPlane;
     if (zBuffer.length !== numCols) zBuffer = new Float32Array(numCols);
     zBuffer.fill(Infinity);
 
     for (let i = 0; i < numCols; i++) {
       const screenX = i * COLUMN_STEP_PX;
       const camNorm = (2 * screenX) / W - 1;
-      const rayAngle = yaw + camNorm * halfFov;
+      // rayDir = dir + plane * camNorm. Length isn't 1 (longest at edges),
+      // so normalize for the fixed-step ray-march.
+      const rdx = dirX + planeX * camNorm;
+      const rdy = dirY + planeY * camNorm;
+      const rlen = Math.hypot(rdx, rdy);
+      const ux = rdx / rlen;
+      const uy = rdy / rlen;
 
-      const hit = castRay(selfX, selfY, rayAngle);
+      const hit = castRay(selfX, selfY, ux, uy);
       if (!hit) continue;
 
-      const perp = hit.dist * Math.cos(camNorm * halfFov);
+      // Perp distance = projection of the hit onto the camera forward axis.
+      // Removes fish-eye exactly (no cos approximation needed).
+      const perp = hit.dist * (ux * dirX + uy * dirY);
       if (perp <= 0.0001) continue;
       zBuffer[i] = perp;
 
@@ -849,57 +864,91 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
   type RayHit = { dist: number; faceNS: boolean; isBuilding: boolean };
 
-  function castRay(ox: number, oy: number, angle: number): RayHit | null {
-    const dx = Math.cos(angle);
-    const dy = Math.sin(angle);
+  // Proper grid DDA. Walks the ray tile-by-tile and stops at the first
+  // tile that's a wall. Hit distance is the perpendicular-corrected ray
+  // distance to the entered tile's near edge — pixel-exact, no quantization
+  // wobble, so a flat wall projects as a flat rectangle (no curvature).
+  //
+  // A tile is a "wall" when:
+  //   - the dungeon has walkable rects and the tile centre isn't inside
+  //     any of them (i.e. outside the room/corridor mask), OR
+  //   - a player-placed building occupies the tile.
+  // Surfaces with no walkables (open world) treat every empty tile as
+  // walkable; only buildings act as walls.
+  function castRay(
+    ox: number,
+    oy: number,
+    dx: number,
+    dy: number
+  ): RayHit | null {
     if (!layout) return null;
-    const walkables = layout.walkables;
     const tileSize = layout.tileSize;
+    if (tileSize <= 0) return null;
+    const hasWalkables = layout.walkables.length > 0;
 
-    // Trace forward in fixed steps. We track sign of (newX - oldX) and
-    // (newY - oldY) to decide which face we crossed at the hit — used for
-    // the NS/EW shading cue.
-    let x = ox;
-    let y = oy;
-    let prevX = x;
-    let prevY = y;
-    const maxSteps = Math.ceil(RAY_MAX_DIST / RAY_STEP_PX);
-    for (let s = 0; s < maxSteps; s++) {
-      prevX = x;
-      prevY = y;
-      x += dx * RAY_STEP_PX;
-      y += dy * RAY_STEP_PX;
+    // Avoid divide-by-zero on a perfectly axis-aligned ray. ε keeps the
+    // delta finite without measurably affecting the projection.
+    const adx = Math.abs(dx) < 1e-8 ? 1e-8 : dx;
+    const ady = Math.abs(dy) < 1e-8 ? 1e-8 : dy;
+    const deltaX = tileSize / Math.abs(adx);
+    const deltaY = tileSize / Math.abs(ady);
+    const stepX = adx < 0 ? -1 : 1;
+    const stepY = ady < 0 ? -1 : 1;
 
-      // Wall hit: outside ALL walkables, OR inside a building footprint.
-      const insideWalkable =
-        walkables.length === 0 ? true : isInsideAny(walkables, x, y);
-      const blockedByBuilding = isInsideAnyBuilding(x, y, tileSize);
+    let mx = Math.floor(ox / tileSize);
+    let my = Math.floor(oy / tileSize);
 
-      if (!insideWalkable || blockedByBuilding) {
-        const dist = Math.hypot(x - ox, y - oy);
-        // Cheap face heuristic: which axis crossed a tile boundary between
-        // prev and current step.
-        const tprev = Math.floor(prevX / Math.max(1, tileSize));
-        const tcur = Math.floor(x / Math.max(1, tileSize));
-        const tprevY = Math.floor(prevY / Math.max(1, tileSize));
-        const tcurY = Math.floor(y / Math.max(1, tileSize));
-        const xCrossed = tprev !== tcur;
-        const yCrossed = tprevY !== tcurY;
-        const faceNS = yCrossed && !xCrossed;
-        return { dist, faceNS, isBuilding: blockedByBuilding };
+    // Distance along the ray to the first tile boundary on each axis.
+    let sideX =
+      adx < 0
+        ? (ox - mx * tileSize) / Math.abs(adx)
+        : ((mx + 1) * tileSize - ox) / Math.abs(adx);
+    let sideY =
+      ady < 0
+        ? (oy - my * tileSize) / Math.abs(ady)
+        : ((my + 1) * tileSize - oy) / Math.abs(ady);
+
+    const maxIters = Math.ceil((RAY_MAX_DIST / tileSize) * 2) + 2;
+    let faceNS = false;
+    let dist = 0;
+
+    for (let i = 0; i < maxIters; i++) {
+      if (sideX < sideY) {
+        dist = sideX;
+        sideX += deltaX;
+        mx += stepX;
+        faceNS = false; // crossed an east/west tile face
+      } else {
+        dist = sideY;
+        sideY += deltaY;
+        my += stepY;
+        faceNS = true; // crossed a north/south tile face
+      }
+      if (dist > RAY_MAX_DIST) return null;
+
+      // Wall classification at the tile we just stepped into.
+      const cx = (mx + 0.5) * tileSize;
+      const cy = (my + 0.5) * tileSize;
+      const insideWalkable = !hasWalkables || isInsideAny(layout.walkables, cx, cy);
+      const isBuilding = isBuildingTile(mx, my);
+      if (!insideWalkable || isBuilding) {
+        return { dist, faceNS, isBuilding };
       }
     }
     return null;
   }
 
-  function isInsideAnyBuilding(x: number, y: number, tileSize: number): boolean {
-    if (buildings.size === 0 || tileSize <= 0) return false;
+  function isBuildingTile(mx: number, my: number): boolean {
+    if (buildings.size === 0) return false;
     for (const b of buildings.values()) {
-      const px = b.tileX * tileSize;
-      const py = b.tileY * tileSize;
-      const pw = b.width * tileSize;
-      const ph = b.height * tileSize;
-      if (x >= px && x <= px + pw && y >= py && y <= py + ph) return true;
+      if (
+        mx >= b.tileX &&
+        mx < b.tileX + b.width &&
+        my >= b.tileY &&
+        my < b.tileY + b.height
+      ) {
+        return true;
+      }
     }
     return false;
   }
