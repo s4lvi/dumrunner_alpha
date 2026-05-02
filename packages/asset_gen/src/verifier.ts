@@ -18,11 +18,27 @@ export class HeuristicAssetVerifier implements AssetVerifier {
     const { request, metadata, pngBytes } = input;
 
     if (pngBytes.length === 0) reasons.push('empty image payload');
-    if (metadata.width < request.size || metadata.height < request.size) {
-      reasons.push(`generated image is smaller than requested final size ${request.size}`);
+    if (metadata.width !== request.size || metadata.height !== request.size) {
+      reasons.push(`cleaned image must be exactly ${request.size}x${request.size}`);
     }
     if (request.style.transparentBackground && !metadata.transparent) {
-      reasons.push('transparent background still pending post-processing');
+      reasons.push('transparent background is missing or not credible');
+    }
+    if (metadata.opaqueBounds.w === 0 || metadata.opaqueBounds.h === 0) {
+      reasons.push('image has no visible opaque pixels');
+    }
+    const maxBound = Math.floor(request.size * request.constraints.maxOpaqueBoundsRatio);
+    if (metadata.opaqueBounds.w > maxBound || metadata.opaqueBounds.h > maxBound) {
+      reasons.push(`opaque bounds exceed max ratio ${request.constraints.maxOpaqueBoundsRatio}`);
+    }
+    const margin = request.constraints.safeMarginPx;
+    if (
+      metadata.opaqueBounds.x < margin ||
+      metadata.opaqueBounds.y < margin ||
+      metadata.opaqueBounds.x + metadata.opaqueBounds.w > request.size - margin ||
+      metadata.opaqueBounds.y + metadata.opaqueBounds.h > request.size - margin
+    ) {
+      reasons.push(`opaque pixels violate ${margin}px safe margin`);
     }
 
     if (reasons.length > 0) {

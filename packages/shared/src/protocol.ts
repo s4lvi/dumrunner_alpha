@@ -6,7 +6,7 @@
 // the client trusts the server.
 
 import { z } from 'zod';
-import type { Equipment, Inventory, MaterialKind } from './inventory';
+import type { Equipment, Inventory, InventorySlot, MaterialKind } from './inventory';
 
 // ---------- Parts (loot / inventory) ----------
 // Subset of the GDD part ontology — enough to flow loot from kill to inventory.
@@ -119,6 +119,10 @@ export type CraftJobState = {
   // The station kind this job runs at. Currently informational; future
   // rules (e.g. "destroying the station cancels its jobs") use it.
   stationKind: 'workbench' | 'forge' | 'electronics_bench';
+  // The specific station building running the job. Each station has its
+  // own parallel-slot budget; jobs are bound to the building so multiple
+  // stations of the same kind work as parallel queues.
+  stationBuildingId: string;
   // Epoch ms.
   startedAt: number;
   completesAt: number;
@@ -161,6 +165,10 @@ export type BuildingState = {
   height: number;
   hp: number;
   maxHp: number;
+  // Workstation output buffer. Completed craft jobs deposit their output
+  // here; the player picks them up at the station modal. Non-station
+  // buildings leave this empty / undefined.
+  output?: InventorySlot[];
 };
 
 export type SceneLayout = {
@@ -333,6 +341,14 @@ export const PurchaseBlueprintMsgSchema = z.object({
   blueprintId: z.string().min(1).max(64),
 });
 
+// Player picks up everything in the output buffers of nearby stations of
+// the given kind. Server validates proximity; output stacks merge into
+// the player's inventory.
+export const PickupStationOutputsMsgSchema = z.object({
+  type: z.literal('pickup_station_outputs'),
+  kind: z.enum(['workbench', 'forge', 'electronics_bench']),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMsgSchema,
   InputMsgSchema,
@@ -348,6 +364,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   InteractMsgSchema,
   CraftRequestMsgSchema,
   PurchaseBlueprintMsgSchema,
+  PickupStationOutputsMsgSchema,
 ]);
 
 
@@ -485,4 +502,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 21;
+export const PROTOCOL_VERSION = 22;

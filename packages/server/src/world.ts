@@ -130,6 +130,14 @@ type Connection = SceneConnection & {
 const SURFACE_SCENE_ID = 'surface';
 const DUNGEON_SCENE_PREFIX = 'dungeon:';
 const TRANSITION_COOLDOWN_MS = 800;
+// Per-kind parallel craft job capacity. Defaults to 1; mirror what the
+// scene stores. Higher tiers / upgrades raise this later.
+const STATION_PARALLEL_SLOTS: Partial<Record<BuildingKind, number>> = {
+  workbench: 1,
+  forge: 1,
+  electronics_bench: 1,
+};
+
 // Starter blueprints granted on connect / re-granted at every cycle reset.
 // The artifact-trade store is the real source of new blueprints now;
 // this list stays empty so the loop is honest. Bring entries back here
@@ -733,17 +741,37 @@ export class World {
     // Workstation gate: if the recipe requires a station, the player must be
     // on the surface and within range of a built one of that kind. Stations
     // only place on surface, so dungeon-side crafts are rejected outright.
+    let chosenStationId: string | null = null;
     if (recipe.workstation !== null) {
       if (conn.sceneId !== SURFACE_SCENE_ID) return;
       const surface = this.scenes.get(SURFACE_SCENE_ID);
-      if (
-        !surface?.hasBuildingNearby(
-          conn.x,
-          conn.y,
-          recipe.workstation,
-          COMBAT.CRAFT_STATION_RANGE_PX
-        )
-      ) {
+      if (!surface) return;
+      const nearby = surface.findBuildingsNearby(
+        conn.x,
+        conn.y,
+        recipe.workstation,
+        COMBAT.CRAFT_STATION_RANGE_PX
+      );
+      if (nearby.length === 0) return;
+      // Each station has a parallel-slot budget. Find one with a free
+      // slot; if every station of this kind nearby is saturated, reject.
+      const slotsPerStation =
+        STATION_PARALLEL_SLOTS[recipe.workstation] ?? 1;
+      for (const station of nearby) {
+        let used = 0;
+        for (const job of this.activeCraftJobs.values()) {
+          if (job.stationBuildingId === station.id) used++;
+        }
+        if (used < slotsPerStation) {
+          chosenStationId = station.id;
+          break;
+        }
+      }
+      if (chosenStationId === null) {
+        this.sendDirect(conn.ws, {
+          type: 'error',
+          message: 'station_busy',
+        });
         return;
       }
     }
@@ -807,6 +835,7 @@ export class World {
           | 'workbench'
           | 'forge'
           | 'electronics_bench',
+        stationBuildingId: chosenStationId!,
         startedAt: now,
         completesAt: now + craftTimeMs,
       };
@@ -853,20 +882,67 @@ export class World {
       if (!conn) continue; // owner dropped — output silently lost
       const recipe = RECIPES[job.recipeId];
       if (!recipe) continue;
+
+      // Build the output as an InventorySlot so we can route either to
+      // the station's output buffer (preferred) or directly to the
+      // player's inventory (fallback when the station was destroyed
+      // mid-craft or its buffer is full).
       const out = recipe.output;
-      if (out.kind === 'placeable') {
-        addPlaceable(conn.inventory, out.buildingKind, out.count);
-      } else {
-        addAmmo(conn.inventory, out.ammoId, out.count);
+      const outputSlot: import('@dumrunner/shared').InventorySlot =
+        out.kind === 'placeable'
+          ? { kind: 'placeable', buildingKind: out.buildingKind, count: out.count }
+          : { kind: 'ammo', ammoId: out.ammoId, count: out.count };
+
+      const surface = this.scenes.get(SURFACE_SCENE_ID);
+      const deposited = surface?.depositToStationOutput(
+        job.stationBuildingId,
+        outputSlot
+      );
+      if (!deposited) {
+        // Fallback: station gone or its buffer is saturated. Drop the
+        // output straight into the player's inventory so the craft
+        // doesn't silently disappear.
+        if (out.kind === 'placeable') {
+          addPlaceable(conn.inventory, out.buildingKind, out.count);
+        } else {
+          addAmmo(conn.inventory, out.ammoId, out.count);
+        }
+        conn.inventoryDirty = true;
+        this.sendDirect(conn.ws, {
+          type: 'inventory_changed',
+          inventory: conn.inventory,
+        });
       }
-      conn.inventoryDirty = true;
       this.sendDirect(conn.ws, { type: 'craft_job_completed', jobId });
-      this.sendDirect(conn.ws, {
-        type: 'inventory_changed',
-        inventory: conn.inventory,
-      });
     }
     this.recomputePowerState();
+  }
+
+  // Player taps "Take All" at a workstation modal. Server validates
+  // proximity and drains every output slot from every station of `kind`
+  // within range into the player's inventory.
+  handlePickupStationOutputs(
+    characterId: string,
+    kind: 'workbench' | 'forge' | 'electronics_bench'
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (!surface) return;
+    const any = surface.collectStationOutputs(
+      conn.x,
+      conn.y,
+      kind,
+      COMBAT.CRAFT_STATION_RANGE_PX,
+      conn.inventory
+    );
+    if (!any) return;
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
   }
 
   // Player spends artifacts at an artifact_uplink to learn a blueprint.

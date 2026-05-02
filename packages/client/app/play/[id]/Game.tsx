@@ -18,6 +18,7 @@ import {
   PROTOCOL_VERSION,
   SUIT_SLOT_KINDS,
   type BuildingKind,
+  type BuildingState,
   type CarriedPart,
   type ClientMessage,
   type CraftJobState,
@@ -90,6 +91,12 @@ export function Game({ serverId }: { serverId: string }) {
   // / completed deltas; we mirror them locally so the workstation modal
   // can render progress bars without polling.
   const [craftJobs, setCraftJobs] = useState<CraftJobState[]>([]);
+  // Surface buildings keyed by id. Powered by the same WS messages the
+  // renderer consumes; lets the workstation modal read output buffers
+  // without round-tripping through the renderer.
+  const [buildings, setBuildings] = useState<Map<string, BuildingState>>(
+    () => new Map()
+  );
   // Blueprints the server says the player can craft from. Wiped + re-granted
   // each cycle.
   const [knownBlueprints, setKnownBlueprints] = useState<Set<string>>(
@@ -307,6 +314,7 @@ export function Game({ serverId }: { serverId: string }) {
         setHotbarSelection(msg.hotbarSelection);
         setSceneId(msg.sceneId);
         setKnownBlueprints(new Set(msg.knownBlueprints));
+        setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
         selfIdRef.current = msg.self.characterId;
         setSelfStats({
           hp: msg.self.hp,
@@ -447,6 +455,7 @@ export function Game({ serverId }: { serverId: string }) {
       case 'scene_changed':
         setSceneId(msg.sceneId);
         setEquipment(msg.equipment);
+        setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
         gameRef.current?.swapScene({
           self: msg.self,
           players: msg.players.filter(
@@ -492,12 +501,36 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'building_placed':
         gameRef.current?.spawnBuilding(msg.building);
+        // building_placed double-duties as "building state changed" —
+        // server re-emits when output buffers shift. Replace by id.
+        setBuildings((m) => {
+          const next = new Map(m);
+          next.set(msg.building.id, msg.building);
+          return next;
+        });
         break;
       case 'building_damaged':
         gameRef.current?.setBuildingHp(msg.id, msg.hp, msg.maxHp);
+        setBuildings((m) => {
+          const existing = m.get(msg.id);
+          if (!existing) return m;
+          const next = new Map(m);
+          next.set(msg.id, {
+            ...existing,
+            hp: msg.hp,
+            maxHp: msg.maxHp,
+          });
+          return next;
+        });
         break;
       case 'building_destroyed':
         gameRef.current?.removeBuilding(msg.id);
+        setBuildings((m) => {
+          if (!m.has(msg.id)) return m;
+          const next = new Map(m);
+          next.delete(msg.id);
+          return next;
+        });
         break;
       case 'world_clock':
         setWorldClock({
@@ -808,10 +841,20 @@ export function Game({ serverId }: { serverId: string }) {
             knownBlueprints={knownBlueprints}
             nearWorkstations={nearWorkstations}
             craftJobs={craftJobs}
+            buildings={buildings}
             onClose={() => setStationModalKind(null)}
             onCraft={(recipeId) =>
               sendOnLiveWs({ type: 'craft_request', recipeId })
             }
+            onPickup={(kind) => {
+              if (
+                kind === 'workbench' ||
+                kind === 'forge' ||
+                kind === 'electronics_bench'
+              ) {
+                sendOnLiveWs({ type: 'pickup_station_outputs', kind });
+              }
+            }}
           />
         )}
 
@@ -1346,19 +1389,76 @@ function WorkstationModal({
   knownBlueprints,
   nearWorkstations,
   craftJobs,
+  buildings,
   onClose,
   onCraft,
+  onPickup,
 }: {
   kind: BuildingKind;
   inventory: Inventory;
   knownBlueprints: Set<string>;
   nearWorkstations: Set<BuildingKind>;
   craftJobs: CraftJobState[];
+  buildings: Map<string, BuildingState>;
   onClose: () => void;
   onCraft: (recipeId: string) => void;
+  onPickup: (kind: BuildingKind) => void;
 }) {
   // Jobs running at THIS station kind so the queue stays scoped.
   const jobsAtStation = craftJobs.filter((j) => j.stationKind === kind);
+  // Aggregate every output slot across every nearby station of this
+  // kind. Server enforces proximity at pickup, but client uses raw
+  // building list since it doesn't know exactly which are in range —
+  // close enough that the modal is open implies at least one is.
+  const stationsOfKind: BuildingState[] = [];
+  for (const b of buildings.values()) {
+    if (b.kind === kind) stationsOfKind.push(b);
+  }
+  const aggregateOutput: InventorySlot[] = [];
+  for (const b of stationsOfKind) {
+    if (!b.output) continue;
+    for (const slot of b.output) {
+      if (slot.kind === 'empty') continue;
+      // Stack-merge same-id materials/ammo/placeables for a clean readout.
+      let merged = false;
+      for (const existing of aggregateOutput) {
+        if (
+          existing.kind === 'material' &&
+          slot.kind === 'material' &&
+          existing.materialId === slot.materialId
+        ) {
+          existing.count += slot.count;
+          merged = true;
+          break;
+        }
+        if (
+          existing.kind === 'ammo' &&
+          slot.kind === 'ammo' &&
+          existing.ammoId === slot.ammoId
+        ) {
+          existing.count += slot.count;
+          merged = true;
+          break;
+        }
+        if (
+          existing.kind === 'placeable' &&
+          slot.kind === 'placeable' &&
+          existing.buildingKind === slot.buildingKind
+        ) {
+          existing.count += slot.count;
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) aggregateOutput.push({ ...slot });
+    }
+  }
+  const hasOutput = aggregateOutput.length > 0;
+  // Total parallel-slot capacity across all nearby stations of this kind
+  // (1 per station for now; visible to the player as "Slots: N/M").
+  const totalSlots = stationsOfKind.length;
+  const usedSlots = jobsAtStation.length;
+
   // Tick a render token every 250ms so progress bars advance smoothly.
   const [, forceRender] = useState(0);
   useEffect(() => {
@@ -1404,14 +1504,50 @@ function WorkstationModal({
         </div>
       )}
 
-      {jobsAtStation.length > 0 && (
-        <div className="px-5 py-3 border-b border-[color:var(--panel-border)] flex flex-col gap-2">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-            In Progress
-          </div>
-          {jobsAtStation.map((job) => (
-            <CraftJobRow key={job.id} job={job} />
-          ))}
+      {(jobsAtStation.length > 0 || hasOutput) && (
+        <div className="px-5 py-3 border-b border-[color:var(--panel-border)] flex flex-col gap-3">
+          {jobsAtStation.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  In Progress
+                </div>
+                {totalSlots > 0 && (
+                  <div className="text-[10px] text-zinc-500 tabular-nums">
+                    Slots {usedSlots}/{totalSlots}
+                  </div>
+                )}
+              </div>
+              {jobsAtStation.map((job) => (
+                <CraftJobRow key={job.id} job={job} />
+              ))}
+            </div>
+          )}
+          {hasOutput && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  Output
+                </div>
+                <button
+                  onClick={() => onPickup(kind)}
+                  className="px-2 py-1 rounded text-[10px] border border-emerald-700 bg-emerald-950/40 text-emerald-200 hover:bg-emerald-950"
+                >
+                  Take All
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2 text-[11px]">
+                {aggregateOutput.map((slot, i) => (
+                  <span
+                    key={i}
+                    className="px-2 py-0.5 rounded bg-[color:var(--bg)] border border-[color:var(--panel-border)] text-zinc-200"
+                  >
+                    {outputSlotLabel(slot)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1459,6 +1595,22 @@ function WorkstationModal({
       )}
     </Modal>
   );
+}
+
+function outputSlotLabel(slot: InventorySlot): string {
+  if (slot.kind === 'placeable') {
+    const name = STATION_LABEL[slot.buildingKind] ?? slot.buildingKind;
+    return `${slot.count}× ${name}`;
+  }
+  if (slot.kind === 'material') {
+    return `${slot.count}× ${slot.materialId}`;
+  }
+  if (slot.kind === 'ammo') {
+    return `${slot.count}× ${slot.ammoId.replace(/_/g, ' ')}`;
+  }
+  if (slot.kind === 'weapon') return slot.weaponId;
+  if (slot.kind === 'part') return `${slot.part.tier} ${slot.part.slot}`;
+  return '?';
 }
 
 // One row in the "In Progress" queue — recipe name, progress bar, and

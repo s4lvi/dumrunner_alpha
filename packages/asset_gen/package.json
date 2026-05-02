@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@dumrunner/shared": "*",
+    "sharp": "^0.34.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

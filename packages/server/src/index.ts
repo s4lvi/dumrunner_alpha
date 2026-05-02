@@ -207,6 +207,11 @@ wss.on('connection', (ws: WebSocket) => {
         world?.handlePurchaseBlueprint(player.characterId, msg.blueprintId);
         break;
       }
+      case 'pickup_station_outputs': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handlePickupStationOutputs(player.characterId, msg.kind);
+        break;
+      }
       case 'auth':
         sendError(ws, 'already_authed');
         break;

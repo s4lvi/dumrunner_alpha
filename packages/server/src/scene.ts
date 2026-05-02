@@ -129,7 +129,26 @@ type CorpseRuntime = CorpseState;
 type BuildingRuntime = BuildingState & {
   // Turrets only — last shot fired (epoch ms). Walls leave it 0.
   lastFireAt: number;
+  // Workstation output buffer. Each station holds STATION_OUTPUT_SLOTS
+  // worth of completed craft outputs until the player picks them up.
+  // Non-station buildings keep this as an empty array.
+  output: import('@dumrunner/shared').InventorySlot[];
 };
+
+// Output slot count per station. Stack-merging means materials and
+// placeables collapse, so 8 is generous.
+const STATION_OUTPUT_SLOTS = 8;
+
+// Set of building kinds that act as crafting stations.
+const STATION_KINDS = new Set<BuildingKind>([
+  'workbench',
+  'forge',
+  'electronics_bench',
+]);
+
+function emptyOutputBuffer(): import('@dumrunner/shared').InventorySlot[] {
+  return Array.from({ length: STATION_OUTPUT_SLOTS }, () => ({ kind: 'empty' as const }));
+}
 
 const CORPSE_PICKUP_RADIUS = COMBAT.LOOT_PICKUP_RADIUS;
 
@@ -392,7 +411,11 @@ export class Scene {
     this.buildings.clear();
     if (snap.buildings) {
       for (const saved of snap.buildings) {
-        this.buildings.set(saved.id, { ...saved, lastFireAt: 0 });
+        this.buildings.set(saved.id, {
+          ...saved,
+          lastFireAt: 0,
+          output: STATION_KINDS.has(saved.kind) ? emptyOutputBuffer() : [],
+        });
       }
     }
 
@@ -522,6 +545,7 @@ export class Scene {
       hp: stats.maxHp,
       maxHp: stats.maxHp,
       lastFireAt: 0,
+      output: STATION_KINDS.has(kind) ? emptyOutputBuffer() : [],
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
@@ -1103,8 +1127,21 @@ export class Scene {
     kind: BuildingKind,
     rangePx: number
   ): boolean {
+    return this.findBuildingsNearby(px, py, kind, rangePx).length > 0;
+  }
+
+  // All alive buildings of `kind` within rangePx of the point. Sorted by
+  // building id for deterministic queue assignment when multiple stations
+  // of the same kind are in range.
+  findBuildingsNearby(
+    px: number,
+    py: number,
+    kind: BuildingKind,
+    rangePx: number
+  ): BuildingState[] {
     const tileSize = this.layout?.tileSize ?? 0;
-    if (tileSize <= 0) return false;
+    if (tileSize <= 0) return [];
+    const out: BuildingState[] = [];
     for (const b of this.buildings.values()) {
       if (b.kind !== kind) continue;
       const cx = (b.tileX + b.width / 2) * tileSize;
@@ -1113,9 +1150,146 @@ export class Scene {
       const halfH = (b.height * tileSize) / 2;
       const dx = Math.max(Math.abs(px - cx) - halfW, 0);
       const dy = Math.max(Math.abs(py - cy) - halfH, 0);
-      if (dx * dx + dy * dy <= rangePx * rangePx) return true;
+      if (dx * dx + dy * dy <= rangePx * rangePx) {
+        out.push({ ...b, output: b.output.map((s) => ({ ...s })) });
+      }
     }
-    return false;
+    out.sort((a, b) => a.id.localeCompare(b.id));
+    return out;
+  }
+
+  // Deposit a recipe output into a station's output buffer. Stack-merges
+  // materials/ammo/placeables of the same id; falls back to the first
+  // empty slot. Returns true on success, false if the buffer is full.
+  // Caller is responsible for falling back to player inventory.
+  depositToStationOutput(
+    stationId: string,
+    output: import('@dumrunner/shared').InventorySlot
+  ): boolean {
+    const b = this.buildings.get(stationId);
+    if (!b) return false;
+    const buf = b.output;
+    if (output.kind === 'empty') return true;
+    // Merge into existing stackable slot of same id.
+    for (const slot of buf) {
+      if (
+        slot.kind === 'material' &&
+        output.kind === 'material' &&
+        slot.materialId === output.materialId
+      ) {
+        slot.count += output.count;
+        this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
+        return true;
+      }
+      if (
+        slot.kind === 'ammo' &&
+        output.kind === 'ammo' &&
+        slot.ammoId === output.ammoId
+      ) {
+        slot.count += output.count;
+        this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
+        return true;
+      }
+      if (
+        slot.kind === 'placeable' &&
+        output.kind === 'placeable' &&
+        slot.buildingKind === output.buildingKind
+      ) {
+        slot.count += output.count;
+        this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
+        return true;
+      }
+    }
+    // No merge — find first empty slot.
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i].kind === 'empty') {
+        buf[i] = { ...output };
+        this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
+        return true;
+      }
+    }
+    return false; // buffer full
+  }
+
+  // Drain every output slot from every station of `kind` within range
+  // into the player's inventory. Server-side proximity check; returns
+  // true if anything was transferred.
+  collectStationOutputs(
+    px: number,
+    py: number,
+    kind: BuildingKind,
+    rangePx: number,
+    inventory: import('@dumrunner/shared').Inventory
+  ): boolean {
+    const tileSize = this.layout?.tileSize ?? 0;
+    if (tileSize <= 0) return false;
+    let any = false;
+    for (const b of this.buildings.values()) {
+      if (b.kind !== kind) continue;
+      const cx = (b.tileX + b.width / 2) * tileSize;
+      const cy = (b.tileY + b.height / 2) * tileSize;
+      const halfW = (b.width * tileSize) / 2;
+      const halfH = (b.height * tileSize) / 2;
+      const dx = Math.max(Math.abs(px - cx) - halfW, 0);
+      const dy = Math.max(Math.abs(py - cy) - halfH, 0);
+      if (dx * dx + dy * dy > rangePx * rangePx) continue;
+      let buildingChanged = false;
+      for (let i = 0; i < b.output.length; i++) {
+        const s = b.output[i];
+        if (s.kind === 'empty') continue;
+        // Try to add to player inventory; if it doesn't fit (rare; bag
+        // is huge), leave the slot in the station for next pickup.
+        const placed = this.tryAddSlotToInventory(inventory, s);
+        if (placed) {
+          b.output[i] = { kind: 'empty' };
+          any = true;
+          buildingChanged = true;
+        }
+      }
+      if (buildingChanged) {
+        this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
+      }
+    }
+    return any;
+  }
+
+  // Helper: route an InventorySlot into an Inventory using the standard
+  // add* helpers per kind. Returns true if the full count fit.
+  private tryAddSlotToInventory(
+    inv: import('@dumrunner/shared').Inventory,
+    s: import('@dumrunner/shared').InventorySlot
+  ): boolean {
+    if (s.kind === 'material') {
+      const left = addMaterial(inv, s.materialId, s.count);
+      if (left > 0) {
+        s.count = left;
+        return false;
+      }
+      return true;
+    }
+    if (s.kind === 'ammo') {
+      const left = addAmmo(inv, s.ammoId, s.count);
+      if (left > 0) {
+        s.count = left;
+        return false;
+      }
+      return true;
+    }
+    if (s.kind === 'placeable') {
+      const left = addPlaceable(inv, s.buildingKind, s.count);
+      if (left > 0) {
+        s.count = left;
+        return false;
+      }
+      return true;
+    }
+    if (s.kind === 'part') {
+      return addPart(inv, s.part);
+    }
+    if (s.kind === 'weapon') {
+      return addWeapon(inv, s.weaponId);
+    }
+    return true;
   }
 
   // Build the AiBuildingTarget list for horde-mode AI. Priority hierarchy
@@ -1589,6 +1763,7 @@ export class Scene {
       hp: stats.maxHp,
       maxHp: stats.maxHp,
       lastFireAt: 0,
+      output: [],
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
@@ -1749,6 +1924,10 @@ function toCorpseState(c: CorpseRuntime): CorpseState {
 }
 
 function toBuildingState(b: BuildingRuntime): BuildingState {
+  // Output is only sent on the wire when it has any non-empty slot —
+  // saves bytes for non-station buildings and stations with empty
+  // buffers. Client treats undefined as "no output to render."
+  const hasOutput = b.output.some((s) => s.kind !== 'empty');
   return {
     id: b.id,
     kind: b.kind,
@@ -1758,6 +1937,7 @@ function toBuildingState(b: BuildingRuntime): BuildingState {
     height: b.height,
     hp: b.hp,
     maxHp: b.maxHp,
+    ...(hasOutput ? { output: b.output.map((s) => ({ ...s })) } : {}),
   };
 }
 

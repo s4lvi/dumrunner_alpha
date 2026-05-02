@@ -30,14 +30,16 @@ The first implementation pass now exists under `packages/asset_gen/src`:
 - `providers/openaiImage.ts` calls OpenAI's image generation endpoint with
   `gpt-image-1.5` by default.
 - `cleanup.ts` and `verifier.ts` are explicit boundaries for the heavier
-  production work: background removal, alpha validation, crop/framing, and
-  VLM grading.
+  production work. Cleanup now uses `sharp` for exact-size PNG resize/padding
+  and alpha-aware metadata. VLM grading is still pending.
 - `gameRequests.ts` provides request builders for enemies, parts, materials,
   and buildings using the existing shared game schemas.
+- `scripts/prewarm.ts` builds the current alpha request catalog and can submit
+  it to `/v1/assets/prewarm`.
 
 This version is intentionally an API/queue skeleton. It can call the image API,
-but approved production output still depends on replacing the placeholder
-cleanup and heuristic verifier with real image-processing and VLM stages.
+but approved production output still depends on adding semantic background
+matting for opaque images and a VLM verifier.
 
 ## Package Boundary
 
@@ -399,9 +401,10 @@ type PartAssetContext = {
    - Resize to exact target size.
    - Quantize or sharpen if `renderStyle` is `pixel_art`.
    - Export PNG with alpha. Optionally export WebP for web delivery.
-   - Production implementation should use `sharp` for resizing/metadata and a
-     dedicated matting/removal step for alpha. The current code only records
-     dimensions and makes this boundary explicit.
+   - Current implementation uses `sharp` for resizing/padding to exact target
+     dimensions and for alpha-aware metadata.
+   - Production implementation still needs a dedicated matting/removal step for
+     opaque backgrounds.
 
 7. **Mechanical Validation**
    - Exact dimensions match requested size.
