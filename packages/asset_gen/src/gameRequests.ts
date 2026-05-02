@@ -51,6 +51,27 @@ export function enemyAssetRequest(input: EnemyAssetInput): AssetGenerateRequest 
   };
 }
 
+export function enemyAnimationRequest(input: EnemyAssetInput & {
+  action?: 'idle' | 'walk' | 'attack' | 'death';
+  frameCount?: 2 | 3 | 4;
+  baseAssetId?: string;
+}): AssetGenerateRequest {
+  const action = input.action ?? 'idle';
+  return {
+    ...enemyAssetRequest(input),
+    requestId: `enemy_animation:${input.templateId}:${input.faction}:${action}:${input.frameCount ?? 2}`,
+    assetKind: 'enemy_animation',
+    animation: {
+      baseAssetId: input.baseAssetId,
+      action,
+      frameCount: input.frameCount ?? 2,
+      directionMode: 'omnidirectional',
+      fps: action === 'idle' ? 4 : 8,
+      maxFrameDriftPx: action === 'death' ? 8 : 4,
+    },
+  };
+}
+
 export function partAssetRequest(part: Pick<CarriedPart, 'id' | 'slot' | 'tier' | 'weaponClass'>): AssetGenerateRequest {
   const isWeapon = part.slot === 'barrel' || part.slot === 'frame' || part.slot === 'grip' || part.slot === 'magazine' || part.slot === 'weapon_mod';
   return {

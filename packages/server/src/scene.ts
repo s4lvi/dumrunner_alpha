@@ -1578,7 +1578,11 @@ export class Scene {
     // wearing." Only loose inventory + ammo + materials goes to the
     // corpse. The corpse persists in this scene until perihelion or
     // until someone picks it up.
-    const hasAny = conn.inventory.some((s) => s.kind !== 'empty');
+    //
+    // Per-server world rule `dropItemsOnDeath` lets the owner switch off
+    // full-loot — when false, the bag stays with the player too.
+    const dropItems = this.bindings.dropItemsOnDeath();
+    const hasAny = dropItems && conn.inventory.some((s) => s.kind !== 'empty');
     if (hasAny) {
       const corpseId = `c${this.nextCorpseId++}`;
       const corpse: CorpseRuntime = {
@@ -1593,15 +1597,18 @@ export class Scene {
       this.corpses.set(corpseId, corpse);
       this.broadcast({ type: 'corpse_spawned', corpse: toCorpseState(corpse) });
     }
-    // Reset to empty slots (preserves array length / identity).
-    for (let i = 0; i < conn.inventory.length; i++) {
-      conn.inventory[i] = { kind: 'empty' };
+    // Only wipe the bag if items actually dropped. With dropItemsOnDeath
+    // off, the player keeps everything across the death/respawn.
+    if (dropItems) {
+      for (let i = 0; i < conn.inventory.length; i++) {
+        conn.inventory[i] = { kind: 'empty' };
+      }
+      conn.inventoryDirty = true;
+      this.bindings.send(conn.characterId, {
+        type: 'inventory_changed',
+        inventory: conn.inventory,
+      });
     }
-    conn.inventoryDirty = true;
-    this.bindings.send(conn.characterId, {
-      type: 'inventory_changed',
-      inventory: conn.inventory,
-    });
   }
 
   private handlePickupsAndLootExpiry(now: number): void {
@@ -1908,6 +1915,10 @@ export interface SceneBindings {
   // kind/identity change. World recomputes power capacity / draw and
   // broadcasts the new power state.
   onBuildingsChanged(): void;
+  // Per-server world rule: true = bag drops as a corpse on death (full-
+  // loot mode), false = bag stays with the player on respawn. Equipped
+  // suit gear stays in either case.
+  dropItemsOnDeath(): boolean;
 }
 
 // ---------- helpers ----------

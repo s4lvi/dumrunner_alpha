@@ -77,6 +77,44 @@ export function NewServerForm() {
         placeholder="Leave blank for random"
       />
 
+      <div className="pt-2 border-t border-[color:var(--panel-border)]">
+        <h3 className="text-sm uppercase tracking-wider text-zinc-500 mb-3">
+          World tuning
+        </h3>
+        <div className="grid grid-cols-2 gap-4">
+          <Field
+            label="Day length (sec)"
+            name="day_duration_sec"
+            type="number"
+            min={30}
+            max={3600}
+            defaultValue={300}
+            required
+          />
+          <Field
+            label="Days per perihelion"
+            name="days_per_cycle"
+            type="number"
+            min={1}
+            max={7}
+            defaultValue={3}
+            required
+          />
+        </div>
+        <label className="flex items-center gap-2 mt-3 text-sm">
+          <input
+            type="checkbox"
+            name="drop_items_on_death"
+            defaultChecked
+          />
+          <span>Drop bag contents on death (full-loot mode)</span>
+        </label>
+        <p className="text-[11px] text-zinc-500 mt-1">
+          Off = items stay with you on respawn. Equipped suit gear always
+          stays regardless.
+        </p>
+      </div>
+
       {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
 
       <button

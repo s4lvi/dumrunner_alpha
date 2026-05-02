@@ -1,5 +1,10 @@
 import type { AssetGenConfig } from '../config.js';
-import type { GeneratedImage, ImageGenerationInput, ImageGenerator } from './types.js';
+import type {
+  GeneratedImage,
+  ImageEditInput,
+  ImageGenerationInput,
+  ImageGenerator,
+} from './types.js';
 
 type OpenAIImageResponse = {
   data?: { b64_json?: string; revised_prompt?: string }[];
@@ -50,6 +55,57 @@ export class OpenAIImageGenerator implements ImageGenerator {
       providerRequestId,
     };
   }
+
+  async edit(input: ImageEditInput): Promise<GeneratedImage> {
+    if (!this.config.openaiApiKey) {
+      throw new Error('OPENAI_API_KEY is required for OpenAI image editing');
+    }
+
+    const form = new FormData();
+    form.set('model', this.config.imageModel);
+    form.set('prompt', input.prompt);
+    form.set('size', input.size);
+    form.set('quality', input.quality);
+    form.set('output_format', 'png');
+    form.set('background', input.background);
+    if (input.inputFidelity && !this.config.imageModel.startsWith('gpt-image-2')) {
+      form.set('input_fidelity', input.inputFidelity);
+    }
+    for (const reference of input.referenceImages) {
+      form.append(
+        'image[]',
+        new Blob([reference.bytes], { type: reference.mimeType }),
+        reference.filename
+      );
+    }
+
+    const response = await fetch('https://api.openai.com/v1/images/edits', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${this.config.openaiApiKey}`,
+      },
+      body: form,
+    });
+
+    const providerRequestId = response.headers.get('x-request-id');
+    const body = (await response.json().catch(() => ({}))) as OpenAIImageResponse;
+
+    if (!response.ok) {
+      throw new Error(body.error?.message ?? `OpenAI image edit failed: ${response.status}`);
+    }
+
+    const first = body.data?.[0];
+    if (!first?.b64_json) {
+      throw new Error('OpenAI image edit returned no image data');
+    }
+
+    return {
+      mimeType: 'image/png',
+      bytes: Buffer.from(first.b64_json, 'base64'),
+      revisedPrompt: first.revised_prompt ?? null,
+      providerRequestId,
+    };
+  }
 }
 
 export class PlaceholderImageGenerator implements ImageGenerator {
@@ -60,6 +116,10 @@ export class PlaceholderImageGenerator implements ImageGenerator {
       revisedPrompt: null,
       providerRequestId: 'placeholder',
     };
+  }
+
+  async edit(): Promise<GeneratedImage> {
+    return this.generate();
   }
 }
 

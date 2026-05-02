@@ -1,6 +1,7 @@
+import { assembleAnimationSheet, type AnimationFrameInput } from './animation.js';
 import { cleanImage } from './cleanup.js';
 import { makeCacheKey, newId } from './hash.js';
-import { compileAssetPrompt } from './prompt.js';
+import { compileAnimationFramePrompt, compileAssetPrompt } from './prompt.js';
 import type { ImageGenerator } from './providers/types.js';
 import type {
   AssetGenerateRequest,
@@ -116,6 +117,11 @@ export class AssetGenerationService {
     if (!job) return;
 
     try {
+      if (job.request.assetKind === 'enemy_animation') {
+        await this.runAnimationJob(job);
+        return;
+      }
+
       await this.updateJob(job, { status: 'generating' });
       const prompt = compileAssetPrompt(job.request);
       const generated = await this.deps.imageGenerator.generate({
@@ -167,6 +173,111 @@ export class AssetGenerationService {
     }
   }
 
+  private async runAnimationJob(job: AssetJob): Promise<void> {
+    if (!job.request.animation) {
+      await this.updateJob(job, {
+        status: 'failed',
+        error: 'animation request missing animation spec',
+      });
+      return;
+    }
+    if (job.request.animation.baseAssetId) {
+      const baseExists = await this.deps.store.getAssetPngBytes(job.request.animation.baseAssetId);
+      if (!baseExists) {
+        await this.updateJob(job, {
+          status: 'failed',
+          error: `baseAssetId ${job.request.animation.baseAssetId} was not found in local store`,
+        });
+        return;
+      }
+    }
+
+    try {
+      const baseAsset = job.request.animation.baseAssetId
+        ? await this.deps.store.getAssetPngBytes(job.request.animation.baseAssetId)
+        : null;
+      const frames: AnimationFrameInput[] = [];
+      for (let frameIndex = 0; frameIndex < job.request.animation.frameCount; frameIndex++) {
+        await this.updateJob(job, { status: 'generating' });
+        const prompt = compileAnimationFramePrompt(job.request, frameIndex);
+        const generated = baseAsset
+          ? await this.deps.imageGenerator.edit({
+              prompt,
+              size: this.deps.imageSize,
+              quality: this.deps.imageQuality,
+              background: this.imageBackground(job.request),
+              inputFidelity: 'high',
+              referenceImages: [{
+                filename: `${job.request.animation.baseAssetId}.png`,
+                mimeType: 'image/png',
+                bytes: baseAsset,
+              }],
+            })
+          : await this.deps.imageGenerator.generate({
+              prompt,
+              size: this.deps.imageSize,
+              quality: this.deps.imageQuality,
+              background: this.imageBackground(job.request),
+            });
+
+        await this.updateJob(job, { status: 'cleaning' });
+        const cleaned = await cleanImage(job.request, generated);
+
+        await this.updateJob(job, { status: 'verifying' });
+        const verification = await this.deps.verifier.verify({
+          request: job.request,
+          metadata: cleaned.metadata,
+          pngBytes: cleaned.bytes,
+        });
+        if (verification.verdict !== 'pass') {
+          await this.updateJob(job, {
+            status: 'rejected',
+            error: `${frameName(job.request.animation.action, frameIndex)}: ${verification.reasons.join('; ') || verification.summary}`,
+          });
+          return;
+        }
+
+        frames.push({
+          name: frameName(job.request.animation.action, frameIndex),
+          bytes: cleaned.bytes,
+          metadata: cleaned.metadata,
+        });
+      }
+
+      const sheet = await assembleAnimationSheet(job.request, frames);
+      if (sheet.verification.verdict !== 'pass') {
+        await this.updateJob(job, {
+          status: 'rejected',
+          error: sheet.verification.reasons.join('; ') || sheet.verification.summary,
+        });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const asset: AssetRecord = {
+        assetId: newId('asset'),
+        cacheKey: job.cacheKey,
+        request: job.request,
+        urls: { png: '' },
+        metadata: sheet.metadata,
+        animation: sheet.animation,
+        verification: sheet.verification,
+        createdAt: now,
+      };
+      const stored = await this.deps.store.putAsset(asset, sheet.bytes);
+      await this.updateJob(job, {
+        status: 'approved',
+        assetId: stored.assetId,
+        error: null,
+      });
+    } catch (error) {
+      await this.updateJob(job, {
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private imageBackground(request: AssetGenerateRequest): 'transparent' | 'opaque' | 'auto' {
     if (!request.style.transparentBackground) return 'auto';
     return this.deps.supportsTransparentBackground ? 'transparent' : 'auto';
@@ -179,4 +290,8 @@ export class AssetGenerationService {
     Object.assign(job, patch, { updatedAt: new Date().toISOString() });
     await this.deps.store.putJob(job);
   }
+}
+
+function frameName(action: string, frameIndex: number): string {
+  return `${action}_${frameIndex}`;
 }

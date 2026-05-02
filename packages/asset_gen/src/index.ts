@@ -1,7 +1,9 @@
 export { loadConfig } from './config.js';
+export { assembleAnimationSheet } from './animation.js';
 export { cleanImage } from './cleanup.js';
 export {
   buildingAssetRequest,
+  enemyAnimationRequest,
   enemyAssetRequest,
   materialAssetRequest,
   partAssetRequest,

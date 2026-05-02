@@ -457,6 +457,10 @@ They greedy-pathfind toward the highest-priority target in range — no full A*;
    - **Password** (optional for public; required or auto-generated invite code for private).
    - **Max player slots** within the supported range of 5–10.
    - **World seed** (optional advanced field) — fixes biome rotation order and procedural RNG. Lets friend groups share a known seed.
+   - **World tuning:**
+     - **Day length** (30–3600 seconds; default 300). Sets how fast the perihelion clock ticks.
+     - **Days per perihelion** (1–7; default 3). Multiplied by day length = full cycle length.
+     - **Drop bag on death** (default on). Off makes the server "softer" — full-loot extraction stays for the GDD canonical mode, but groups testing or running a more casual server can flip it. Equipped suit gear stays in either case.
    - On submit: server record created in Supabase; a game-server process is spun up (or scheduled on demand); creating account is dropped into the new world's surface base as the first character.
 6. **In-server**:
    - First join on this server: per-server character record created with starter kit (Mk1 Medium chassis, basic life-support, basic plating, small Mk1 cargo grid, Mk1 pistol).

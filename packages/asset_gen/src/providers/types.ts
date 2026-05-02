@@ -12,6 +12,16 @@ export type ImageGenerationInput = {
   background: 'transparent' | 'opaque' | 'auto';
 };
 
+export type ImageEditInput = ImageGenerationInput & {
+  referenceImages: {
+    filename: string;
+    mimeType: 'image/png' | 'image/webp' | 'image/jpeg';
+    bytes: Buffer;
+  }[];
+  inputFidelity?: 'high' | 'low';
+};
+
 export interface ImageGenerator {
   generate(input: ImageGenerationInput): Promise<GeneratedImage>;
+  edit(input: ImageEditInput): Promise<GeneratedImage>;
 }

@@ -15,12 +15,26 @@ export async function createServerAction(
   const password = String(formData.get('password') ?? '');
   const maxSlots = Number(formData.get('max_slots') ?? 8);
   const seedRaw = String(formData.get('world_seed') ?? '').trim();
+  const dayDurationSec = Number(formData.get('day_duration_sec') ?? 300);
+  const daysPerCycle = Number(formData.get('days_per_cycle') ?? 3);
+  const dropItemsOnDeath =
+    String(formData.get('drop_items_on_death') ?? 'on') === 'on';
 
   if (!name || name.length < 1 || name.length > 64) {
     return { error: 'Server name must be 1–64 characters.' };
   }
   if (!Number.isInteger(maxSlots) || maxSlots < 5 || maxSlots > 10) {
     return { error: 'Max slots must be between 5 and 10.' };
+  }
+  if (
+    !Number.isInteger(dayDurationSec) ||
+    dayDurationSec < 30 ||
+    dayDurationSec > 3600
+  ) {
+    return { error: 'Day length must be 30–3600 seconds.' };
+  }
+  if (!Number.isInteger(daysPerCycle) || daysPerCycle < 1 || daysPerCycle > 7) {
+    return { error: 'Days per cycle must be 1–7.' };
   }
   if (visibility !== 'public' && visibility !== 'private') {
     return { error: 'Invalid visibility.' };
@@ -51,6 +65,9 @@ export async function createServerAction(
       password_hash,
       max_slots: maxSlots,
       world_seed: worldSeed,
+      day_duration_sec: dayDurationSec,
+      days_per_cycle: daysPerCycle,
+      drop_items_on_death: dropItemsOnDeath,
     })
     .select('id')
     .single();

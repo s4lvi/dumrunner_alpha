@@ -6,6 +6,7 @@ import type { AssetJob, AssetRecord } from './schemas.js';
 export interface AssetStore {
   getAssetByCacheKey(cacheKey: string): Promise<AssetRecord | null>;
   getAsset(assetId: string): Promise<AssetRecord | null>;
+  getAssetPngBytes(assetId: string): Promise<Buffer | null>;
   listApprovedAssets(): Promise<AssetRecord[]>;
   putAsset(asset: AssetRecord, pngBytes: Buffer): Promise<AssetRecord>;
   getJob(jobId: string): Promise<AssetJob | null>;
@@ -44,6 +45,16 @@ export class LocalAssetStore implements AssetStore {
 
   async getAsset(assetId: string): Promise<AssetRecord | null> {
     return this.assetsById.get(assetId) ?? null;
+  }
+
+  async getAssetPngBytes(assetId: string): Promise<Buffer | null> {
+    const asset = this.assetsById.get(assetId);
+    if (!asset) return null;
+    try {
+      return await readFile(join(this.approvedDir, `${asset.assetId}.png`));
+    } catch {
+      return null;
+    }
   }
 
   async listApprovedAssets(): Promise<AssetRecord[]> {

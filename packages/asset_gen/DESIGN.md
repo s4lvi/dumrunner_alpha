@@ -36,6 +36,8 @@ The first implementation pass now exists under `packages/asset_gen/src`:
   and buildings using the existing shared game schemas.
 - `scripts/prewarm.ts` builds the current alpha request catalog and can submit
   it to `/v1/assets/prewarm`.
+- `enemy_animation` requests generate short horizontal spritesheets with
+  per-frame metadata and mechanical frame drift checks.
 
 This version is intentionally an API/queue skeleton. It can call the image API,
 but approved production output still depends on adding semantic background
@@ -227,6 +229,7 @@ model stricter variants.
 ```ts
 type AssetKind =
   | 'enemy'
+  | 'enemy_animation'
   | 'weapon_part'
   | 'suit_part'
   | 'projectile'
@@ -234,6 +237,15 @@ type AssetKind =
 
 type RenderTarget = 'world_sprite' | 'inventory_icon' | 'ui_detail';
 type AssetSize = 32 | 64 | 256;
+
+type AnimationSpec = {
+  baseAssetId?: string;
+  action: 'idle' | 'walk' | 'attack' | 'death';
+  frameCount: 2 | 3 | 4;
+  directionMode: 'omnidirectional' | 'four_way';
+  fps: number;
+  maxFrameDriftPx: number;
+};
 
 type EnemyAssetContext = {
   kind: 'enemy';
@@ -458,6 +470,16 @@ For `ui_detail`:
 - Higher detail allowed.
 - Must still have transparent background.
 - Can be downsampled to generate inventory variants.
+
+For `enemy_animation`:
+
+- Use 2-4 frames.
+- Generate and clean each frame independently.
+- Assemble a horizontal spritesheet: `frameWidth = size`, `sheetWidth = size * frameCount`.
+- Keep the same anchor for every frame.
+- Reject cycles whose frame centers drift farther than `maxFrameDriftPx`.
+- Treat hit flash, recoil, bob, and simple squash as procedural renderer
+  effects instead of generated animation frames.
 
 ## Verification Contract
 

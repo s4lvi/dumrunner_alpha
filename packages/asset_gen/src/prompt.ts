@@ -56,14 +56,15 @@ export function compileAnimationFramePrompt(
 
   const base = compileAssetPrompt(request);
   const action = request.animation.action;
-  const cyclePosition = request.animation.frameCount === 1
-    ? 'single keyframe'
-    : `${frameIndex + 1} of ${request.animation.frameCount}`;
+  const cyclePosition = `${frameIndex + 1} of ${request.animation.frameCount}`;
   const frameDirection = actionCopy(action, frameIndex, request.animation.frameCount);
 
   return [
     base,
     '',
+    request.animation.baseAssetId
+      ? 'Use the provided reference image as the canonical sprite. Preserve its creature identity, palette, outline weight, camera angle, and scale.'
+      : '',
     `Animation frame: ${cyclePosition} for a ${action} cycle.`,
     `Pose direction: ${frameDirection}.`,
     'Keep the exact same character identity, palette, scale, camera angle, and silhouette family across all frames.',

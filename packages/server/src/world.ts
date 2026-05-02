@@ -178,6 +178,18 @@ export class World {
   // attack; cycle++ when the horde ends.
   private hordeActive = false;
   private hordeEndsAt = 0;
+  // Per-server world config loaded on hydrate. Defaults match the alpha
+  // COMBAT constants so any code path that runs before hydrate still
+  // behaves reasonably.
+  private worldConfig: {
+    dayDurationMs: number;
+    daysPerCycle: number;
+    dropItemsOnDeath: boolean;
+  } = {
+    dayDurationMs: 300_000,
+    daysPerCycle: 3,
+    dropItemsOnDeath: true,
+  };
   // Deepest dungeon floor any crewmate has reached this cycle. Drives the
   // surface Power Link's descent target and (Phase 3) the power capacity.
   // Resets to 1 on cycle reset OR Power Link destruction.
@@ -214,6 +226,7 @@ export class World {
       isPowerOnline: () => this.powerOnline,
       isPowered: (id: string) => this.poweredBuildings.has(id),
       onBuildingsChanged: () => this.recomputePowerState(),
+      dropItemsOnDeath: () => this.worldConfig.dropItemsOnDeath,
     };
     // Surface always exists so cold servers spawn enemies immediately.
     const surface = new Scene(
@@ -244,19 +257,27 @@ export class World {
     if (this.hydrated) return;
     this.hydrated = true;
 
-    // Pull world_seed from the servers row (procgen needs it).
+    // Pull per-server world config + seed from the servers row.
     {
       const { data: serverRow } = await supabase
         .from('servers')
-        .select('world_seed')
+        .select('world_seed, day_duration_sec, days_per_cycle, drop_items_on_death')
         .eq('id', this.serverId)
         .maybeSingle();
       const seedRaw =
         serverRow?.world_seed != null ? Number(serverRow.world_seed) : NaN;
-      // Random seed if unset / invalid. Stable for the lifetime of this world.
       this.worldSeed = Number.isFinite(seedRaw)
         ? seedRaw | 0
         : Math.floor(Math.random() * 0xffffffff);
+      // Owner-configurable knobs. Defaults match the alpha COMBAT
+      // constants so a row missing these columns (pre-migration) still
+      // boots cleanly.
+      this.worldConfig = {
+        dayDurationMs:
+          (serverRow?.day_duration_sec ?? 300) * 1000,
+        daysPerCycle: serverRow?.days_per_cycle ?? 3,
+        dropItemsOnDeath: serverRow?.drop_items_on_death ?? true,
+      };
     }
 
     const { data, error } = await supabase
@@ -1144,7 +1165,8 @@ export class World {
   //   - (idle when no players are connected — driven by the existing idle
   //     shutdown logic; clock resumes when someone joins again.)
   private tickHordeClock(now: number): void {
-    const cycleLengthMs = COMBAT.DAYS_PER_CYCLE * COMBAT.DAY_DURATION_MS;
+    const cycleLengthMs =
+      this.worldConfig.daysPerCycle * this.worldConfig.dayDurationMs;
     if (!this.hordeActive) {
       if (now - this.cycleStartedAt >= cycleLengthMs) {
         this.startHorde(now);
@@ -1320,7 +1342,8 @@ export class World {
   }
 
   private broadcastWorldClock(now: number): void {
-    const cycleLengthMs = COMBAT.DAYS_PER_CYCLE * COMBAT.DAY_DURATION_MS;
+    const cycleLengthMs =
+      this.worldConfig.daysPerCycle * this.worldConfig.dayDurationMs;
     const elapsed = now - this.cycleStartedAt;
     const remaining = Math.max(0, cycleLengthMs - elapsed);
     this.broadcastAll({

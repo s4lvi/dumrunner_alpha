@@ -61,9 +61,28 @@ Submit the exhaustive part matrix:
 npm --workspace @dumrunner/asset_gen run prewarm -- --all-parts
 ```
 
+## Smoke Tests
+
+Generate one enemy and one material:
+
+```bash
+./node_modules/.bin/dotenv -e .env.local -- \
+  npm --workspace @dumrunner/asset_gen run smoke
+```
+
+Generate one 2-frame enemy idle spritesheet:
+
+```bash
+./node_modules/.bin/dotenv -e .env.local -- \
+  npm --workspace @dumrunner/asset_gen run smoke -- --animation
+```
+
 ## Current Limits
 
 - `sharp` now produces exact-size PNG outputs and alpha-aware metadata.
+- `enemy_animation` jobs produce horizontal PNG spritesheets with frame
+  metadata. This is intended for short 2-4 frame cycles, not rich full-motion
+  animation.
 - The service still depends on the image model producing a useful transparent
   source image. It does not yet run semantic background matting for opaque
   images.

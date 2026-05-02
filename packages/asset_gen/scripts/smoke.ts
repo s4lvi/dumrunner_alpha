@@ -2,41 +2,44 @@ import type { AssetGenerateRequest } from '../src/schemas.js';
 
 const base = process.env.ASSET_GEN_PUBLIC_BASE_URL ?? 'http://localhost:8787';
 const token = process.env.ASSET_GEN_SERVICE_TOKEN;
+const mode = process.argv.includes('--animation') ? 'animation' : 'static';
 const headers = {
   'content-type': 'application/json',
   ...(token ? { authorization: `Bearer ${token}` } : {}),
 };
 
-const requests: AssetGenerateRequest[] = [
-  {
-    assetKind: 'enemy',
-    renderTarget: 'world_sprite',
-    size: 64,
-    style: {
-      camera: 'top_down',
-      renderStyle: 'painted_sprite',
-      outline: true,
-      transparentBackground: true,
-    },
-    gameObject: {
-      id: 'chaser_melee',
-      label: 'rat-like tunnel scavenger',
-      faction: 'catacombs',
-    },
-    visualBrief: {
-      subject: 'rat-like mutant scavenger',
-      materials: ['patchy fur', 'rusted scrap implants'],
-      colors: ['#a855f7', '#22c55e', '#111827'],
-      mustInclude: ['readable top-down silhouette', 'single enemy sprite'],
-      mustAvoid: ['text', 'background scene', 'multiple creatures'],
-    },
-    constraints: {
-      safeMarginPx: 4,
-      anchor: 'center_bottom',
-      maxOpaqueBoundsRatio: 0.86,
-      minReadableAtPx: 32,
-    },
+const baseEnemyRequest: AssetGenerateRequest = {
+  assetKind: 'enemy',
+  renderTarget: 'world_sprite',
+  size: 64,
+  style: {
+    camera: 'top_down',
+    renderStyle: 'painted_sprite',
+    outline: true,
+    transparentBackground: true,
   },
+  gameObject: {
+    id: 'chaser_melee',
+    label: 'rat-like tunnel scavenger',
+    faction: 'catacombs',
+  },
+  visualBrief: {
+    subject: 'rat-like mutant scavenger',
+    materials: ['patchy fur', 'rusted scrap implants'],
+    colors: ['#a855f7', '#22c55e', '#111827'],
+    mustInclude: ['readable top-down silhouette', 'single enemy sprite'],
+    mustAvoid: ['text', 'background scene', 'multiple creatures'],
+  },
+  constraints: {
+    safeMarginPx: 4,
+    anchor: 'center_bottom',
+    maxOpaqueBoundsRatio: 0.86,
+    minReadableAtPx: 32,
+  },
+};
+
+const staticRequests: AssetGenerateRequest[] = [
+  baseEnemyRequest,
   {
     assetKind: 'material',
     renderTarget: 'inventory_icon',
@@ -68,6 +71,32 @@ const requests: AssetGenerateRequest[] = [
   },
 ];
 
+function animationRequest(baseAssetId: string): AssetGenerateRequest {
+  return {
+    ...baseEnemyRequest,
+    requestId: `smoke:enemy_animation:chaser_melee_idle:${baseAssetId}`,
+    assetKind: 'enemy_animation',
+    gameObject: {
+      id: 'chaser_melee_idle',
+      label: 'rat-like tunnel scavenger',
+      faction: 'catacombs',
+    },
+    visualBrief: {
+      ...baseEnemyRequest.visualBrief,
+      mustInclude: ['readable top-down silhouette', 'same creature identity across frames'],
+      mustAvoid: ['text', 'background scene', 'multiple creatures', 'sprite sheet'],
+    },
+    animation: {
+      baseAssetId,
+      action: 'idle',
+      frameCount: 2,
+      directionMode: 'omnidirectional',
+      fps: 4,
+      maxFrameDriftPx: 4,
+    },
+  };
+}
+
 type GenerateResponse =
   | { status: 'approved'; assetId: string; urls?: unknown; metadata?: unknown; verification?: unknown }
   | { status: string; jobId: string; assetId: null; pollUrl: string };
@@ -80,6 +109,17 @@ type JobResponse = {
 
 async function main(): Promise<void> {
   const results: unknown[] = [];
+  if (mode === 'animation') {
+    const baseAsset = await runOne(baseEnemyRequest);
+    const baseAssetId = assetIdFromResult(baseAsset);
+    if (!baseAssetId) throw new Error('base enemy asset did not return an assetId');
+    results.push(baseAsset);
+    results.push(await runOne(animationRequest(baseAssetId)));
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+
+  const requests = staticRequests;
   for (const request of requests) {
     results.push(await runOne(request));
   }
@@ -130,6 +170,12 @@ function summarize(asset: GenerateResponse): unknown {
     metadata: asset.metadata,
     verification: asset.verification,
   };
+}
+
+function assetIdFromResult(result: unknown): string | null {
+  if (typeof result !== 'object' || result === null) return null;
+  const maybe = result as { assetId?: unknown };
+  return typeof maybe.assetId === 'string' ? maybe.assetId : null;
 }
 
 async function jsonFetch<T>(path: string, init: RequestInit): Promise<T> {
