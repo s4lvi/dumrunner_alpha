@@ -10,18 +10,21 @@ Post-apocalyptic cyberpunk future. The colony sits on the surface of a hostile a
 
 ## Core Loop
 
-1. **Dive** — descend into the persistent Dungeon of Dûm to scavenge parts, artifacts, and materials.
+1. **Dive** — descend into the persistent Dungeon of Dûm via the surface **Power Link** structure to scavenge parts, artifacts, components, and materials. Each floor descended raises the base's power capacity.
 2. **Extract** — reach a per-floor extract teleporter to bank loot at the surface base.
-3. **Build & craft** — assemble weapons and suit mods from parts; expand the base with grid-placed walls, turrets, and crafters.
-4. **Ship & unlock** — send artifacts back to Earth to unlock manufacturing tech tree nodes (server-wide).
-5. **Defend** — every third in-game day at perihelion, the surface is attacked by a horde. Survive together.
-6. **Reset & repeat** — perihelion regenerates the dungeon; players return to fresh shallow floors and push the frontier again.
+3. **Build & craft** — assemble weapons and suit mods from parts; expand the base with grid-placed walls, turrets, crafting stations, and the artifact uplink. Crafting consumes time + power, not just materials.
+4. **Trade for blueprints** — spend artifacts at the uplink to permanently unlock new craftable items.
+5. **Defend** — every third in-game day at perihelion, the surface is attacked by a horde that prioritises destroying the Power Link and player defences. Survive together.
+6. **Reset & repeat** — perihelion regenerates the dungeon, restores the Power Link, and resets the depth-power chain; players return to fresh shallow floors and push the frontier again.
 
 ## Perspective & Controls
 
-- **Top-down 2D twin-stick.**
-- WASD movement, mouse aim, click to fire.
-- Browser game; targets desktop first.
+The game ships with two interchangeable render modes; players toggle freely with **V**.
+
+- **Top-down 2D twin-stick** *(default)* — Pixi-rendered overhead view. WASD movement, mouse aim, click to fire. The right tool for build mode and tactical map awareness.
+- **2.5D first-person** *(toggle with V)* — Wolfenstein/Doom-style raycaster running on the same Pixi canvas. WASD becomes yaw-relative (forward / strafe), pointer-lock mouse-look (yaw + pseudo-pitch via horizon shift), click to fire. Feels like a boomer-shooter; build mode uses a floor-reticle ray pick to target the tile under the camera. The renderer is a drop-in replacement that reads the same `SceneState` — server is unchanged.
+
+Both modes share the same React HUD chrome (status bars, hotbar, controls hint, crosshair). Target platform is desktop browser first; touch + mobile come later via Capacitor.
 
 ## Combat
 
@@ -30,6 +33,13 @@ Tactical extraction-shooter feel. Slower and more deliberate than arcade twin-st
 - Ammo is finite and worth managing.
 - Individual enemies are dangerous; positioning matters more than reflexes.
 - Time-to-kill on both sides is meaningful — you can die to a single bad engagement.
+- **Server-authoritative simulation.** Every hit, every projectile path, every enemy AI decision is computed on the server; the client is a thin renderer with prediction. Players can't desync into "client-side wins" because the server owns the truth.
+- **Stamina + sprint.** Hold Shift to sprint at 1.6×; drains 35/s, regen 25/s with a 1.5s post-sprint delay buffer so empty-tank fakery isn't possible.
+- **Shield system.** Damage soaks shield first; overflow goes to HP. Shield regenerates 15/s after 3 seconds of no damage.
+- **Per-template enemy stuns.** Hits briefly stun the enemy (200ms typical, 80ms for brutes who shrug it off), so kiting and burst windows are real.
+- **Player-vs-player is off** in the alpha. All servers are co-op only.
+
+**Weapon classes that ship in the alpha:** pistol (semi-auto, 4 shots/sec, ammo-gated) and knife (melee arc swing). The full part-driven assembly system lands later — see [Items & Procedural Generation](#items--procedural-generation) for the design intent.
 
 ## Multiplayer
 
@@ -54,6 +64,12 @@ Tactical extraction-shooter feel. Slower and more deliberate than arcade twin-st
 - Sprung traps stay sprung until perihelion.
 - Shallow floors therefore decay into safe transit zones over the cycle — natural depth gating, natural new-player on-ramps.
 - Difficulty does **not** escalate as perihelion approaches. The dungeon stays at baseline; the horde is the escalation.
+
+### Procedural Generation
+
+- Each floor's layout is **deterministic from `(worldSeed, cycle, floorIndex)`** — every player on the same server sees the exact same map for floor N during cycle K. Re-rolling only happens at perihelion (cycle increment).
+- Rooms + corridors are tile-aligned axis-aligned rectangles built on a 32-pixel grid, so wall raycasting works with exact DDA (no fractional-step wobble).
+- Initial enemy spawns and scatter loot piles are seeded from the same world hash so co-op crews see the same starting fight.
 
 ### Hazards
 
@@ -95,6 +111,7 @@ Within any band, the last floor (the fifth) hosts a faction champion (themed to 
 - **Full-loot stakes.** On death, you drop **everything you were carrying that run, including equipped weapons and suit.**
 - **Corpse persists where you died** until the next perihelion. You (or anyone) can return to that floor and recover the gear.
 - **Perihelion wipes corpses** along with the dungeon reset — gear left unrecovered is lost forever.
+- **Naked respawn.** Respawning at the surface base does **not** restore the starter loadout — you reappear at the surface entrance with an empty inventory and have to either recover your corpse, scavenge fresh, or get a teammate to hand you something. The risk of dying is meaningful exactly because of this.
 
 This creates a meaningful corpse-run loop: a bad death deep in the dungeon is recoverable but expensive, and the perihelion clock makes recovery time-pressured.
 
@@ -211,15 +228,73 @@ Affixes are bonus stat lines drawn from a per-slot pool. Each affix is one of:
 - **Utility Mod** — strength boost to its own effect, extra effect duration.
 - **Cargo Grid** — extra cells, weight reduction for a category, secure pocket (1–4 cells that survive death).
 
+#### Affix System — Alpha Implementation
+
+The alpha ships a **suit-affix-only** version of the system as the foundation. Five affix kinds are live, all usable on any suit slot:
+
+| Affix id | Effect | Roll range (Mk1 base × tier mult) |
+|----------|--------|-----------------------------------|
+| `add_hp` | +N max HP | 4–10 |
+| `add_shield` | +N max shield | 3–9 |
+| `add_stamina_max` | +N max stamina | 3–8 |
+| `add_stamina_regen` | +N stamina/sec | 0.5–2 |
+| `add_move_speed` | +N% move speed | +1–4% |
+
+Tier multiplier curve: Mk1 ×1, Mk2 ×2.2, Mk3 ×4, Mk4 ×7, Alien ×12. So a Mk4 chassis can roll a `+70 max HP` affix on top of its primary stat. Affixes stack with the slot's primary stat into a single suit-stats accumulator, applied to the player's effective max values.
+
+Adding a new affix is **one entry in `AFFIX_DEFS`** with `label` / `apply` / roll range / valid slots — no other code touched. Weapon affixes drop into the same registry once weapon assembly ships.
+
+### Components & Materials
+
+Crafting consumes typed component stacks scavenged from the world. Each enemy template carries a probabilistic loot table; dungeon rooms also seed scatter piles weighted by floor depth. Components stack in inventory and merge automatically on pickup.
+
+| Material | Tier | Source | Use |
+|----------|------|--------|-----|
+| **Scrap** | 1 | Every enemy, every floor | Universal ingredient — walls, basic stations, ammo |
+| **Wire** | 1 | Drones, dungeon scatter | Electronics tier recipes |
+| **Alloy Plate** | 2 | Brutes, mid+ floors | Heavy-tier defenses + turrets |
+| **Circuit Board** | 2 | Drones, mid+ floors | Electronics bench + turret core |
+| **Biotic Tissue** | 2 | Chasers (rare), deep floors | (Reserved for future bio-tech recipes) |
+| **Resonant Crystal** | 3 | Brutes (rare), deep floors | Artifact uplink, end-tier recipes |
+| **Artifact** | 3 | Kill-drop only (chaser 8% / drone 10% / brute 25%) | Currency at the Artifact Uplink |
+
+The registry (`MATERIALS` in shared) is one entry per material; adding a new component is one line plus loot-table tuning.
+
 ### Crafting & Assembly
 
-- Players craft assemblies at base benches (one bench per assembly type — weapon, suit).
-- Crafting an assembly requires the constituent parts plus base materials (scrap, polymer, etc., scavenged from the dungeon).
-- **Tech-tree unlocks** gate which part *templates* are craftable from raw materials, vs. only obtainable as drops. Loot keeps flowing from day 1; tech tree expands the deterministic crafting options over time.
-- **Artifacts have three possible fates** at the artifact uplink/analyzer. The player chooses one per artifact, creating real spend tension:
-  1. **Analyze and equip** — yields an Alien-tier weapon or suit part the player can immediately use.
-  2. **Ship to Earth** — sacrifices the artifact for a server-wide tech-tree unlock.
-  3. **Burn as crafting ingredient** — consumes the artifact as a high-tier component in a specific craft recipe.
+Crafting in the alpha is **station-driven, blueprint-gated, and (planned) time-and-power-bound**.
+
+**Workstations.** Each crafting station is a placeable building on the surface. Recipes declare which station they require; the player has to be physically near it to craft. Multiple players can share a station.
+
+| Station | Tier | Crafted at | Recipes |
+|---------|------|------------|---------|
+| **Workbench** | Basic | Hand-craft (no station) | Forge, Electronics Bench, Artifact Uplink, Pistol Ammo |
+| **Forge** | Mid | Workbench | Heavy alloy items |
+| **Electronics Bench** | Mid | Workbench | Auto-Turret, future electronics gear |
+| **Artifact Uplink** | Mid | Workbench (requires 1 crystal) | Trade artifacts → blueprints |
+
+**Hand-crafted basics.** Walls and the first Workbench are craftable from inventory anywhere — bootstrap so a fresh character can always build out a base.
+
+**Blueprints.** Every recipe carries an optional `blueprintId`. Recipes without one are always known. Recipes with one are gated — the player must learn the blueprint before the recipe even appears in their crafting UI.
+- **Per-cycle blueprints** wipe at perihelion. The player has to re-acquire each cycle.
+- **Persistent (legendary-tier) blueprints** stay on the character across cycles; even so, **the player still has to re-craft the materials every server cycle** because the dungeon resets.
+
+**Acquisition source.** Blueprints come from the **Artifact Uplink trade store** — players spend artifacts (the kill-drop currency) to learn them. Each catalog entry has a cost, tier, and description. Buying transfers the blueprint into the player's known set, which propagates to the server. (See Artifact Uplink section below.)
+
+**Crafting UI.** Two surfaces:
+- **Inventory's "Field Craft" tab** lists hand-craftable basics only.
+- **Each workstation opens its own modal** (E to interact when in range). The modal is two-column: blueprint list on the left, full requirement / output / craft button on the right. Each ingredient row shows `have/need` so deficits read at a glance.
+
+**Async crafting (planned).** Each recipe will gain a `craftTimeMs`. Crafting at a station starts a job; output materializes when the timer expires. Jobs draw power for their duration; multiple jobs queue at a station. Removes "instant gratification" from station crafting, makes power management strategic. Hand-craftable basics stay instant. (See [Power System](#power-system) below.)
+
+### Artifacts & The Earth Trade Tree
+
+Artifacts are the long-form progression currency. They drop from kills (heavily weighted toward elites and faction champions) and have **three possible fates** at the Artifact Uplink. The player chooses one per artifact, creating real spend tension:
+1. **Trade for blueprint** — spend N artifacts to learn a recipe permanently for the cycle (or persistently for legendary tier). This is the alpha's primary uplink interaction.
+2. **Ship to Earth** *(post-alpha)* — sacrifices the artifact for a **server-wide** tech-tree unlock that opens a new craftable template for every player on the server.
+3. **Burn as crafting ingredient** *(post-alpha)* — consume as a high-tier component in a specific recipe, e.g. Alien-tier suit assemblies.
+
+The three-way choice lands once the post-alpha tech-tree pass ships. Today, only fate #1 is implemented; the other two reserve their place in the design.
 
 ### Data Schema (sketch)
 
@@ -265,30 +340,77 @@ Affixes are bonus stat lines drawn from a per-slot pool. Each affix is one of:
 
 Computed assembly stats = sum/composition of base stats + affixes from all slots, applied through fixed combination rules (e.g. recoil = `frame.baseRecoil * grip.recoilControl`, reload = `magazine.reloadSpeed * grip.reloadSpeed`).
 
-## Earth Trade & Tech Tree
-
-Every artifact recovered from the dungeon is, by default, an Alien-tier part. At the artifact uplink/analyzer, the player chooses one of three fates per artifact (full list and trade-offs in the [Crafting & Assembly](#crafting--assembly) section):
-
-- **Equip** — keep the artifact as the Alien-tier part it is.
-- **Ship to Earth** — sacrifice it for a server-wide tech-tree unlock (a new blueprint, part template, or base module made craftable for everyone).
-- **Burn as crafting ingredient** — consume it as a component in a specific high-tier recipe.
-
-The three-way choice creates real spend tension: do you keep the rare part, donate it for a permanent server-wide unlock, or burn it crafting a one-off endgame item? Tech-tree unlocks tell players *what they can build*; players still have to scavenge their own parts (or trade with crewmates) to actually build it.
-
 ## Base Building
 
-- **Grid-snapped tile placement** on the surface.
-- Buildables include walls, auto-turrets, crafting stations, storage, suit/weapon assembly benches, artifact uplink (to ship loot to Earth).
-- Base persists across deaths and perihelion cycles. Base damage from horde nights must be repaired with parts.
-- Intuitive build/edit mode toggle on the surface; not accessible from inside the dungeon.
+- **Grid-snapped tile placement** on the 32-pixel surface grid.
+- Build mode is driven by the equipped hotbar slot — selecting a placeable item enters build mode automatically; deselecting exits. No separate toggle key.
+- In top-down view, the build ghost shows under the cursor; in first-person, a translucent **3D ghost cube** is raycast at the tile under the camera reticle.
+- Base persists across deaths and perihelion cycles. The Power Link auto-rebuilds at cycle reset; everything else stays as the player left it.
+- Build mode is **surface-only** — not accessible inside the dungeon.
+
+### Buildings (alpha set)
+
+| Building | HP | Role |
+|----------|----|------|
+| **Wall** | 200 | Block enemy movement; soak attacks. Hand-craftable from scrap. |
+| **Auto-Turret** | 120 | Server-side targeting, fires at any enemy in 380px range every 750ms. Powered (see below). |
+| **Workbench** | 150 | Crafting station tier 1 — gates Forge, Electronics Bench, Uplink. |
+| **Forge** | 220 | Crafting station tier 2 — heavy/alloy recipes. |
+| **Electronics Bench** | 130 | Crafting station tier 2 — turrets and electronics. |
+| **Artifact Uplink** | 200 | Spend-artifacts-for-blueprints trade store. |
+| **Power Link** *(planned)* | 800 | Central structure that doubles as the dungeon entrance and the base's power source. See [Power System](#power-system). |
+
+## Power System
+
+*(Phases 1 + 2 land alongside the hostile-AI horde update; capacity scaling and async crafting follow.)*
+
+The Power Link is the load-bearing piece of the base — both the dungeon portal and the central power source for active defences and crafting.
+
+**Power Link as the dungeon portal.** The static `stairs_down` interactable is replaced by a destructible Power Link building at the surface origin. The Link is a real building: it has HP and enemies can attack it.
+
+**Depth-bound descent.** The Power Link tracks the **deepest floor any crewmate has reached on the current cycle**. Pressing E on the surface Link teleports you straight to that floor — not always floor 1. So if the crew has pushed to floor 6 and then comes back up to extract, re-entering the Link drops them at floor 6, not the entrance. Intra-dungeon stairs still work normally for floor-by-floor descent.
+
+This means coming back up to bank loot or repair the base is cheap (the portal is a fast-travel back to the frontier), and crewmates who join mid-dive land at the same depth as the rest of the party.
+
+**Destruction = dungeon reset.** When the Power Link is destroyed, the deepest-reached counter resets to 1 and **every dungeon scene is dropped + reseeded**. The next time anyone enters the Link, they land in a fresh floor 1 with a brand-new procgen layout. This is intentionally heavy: losing the Link mid-cycle costs the crew their entire dungeon push. Defending the Link during a horde matters because its destruction is *not* a per-perihelion reset — it can happen mid-cycle and the crew has to climb the dungeon all over again. (Cycle-end perihelion still resets the dungeon as before; this is the "intentional" reset path.)
+
+**Powered buildings.** Auto-turrets and (later) crafting stations require power to function:
+- While the Power Link is alive, all powered buildings work normally.
+- When the Power Link is destroyed, **all turrets stop firing** and (post-async-crafting) all running craft jobs pause.
+- The Link auto-rebuilds at full HP when perihelion ends, so the cycle reset always restores defences.
+
+**Capacity scales with depth.** *(Phase 3, planned.)* The same deepest-floor counter that drives the portal target also drives power capacity: each new floor reached on the current cycle adds to the Power Link's capacity. Buildings declare a `powerDraw`; total draw across the base must stay under capacity or the lowest-priority defences shut down. Pushing deeper into the dungeon directly fuels a stronger surface base — the dive loop and the build loop are wired together.
+
+**Destruction = reset.** When the Link goes down (during a horde or otherwise), the depth-power chain resets. The crew has to push the dungeon again to rebuild capacity. This makes defending the Link the single most important objective during perihelion.
+
+**Async crafting** *(Phase 4, planned).* Recipes gain a `craftTimeMs`. Station crafts start a job; output appears when the timer expires. Jobs draw power for their duration. Multiple jobs queue at a station. Hand-craftable basics stay instant.
 
 ## Perihelion & Horde
 
-- The planet reaches perihelion every **3 in-game days**.
-- One in-game day ≈ **1–2 hours real-time** (so a perihelion cycle is ~3–6 real-time hours).
-- At perihelion: monsters frenzy and assault the surface base in a horde.
-- **Combat model:** auto-turrets provide baseline DPS; players fill gaps, repair damaged structures, kite elites, focus high-priority targets. Horde is survivable solo with a strong base, but designed for the whole crew to be online and active.
-- After the horde, the dungeon regenerates: enemies repopulate, traps re-arm, loot containers refill, and any unrecovered corpses (and their gear) are lost.
+- The planet reaches perihelion every **3 in-game days**. One in-game day = 5 real minutes during the alpha (a full cycle is 15 real minutes — short enough to test the loop in one sitting; the GDD-canonical 1–2 hr/day pacing returns post-alpha).
+- A world clock + countdown HUD is always visible at the top of the screen: `Cycle N • perihelion in M:SS`. The HUD turns red and pulses while a horde is active.
+
+### Horde Mechanics (alpha-shipped)
+
+- At perihelion, surface waves spawn at the perimeter (~700px ring) every ~15 seconds for 60 seconds total. Wave size and composition scale with cycle index.
+- Enemies in the wave can **damage walls** — melee enemies in contact with a building tile chew through it at their melee DPS rate. Walls and structures take real damage; the player can repair (re-place) afterward.
+- **Auto-turrets** acquire any enemy in range and fire on cooldown. Player projectiles and turret projectiles share the same ownership path.
+- When the horde ends, the cycle counter increments. Cycle reset:
+  1. Any players still in dungeon scenes are evicted to the surface.
+  2. All dungeon scenes are dropped; procgen reseeds them next descent.
+  3. Surface corpses + dropped loot are wiped (the "recover before perihelion or lose it" pressure).
+  4. Per-cycle blueprints wipe; persistent blueprints stay.
+  5. The Power Link is rebuilt at full HP *(once shipped)*.
+
+### Hostile AI During Perihelion *(planned)*
+
+Enemies during the horde acquire targets by priority instead of just sitting still until the player walks close:
+
+```
+Power Link > turret > workstation > wall > player
+```
+
+They greedy-pathfind toward the highest-priority target in range — no full A*; walls become natural choke points because melee enemies will path into them, get stuck, and start chewing through. After the horde ends, AI reverts to wander/idle (or only attacks players on sight). This is the headline change to the horde: it stops being a wave-survival timer and becomes an active **defend-the-objective** event.
 
 ## Lobby & Server-Creation UX
 
@@ -379,17 +501,57 @@ Beyond browser-on-Vercel, three platforms are realistic targets later:
 
 For the alpha and first public beta, **stay browser-only on Vercel + itch.io.** Wrappers are a beta+ concern; they're worth the effort once organic browser traction proves the game.
 
-## Alpha Scope
+## Alpha Scope & Implementation Status
 
-**Build multiplayer infrastructure first.** The hardest technical risk is realtime sync over websockets between authenticated players in created servers. De-risk that before any gameplay systems.
+The hardest risk to get out of the way was realtime sync over websockets between authenticated players in created servers. That work shipped first; gameplay systems layered on top of proven netcode.
 
-Phase 1 — Multiplayer infra spike:
+### Shipped
 
-1. **Account & auth** (Supabase Auth): register, login, account profile (display name).
-2. **Lobby**: server browser (filterable list of public servers), create-server form (name, visibility, password, max slots, optional seed), join-by-code for private servers.
-3. **Game-server registry**: thin service mapping `server_id → host:port`, with on-demand spin-up of an empty game-server process when a player joins a dormant server.
-4. **Per-server character provisioning**: on first join to a server, create the character record with the starter kit; on subsequent joins, restore.
-5. **Websocket position sync**: two authenticated players in the same server see each other move in real time on a placeholder surface map.
-6. **Idle shutdown + state flush**: game-server process flushes character/world state back to Supabase on graceful shutdown and restores on next boot.
+**Infrastructure**
+- Account & auth (Supabase): register, login, email confirmation flow with `/auth/callback`, account profile, settings page.
+- Lobby: server browser with filters, server-creation form (name, visibility, password, max slots, world seed), join-by-id, owner-only delete.
+- Game-server registry: server records in Supabase, on-demand process spin-up via Fly.io, idle shutdown + state flush, per-server character provisioning.
+- Wire protocol: Zod schemas in `@dumrunner/shared` validate every inbound message; PROTOCOL_VERSION negotiation on auth handshake; HMAC-SHA256-signed JoinTokens.
+- Deployment: client + lobby on Vercel, game server on Fly with `auto_stop_machines=stop` so it scales to zero. Tracked via `JOIN_TOKEN_SECRET` shared across both.
 
-Once Phase 1 is solid, layer combat, the dungeon, items, base-building, and the horde on top of the proven netcode.
+**Core gameplay**
+- Server-authoritative movement with client prediction + soft reconciliation. Stamina + sprint, shield system, per-template enemy stuns.
+- Dungeon descent with procedural floor layouts, deterministic from `(worldSeed, cycle, floorIndex)`. Per-floor extract pad → surface.
+- Top-down (Pixi) renderer + 2.5D first-person renderer (raycaster with grid DDA + sprite billboards). Toggle with V.
+- 4 enemy templates (chaser_melee, shooter_drone, brute_chaser, dummy_target) with mix-and-match movement / attack profiles, FSM, line-of-sight gating.
+- Slot-based inventory (36 slots, 9 hotbar + 27 bag), drag/drop, sort, suit equipment slots.
+- Pistol + knife combat. Hold-to-fire with server-side rate limiting.
+- Naked respawn (corpse retains all loot at death position; corpse persists until perihelion or pickup).
+
+**Items & crafting**
+- 7-material component schema (`scrap`, `wire`, `alloy`, `circuit`, `biotic`, `crystal`, `artifact`).
+- Per-template enemy loot tables + dungeon scatter loot in rooms.
+- Suit equipment with **real stat effects**: chassis +HP, plating +shield, life support +stamina + regen, utility_mod +move speed. Cargo grid is reserved.
+- Affix system shipped (5 affix kinds rolling on suit parts, tier-scaled values, stacking into suit stats accumulator).
+- Workstation buildings (workbench, forge, electronics_bench) + Artifact Uplink + auto-turret.
+- Recipe schema with workstation + blueprintId fields. Per-station crafting modals (2-column UI, blueprint list left, requirements detail right). Inventory's "Field Craft" tab for hand-craftable basics.
+- Blueprint catalog + artifact trade store. Per-cycle vs persistent blueprint sets (persistent slot reserved for legendary tier).
+- Character stats panel (base + suit modifiers) + per-part hover tooltip listing each rolled affix.
+
+**Horde mechanic**
+- Cycle clock + perihelion countdown HUD. 15 minutes per cycle in alpha (3 days × 5 min/day).
+- Wave spawning at the surface perimeter during perihelion. Walls take damage from melee enemies. Auto-turrets fire back.
+- Cycle reset wipes corpses, drops dungeon scenes (regen on next descent), wipes per-cycle blueprints, increments cycle counter.
+
+### Active / Next Up
+
+- **Power Link** as central structure — replaces the surface stairs with a destructible building that doubles as the dungeon portal and the power source. Phase 1.
+- **Hostile AI during perihelion** — target priority hierarchy (Power Link > turret > workstation > wall > player), greedy pathfinding. Phase 2.
+- **Power capacity scales with depth** — each floor pushed adds capacity; powered buildings draw against it; over-capacity disables low-priority defences. Phase 3.
+- **Async crafting with timers** — recipes gain `craftTimeMs`, jobs queue at stations, draw power while running. Phase 4.
+
+### Deferred Past Alpha
+
+- Real weapon part-assembly system (frame/barrel/grip/magazine/mod). Today's combat ships a hardcoded pistol + knife.
+- Hazard system (radiation, toxic, cold, heat) and biome-specific mitigation gating.
+- Faction champions / boss enemies + the artifact-as-Alien-tier-part path.
+- Earth tech-tree unlocks (currently the artifact uplink only trades blueprints; "Ship to Earth" + "Burn as ingredient" fates land later).
+- Cargo grid (Tetris) inventory model. Today's slot inventory is fixed at 36.
+- Pixel-art textures (the asset_gen pipeline is its own roadmap; current visuals are colored shapes / SVG icons).
+- Sound + spatial audio.
+- Mobile (Capacitor) + desktop (Electron) wrappers.
