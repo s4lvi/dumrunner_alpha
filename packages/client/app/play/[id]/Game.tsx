@@ -678,7 +678,12 @@ export function Game({ serverId }: { serverId: string }) {
         setKnownBlueprints(new Set(msg.knownBlueprints));
         break;
       case 'error':
-        console.error('[server error]', msg.message);
+        // Expected "can't do this" codes are surfaced via the toast +
+        // friendlyErrorMessage; logging them as console.error makes it
+        // look like a crash. Only log unknown codes for debugging.
+        if (!isExpectedServerError(msg.message)) {
+          console.warn('[server error]', msg.message);
+        }
         setToast({
           message: friendlyErrorMessage(msg.message),
           key: Date.now(),
@@ -1330,6 +1335,17 @@ function friendlyErrorMessage(code: string): string {
     default:
       return code.replace(/_/g, ' ');
   }
+}
+
+// Codes the server emits for routine "can't do this" interactions —
+// covered by friendlyErrorMessage above. Anything outside this set is
+// surprising and worth logging.
+function isExpectedServerError(code: string): boolean {
+  return (
+    code === 'station_busy' ||
+    code === 'insufficient_power' ||
+    code === 'power_link_offline'
+  );
 }
 
 // Transient on-screen toast for server-pushed errors. Shows top-right
