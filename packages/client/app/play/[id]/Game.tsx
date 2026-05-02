@@ -80,6 +80,12 @@ export function Game({ serverId }: { serverId: string }) {
   // Ref mirror so the keydown effect (set up once) reads the live value.
   const nearWorkstationsRef = useRef<Set<BuildingKind>>(new Set());
   const [showTradeModal, setShowTradeModal] = useState(false);
+  // Currently-open workstation modal (workbench / forge / electronics_bench),
+  // or null when no station modal is mounted. Mutually exclusive with the
+  // trade modal — opening one closes the other.
+  const [stationModalKind, setStationModalKind] = useState<BuildingKind | null>(
+    null
+  );
   // Renderer pick. Initialised from URL param `?fps=1` for backwards-compat;
   // the V hotkey toggles it at runtime.
   const [useFps, setUseFps] = useState<boolean>(() => {
@@ -465,10 +471,10 @@ export function Game({ serverId }: { serverId: string }) {
   // leaves it released — browsers don't allow programmatic re-lock without
   // a fresh user gesture, so the player clicks the canvas to re-engage FPS.
   useEffect(() => {
-    if (!showInventory && !showTradeModal) return;
+    if (!showInventory && !showTradeModal && !stationModalKind) return;
     if (typeof document === 'undefined') return;
     if (document.pointerLockElement) document.exitPointerLock?.();
-  }, [showInventory, showTradeModal]);
+  }, [showInventory, showTradeModal, stationModalKind]);
 
   // Hot-swap renderers when `useFps` flips. We snapshot scene state from
   // the outgoing renderer, destroy it, then instantiate the other one with
@@ -549,18 +555,38 @@ export function Game({ serverId }: { serverId: string }) {
       if (e.key === 'Escape') {
         setShowInventory(false);
         setShowTradeModal(false);
+        setStationModalKind(null);
         return;
       }
-      // E to interact. Priority: layout interactables (stairs / extract)
-      // first, then nearby artifact_uplink → opens the trade modal.
+      // E to interact. Precedence:
+      //   1. layout interactables (stairs / extract)
+      //   2. artifact uplink → opens trade modal
+      //   3. workstation (workbench / forge / electronics_bench) →
+      //      opens that station's crafting modal
       if (e.key === 'e' || e.key === 'E') {
         const near = nearInteractableRef.current;
         if (near) {
           sendOnLiveWs({ type: 'interact', interactableId: near.id });
           return;
         }
-        if (nearWorkstationsRef.current.has('artifact_uplink')) {
+        const stations = nearWorkstationsRef.current;
+        if (stations.has('artifact_uplink')) {
+          setStationModalKind(null);
           setShowTradeModal(true);
+          return;
+        }
+        // Pick a deterministic workstation when multiple overlap.
+        const stationOrder: BuildingKind[] = [
+          'workbench',
+          'forge',
+          'electronics_bench',
+        ];
+        for (const k of stationOrder) {
+          if (stations.has(k)) {
+            setShowTradeModal(false);
+            setStationModalKind(k);
+            return;
+          }
         }
         return;
       }
@@ -625,6 +651,22 @@ export function Game({ serverId }: { serverId: string }) {
         {!nearInteractable && nearWorkstations.has('artifact_uplink') && (
           <InteractPrompt label="Trade — Artifact Uplink" />
         )}
+        {!nearInteractable &&
+          !nearWorkstations.has('artifact_uplink') &&
+          (() => {
+            for (const k of [
+              'workbench',
+              'forge',
+              'electronics_bench',
+            ] as BuildingKind[]) {
+              if (nearWorkstations.has(k)) {
+                return (
+                  <InteractPrompt label={`Use — ${STATION_LABEL[k]}`} />
+                );
+              }
+            }
+            return null;
+          })()}
         <ControlsHint useFps={useFps} />
 
         {showInventory && (
@@ -633,7 +675,6 @@ export function Game({ serverId }: { serverId: string }) {
             equipment={equipment}
             selected={hotbarSelection}
             knownBlueprints={knownBlueprints}
-            nearWorkstations={nearWorkstations}
             onClose={() => setShowInventory(false)}
             onSwap={(from, to) => sendOnLiveWs({ type: 'inventory_swap', from, to })}
             onSort={() => sendOnLiveWs({ type: 'inventory_sort' })}
@@ -662,6 +703,19 @@ export function Game({ serverId }: { serverId: string }) {
             onClose={() => setShowTradeModal(false)}
             onPurchase={(blueprintId) =>
               sendOnLiveWs({ type: 'purchase_blueprint', blueprintId })
+            }
+          />
+        )}
+
+        {stationModalKind && (
+          <WorkstationModal
+            kind={stationModalKind}
+            inventory={inventory}
+            knownBlueprints={knownBlueprints}
+            nearWorkstations={nearWorkstations}
+            onClose={() => setStationModalKind(null)}
+            onCraft={(recipeId) =>
+              sendOnLiveWs({ type: 'craft_request', recipeId })
             }
           />
         )}
@@ -917,7 +971,6 @@ function InventoryPanel({
   equipment,
   selected,
   knownBlueprints,
-  nearWorkstations,
   onClose,
   onSwap,
   onSort,
@@ -930,7 +983,6 @@ function InventoryPanel({
   equipment: Equipment;
   selected: number;
   knownBlueprints: Set<string>;
-  nearWorkstations: Set<BuildingKind>;
   onClose: () => void;
   onSwap: (from: number, to: number) => void;
   onSort: () => void;
@@ -1019,7 +1071,6 @@ function InventoryPanel({
           <CraftPanel
             inventory={inventory}
             knownBlueprints={knownBlueprints}
-            nearWorkstations={nearWorkstations}
             onCraft={onCraft}
           />
         </div>
@@ -1113,27 +1164,96 @@ function TradeModal({
   );
 }
 
-function CraftPanel({
+// Per-workstation crafting modal. Opens when the player presses E within
+// range of a workbench / forge / electronics_bench. Lists every recipe
+// that targets THIS station + that the player has the blueprint for.
+function WorkstationModal({
+  kind,
   inventory,
   knownBlueprints,
   nearWorkstations,
+  onClose,
+  onCraft,
+}: {
+  kind: BuildingKind;
+  inventory: Inventory;
+  knownBlueprints: Set<string>;
+  nearWorkstations: Set<BuildingKind>;
+  onClose: () => void;
+  onCraft: (recipeId: string) => void;
+}) {
+  const recipes = listRecipes().filter(
+    (r) =>
+      r.workstation === kind &&
+      (r.blueprintId === null || knownBlueprints.has(r.blueprintId))
+  );
+  const inRange = nearWorkstations.has(kind);
+  return (
+    <div
+      className="absolute top-3 left-1/2 -translate-x-1/2 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded shadow-lg pointer-events-auto"
+      style={{ width: 'min(560px, 90vw)' }}
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[color:var(--panel-border)] gap-6">
+        <h2 className="font-semibold flex items-center gap-2">
+          <ItemIcon kind="placeable" subkind={kind} />
+          <span>{STATION_LABEL[kind] ?? kind}</span>
+        </h2>
+        <button
+          onClick={onClose}
+          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+        >
+          Close
+        </button>
+      </div>
+      {!inRange && (
+        <div className="px-4 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
+          Move closer to the {STATION_LABEL[kind] ?? kind} to craft.
+        </div>
+      )}
+      {recipes.length === 0 ? (
+        <div className="px-4 py-6 text-zinc-500 text-xs">
+          No blueprints available for this station yet. Buy more at the
+          Artifact Uplink.
+        </div>
+      ) : (
+        <ul className="divide-y divide-[color:var(--panel-border)] px-2">
+          {recipes.map((r) => (
+            <CraftRow
+              key={r.id}
+              recipe={r}
+              inventory={inventory}
+              nearWorkstations={nearWorkstations}
+              onCraft={onCraft}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Inventory crafting section. Only lists "field" recipes — ones with no
+// workstation requirement, plus a known blueprint (or no blueprint).
+// Anything tied to a station opens that station's own modal instead.
+function CraftPanel({
+  inventory,
+  knownBlueprints,
   onCraft,
 }: {
   inventory: Inventory;
   knownBlueprints: Set<string>;
-  nearWorkstations: Set<BuildingKind>;
   onCraft: (recipeId: string) => void;
 }) {
-  // Hide blueprinted recipes the player hasn't learned. Showing them adds
-  // noise without giving the player any actionable info — they'll surface
-  // again the moment the blueprint is granted.
   const recipes = listRecipes().filter(
-    (r) => r.blueprintId === null || knownBlueprints.has(r.blueprintId)
+    (r) =>
+      r.workstation === null &&
+      (r.blueprintId === null || knownBlueprints.has(r.blueprintId))
   );
+  if (recipes.length === 0) return null;
   return (
     <div className="pt-2 border-t border-[color:var(--panel-border)]">
       <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
-        Crafting
+        Field Craft
       </div>
       <ul className="space-y-1">
         {recipes.map((r) => (
@@ -1141,7 +1261,8 @@ function CraftPanel({
             key={r.id}
             recipe={r}
             inventory={inventory}
-            nearWorkstations={nearWorkstations}
+            // No station context — basic recipes never check it.
+            nearWorkstations={EMPTY_STATION_SET}
             onCraft={onCraft}
           />
         ))}
@@ -1149,6 +1270,7 @@ function CraftPanel({
     </div>
   );
 }
+const EMPTY_STATION_SET: Set<BuildingKind> = new Set();
 
 const STATION_LABEL: Record<BuildingKind, string> = {
   wall: 'wall',
