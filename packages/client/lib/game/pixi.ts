@@ -1057,31 +1057,26 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     });
   }
 
-  // Small bright head + tapered trail behind it pointing back along the
-  // velocity vector. Reads as a fast-moving round at 1500 px/s.
+  // Pure tapered streak — no head dot. At 2250 px/s the streak is the
+  // bullet visually; the head was redundant. Two layered strokes
+  // approximate a tapered fade.
   function drawProjectileShape(
     g: Graphics,
     color: number,
     vx: number,
     vy: number
   ) {
-    const TRAIL_LEN = 22;
+    const TRAIL_LEN = 28;
     const len = Math.hypot(vx, vy) || 1;
     const ux = vx / len;
     const uy = vy / len;
     g.clear();
-    // Trail — thicker at the head, drawn in a couple of fading strokes
-    // to approximate a tapered streak with cheap Graphics calls.
-    const tailX = -ux * TRAIL_LEN;
-    const tailY = -uy * TRAIL_LEN;
-    g.moveTo(tailX, tailY)
+    g.moveTo(-ux * TRAIL_LEN, -uy * TRAIL_LEN)
       .lineTo(0, 0)
-      .stroke({ color, width: 1, alpha: 0.35 });
-    g.moveTo(-ux * (TRAIL_LEN * 0.6), -uy * (TRAIL_LEN * 0.6))
+      .stroke({ color, width: 1, alpha: 0.3 });
+    g.moveTo(-ux * (TRAIL_LEN * 0.55), -uy * (TRAIL_LEN * 0.55))
       .lineTo(0, 0)
-      .stroke({ color, width: 2, alpha: 0.6 });
-    // Bright head dot.
-    g.circle(0, 0, 2.5).fill({ color });
+      .stroke({ color, width: 2.5, alpha: 0.85 });
   }
 
   function addBuilding(b: BuildingState) {

@@ -411,8 +411,27 @@ export function generateLockedRoomMeta(
     (w) => !layout.rooms.some((r) => sameRect(r, w))
   );
 
-  // Lock approximately 1 in 3 non-entrance rooms. Skew higher with depth
-  // so deeper floors are more frequently gated.
+  // Lock approximately 1 in 3 non-entrance rooms. Skew higher with
+  // depth so deeper floors are more frequently gated. The room
+  // containing the stairs-down interactable is excluded — locking it
+  // would put progression behind a key drop, which is bad UX since
+  // keys aren't guaranteed to appear on a floor.
+  const stairs = layout.interactables.find((i) => i.kind === 'stairs_down');
+  let stairsRoomIndex = -1;
+  if (stairs) {
+    for (let i = 0; i < layout.rooms.length; i++) {
+      const r = layout.rooms[i];
+      if (
+        stairs.x >= r.x &&
+        stairs.x <= r.x + r.w &&
+        stairs.y >= r.y &&
+        stairs.y <= r.y + r.h
+      ) {
+        stairsRoomIndex = i;
+        break;
+      }
+    }
+  }
   const lockedSet = new Set<number>();
   const lockChance = Math.min(
     0.55,
@@ -420,6 +439,7 @@ export function generateLockedRoomMeta(
   );
   const doors: InitialDoor[] = [];
   for (let i = 1; i < layout.rooms.length; i++) {
+    if (i === stairsRoomIndex) continue;
     if (rng() > lockChance) continue;
     const room = layout.rooms[i];
     const tiles = pickDoorTilesForRoom(room, corridorRects, tileSize);

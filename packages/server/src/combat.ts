@@ -33,8 +33,8 @@ export const COMBAT = {
 
   // Hardcoded pistol stats (will become per-weapon once parts land).
   PISTOL_DAMAGE: 25,
-  PISTOL_PROJECTILE_SPEED: 1500, // px/sec — feels less laggy in combat
-  PISTOL_PROJECTILE_TTL_MS: 1200,
+  PISTOL_PROJECTILE_SPEED: 2250, // px/sec
+  PISTOL_PROJECTILE_TTL_MS: 800,
   PISTOL_PROJECTILE_RADIUS: 4,
   PISTOL_FIRE_INTERVAL_MS: 250, // 4 shots/sec
 

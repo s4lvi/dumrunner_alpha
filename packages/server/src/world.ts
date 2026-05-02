@@ -987,10 +987,9 @@ export class World {
     // doesn't have to wedge into a wall corner to interact.
     if (Math.hypot(conn.x - cx, conn.y - cy) > 64) return;
 
-    if (countMaterial(conn.inventory, 'key') < 1) {
-      this.sendDirect(conn.ws, { type: 'error', message: 'no_key' });
-      return;
-    }
+    // No-key isn't an error — the prompt already tells the player they
+    // need a key. Silently reject so we don't spam the toast / console.
+    if (countMaterial(conn.inventory, 'key') < 1) return;
     consumeMaterial(conn.inventory, 'key', 1);
     scene.openDoor(buildingId);
     conn.inventoryDirty = true;

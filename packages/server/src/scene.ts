@@ -1458,6 +1458,39 @@ export class Scene {
             hitAction = () => this.damageEnemy(enemy, p.damage, now);
           }
         }
+        // Buildings block player bullets too — doors and the player's
+        // own walls should stop a round, not pass through it. Doors are
+        // intentionally unbreakable so we just consume the projectile
+        // without applying damage.
+        const tileSize = this.layout?.tileSize ?? 0;
+        if (tileSize > 0) {
+          for (const b of this.buildings.values()) {
+            const cx = (b.tileX + b.width / 2) * tileSize;
+            const cy = (b.tileY + b.height / 2) * tileSize;
+            const halfW = (b.width * tileSize) / 2 + p.radius;
+            const halfH = (b.height * tileSize) / 2 + p.radius;
+            const t = sweptAabbHit(
+              fromX,
+              fromY,
+              stepX,
+              stepY,
+              cx - halfW,
+              cy - halfH,
+              cx + halfW,
+              cy + halfH
+            );
+            if (t !== null && t < earliestT) {
+              earliestT = t;
+              const target = b;
+              hitAction =
+                target.kind === 'door'
+                  ? () => {
+                      /* doors absorb the round without taking damage */
+                    }
+                  : () => this.damageBuilding(target, p.damage, now);
+            }
+          }
+        }
       } else {
         for (const memberId of this.members) {
           const conn = this.bindings.connection(memberId);
@@ -1797,10 +1830,12 @@ export class Scene {
       return false;
     }
     if (this.buildings.size === 0) return true;
+    // 8px sample stride — half the smallest tile dimension we ship
+    // (32px tiles, 1×1 doors). Cheap; guarantees no door is missed.
     const dx = x2 - x1;
     const dy = y2 - y1;
     const len = Math.hypot(dx, dy);
-    const steps = Math.max(1, Math.ceil(len / 16));
+    const steps = Math.max(1, Math.ceil(len / 8));
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       if (this.isPointInAnyBuilding(x1 + dx * t, y1 + dy * t)) return false;
