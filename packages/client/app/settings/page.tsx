@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { supabaseServer } from '@/lib/supabase/server';
 import { AppNav } from '@/app/components/AppNav';
 import { SettingsForm } from './SettingsForm';
+import { AudioSettings } from './AudioSettings';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +27,9 @@ export default async function SettingsPage() {
         <p className="text-zinc-400 text-sm mb-8">{user.email}</p>
 
         <SettingsForm initialDisplayName={account?.display_name ?? ''} />
+
+        <h2 className="text-xl font-semibold mt-10 mb-3">Audio</h2>
+        <AudioSettings />
       </main>
     </>
   );

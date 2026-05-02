@@ -32,6 +32,7 @@ import {
 } from '@dumrunner/shared';
 import { runGame, type GameHandle } from '@/lib/game/pixi';
 import { runFpsGame } from '@/lib/game/fps';
+import { audio } from '@/lib/audio';
 
 type JoinResponse = {
   wsUrl: string;
@@ -157,6 +158,12 @@ export function Game({ serverId }: { serverId: string }) {
     maxStamina: 100,
   }));
   const selfIdRef = useRef<string | null>(null);
+  // Audio-bookkeeping refs. Compare the previous frame's snapshot
+  // against the next message's payload to fire pickup/damage SFX
+  // exactly once per real change.
+  const prevInventoryRef = useRef<Inventory | null>(null);
+  const prevSelfHpRef = useRef<number>(100);
+  const lastFootstepAtRef = useRef<number>(0);
   // Renderer pick. Initialised from URL param `?fps=1` for backwards-compat;
   // the V hotkey toggles it at runtime.
   const [useFps, setUseFps] = useState<boolean>(() => {
@@ -342,6 +349,8 @@ export function Game({ serverId }: { serverId: string }) {
         setKnownBlueprints(new Set(msg.knownBlueprints));
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
         selfIdRef.current = msg.self.characterId;
+        prevSelfHpRef.current = msg.self.hp;
+        prevInventoryRef.current = msg.inventory;
         setSelfStats({
           hp: msg.self.hp,
           maxHp: msg.self.maxHp,
@@ -421,6 +430,17 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'player_moved':
         gameRef.current?.movePlayer(msg.characterId, msg.x, msg.y);
+        // Footstep SFX for self only, throttled. Server broadcasts a
+        // player_moved at every meaningful position delta; we throttle
+        // playback to a step cadence (~330ms) so it feels like
+        // footfalls rather than a hum.
+        if (msg.characterId === selfIdRef.current) {
+          const now = performance.now();
+          if (now - lastFootstepAtRef.current > 330) {
+            lastFootstepAtRef.current = now;
+            audio.playSfx('player-footstep');
+          }
+        }
         break;
       case 'player_damaged':
         gameRef.current?.setPlayerHp(
@@ -438,6 +458,10 @@ export function Game({ serverId }: { serverId: string }) {
             shield: msg.shield,
             maxShield: msg.maxShield,
           }));
+          // Real damage = hp dropped from the previous frame. Avoids
+          // firing on shield regen broadcasts that re-emit max stats.
+          if (msg.hp < prevSelfHpRef.current) audio.playSfx('player-hit');
+          prevSelfHpRef.current = msg.hp;
         }
         break;
       case 'player_stamina':
@@ -472,6 +496,7 @@ export function Game({ serverId }: { serverId: string }) {
             stamina: msg.stamina,
             maxStamina: msg.maxStamina,
           });
+          prevSelfHpRef.current = msg.hp;
         }
         break;
       case 'weapon_swung':
@@ -507,11 +532,22 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'enemy_damaged':
         gameRef.current?.setEnemyHp(msg.id, msg.hp, msg.maxHp);
+        audio.playSfx('robot-hit');
         break;
       case 'enemy_killed':
         gameRef.current?.removeEnemy(msg.id);
+        audio.playSfx('robot-destroy');
         break;
       case 'projectile_spawned':
+        // Self-fired projectiles play the pistol report. Turret-fired
+        // projectiles are also ownerKind 'player' but their owner is a
+        // building id, not the character — those are silent for now.
+        if (
+          msg.projectile.ownerKind === 'player' &&
+          msg.projectile.ownerCharacterId === selfIdRef.current
+        ) {
+          audio.playSfx('player-shoot');
+        }
         gameRef.current?.spawnProjectile(msg.projectile);
         break;
       case 'projectile_despawned':
@@ -603,9 +639,24 @@ export function Game({ serverId }: { serverId: string }) {
             : prev
         );
         break;
-      case 'inventory_changed':
+      case 'inventory_changed': {
+        // Diff the new inventory against the previous snapshot to fire
+        // pickup SFX. Pure state changes (sort, equip, swap) shouldn't
+        // fire the sound, only net material increases.
+        const prev = prevInventoryRef.current;
+        if (prev) {
+          const prevTotals = totalMaterials(prev);
+          const nextTotals = totalMaterials(msg.inventory);
+          if (nextTotals.artifact > prevTotals.artifact) {
+            audio.playSfx('collect-core');
+          } else if (nextTotals.other > prevTotals.other) {
+            audio.playSfx('collect-scrap');
+          }
+        }
+        prevInventoryRef.current = msg.inventory;
         setInventory(msg.inventory);
         break;
+      }
       case 'equipment_changed':
         setEquipment(msg.equipment);
         break;
@@ -627,6 +678,27 @@ export function Game({ serverId }: { serverId: string }) {
     return teardown;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptJoin]);
+
+  // Preload audio + arm the music once the player interacts (browser
+  // autoplay policy blocks audio.play() before any user gesture).
+  useEffect(() => {
+    audio.preload();
+    const unlock = () => audio.unlock();
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  // Background music tracks scene id. Surface = defense theme,
+  // dungeon = dungeon theme, anything else (loading) = silent.
+  useEffect(() => {
+    if (sceneId === 'surface') audio.playMusic('defense');
+    else if (sceneId.startsWith('dungeon:')) audio.playMusic('dungeon');
+    else audio.playMusic(null);
+  }, [sceneId]);
 
   useEffect(() => {
     showTradeModalRef.current = showTradeModal;
@@ -788,6 +860,15 @@ export function Game({ serverId }: { serverId: string }) {
           sendOnLiveWs({ type: 'open_door', buildingId: doorId });
           return;
         }
+        return;
+      }
+      // M toggles audio mute. Cheap; works any time.
+      if (e.key === 'm' || e.key === 'M') {
+        const muted = audio.toggleMuted();
+        setToast({
+          message: muted ? 'Audio muted' : 'Audio unmuted',
+          key: Date.now(),
+        });
         return;
       }
       // V toggles between top-down and FPS renderers. Swap is hot — we
@@ -1074,6 +1155,10 @@ function ControlsHint({ useFps }: { useFps: boolean }) {
         <Kbd>1–9</Kbd>
         <span className="ml-2">hotbar</span>
       </div>
+      <div>
+        <Kbd>M</Kbd>
+        <span className="ml-2">mute</span>
+      </div>
     </div>
   );
 }
@@ -1123,6 +1208,19 @@ function LinkSeveredOverlay() {
       `}</style>
     </div>
   );
+}
+
+// Sum every material stack into two buckets so the pickup-SFX diff
+// can tell "got an artifact" apart from "got anything else."
+function totalMaterials(inv: Inventory): { artifact: number; other: number } {
+  let artifact = 0;
+  let other = 0;
+  for (const slot of inv) {
+    if (slot.kind !== 'material') continue;
+    if (slot.materialId === 'artifact') artifact += slot.count;
+    else other += slot.count;
+  }
+  return { artifact, other };
 }
 
 // Map server error codes to player-facing copy. Anything not listed
