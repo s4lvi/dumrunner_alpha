@@ -29,6 +29,8 @@ import type {
 } from '@dumrunner/shared';
 import {
   addAmmo,
+  addAttachment,
+  addConsumable,
   addMaterial,
   addPart,
   addPlaceable,
@@ -1375,6 +1377,14 @@ export class Scene {
     }
     if (s.kind === 'weapon') {
       return addWeapon(inv, s.weapon);
+    }
+    if (s.kind === 'attachment') {
+      // addAttachment stacks if the same defId already exists, else takes
+      // a free slot. Returns false only when the bag is completely full.
+      return addAttachment(inv, s.defId, s.count);
+    }
+    if (s.kind === 'consumable') {
+      return addConsumable(inv, s.consumableId, s.count);
     }
     return true;
   }
