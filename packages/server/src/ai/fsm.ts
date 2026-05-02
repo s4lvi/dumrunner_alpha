@@ -117,8 +117,14 @@ export function tickEnemy(
     applyMovement(enemy, target, dt, env);
   } else if (!stunned && target && enemy.fsm === 'fleeing') {
     applyFlee(enemy, target, dt, env);
+  } else if (!stunned && !target && enemy.template.moveSpeed > 0) {
+    // Idle wander — the FSM has no aggro target so the enemy drifts
+    // around its spawn point, pausing at each waypoint, picking a new
+    // one when the pause expires. Sells "the dungeon is alive" without
+    // making enemies chase you across rooms.
+    applyWander(enemy, dt, now, env);
   }
-  // 'idle' = stand still for now. Future: patrol module.
+  // Stationary templates (turret-style dummies) stand still.
 
   if (
     Math.abs(enemy.x - enemy.lastBroadcastX) > POSITION_BROADCAST_EPSILON ||
@@ -265,6 +271,50 @@ function applyMovement(
   }
 }
 
+// Wander tuning. Radius from spawn the enemy can roam, distance threshold
+// at which a waypoint counts as reached, idle pause range, and the speed
+// scale applied to the template's normal moveSpeed during wander.
+const WANDER_RADIUS = 160;
+const WANDER_REACH = 6;
+const WANDER_PAUSE_MIN_MS = 1500;
+const WANDER_PAUSE_MAX_MS = 4000;
+const WANDER_SPEED_MULT = 0.4;
+
+function applyWander(
+  enemy: EnemyRuntime,
+  dt: number,
+  now: number,
+  env: AiEnvironment
+): void {
+  // Pause window: stand still until it expires.
+  if (now < enemy.wanderPauseUntil) return;
+
+  const dx = enemy.wanderTargetX - enemy.x;
+  const dy = enemy.wanderTargetY - enemy.y;
+  const dist = Math.hypot(dx, dy);
+
+  if (dist < WANDER_REACH) {
+    // Arrived. Pick a new waypoint within the spawn-room radius and
+    // set a pause before we head out again.
+    const angle = Math.random() * Math.PI * 2;
+    const r = 24 + Math.random() * (WANDER_RADIUS - 24);
+    enemy.wanderTargetX = enemy.spawnX + Math.cos(angle) * r;
+    enemy.wanderTargetY = enemy.spawnY + Math.sin(angle) * r;
+    enemy.wanderPauseUntil =
+      now +
+      WANDER_PAUSE_MIN_MS +
+      Math.random() * (WANDER_PAUSE_MAX_MS - WANDER_PAUSE_MIN_MS);
+    return;
+  }
+
+  // Walk slowly toward the current waypoint, respecting collision so
+  // wanderers can't push through walls.
+  const ux = dx / dist;
+  const uy = dy / dist;
+  const speed = enemy.template.moveSpeed * WANDER_SPEED_MULT * dt;
+  moveWithCollision(enemy, enemy.x + ux * speed, enemy.y + uy * speed, env);
+}
+
 function applyFlee(
   enemy: EnemyRuntime,
   target: AiTarget,
@@ -352,5 +402,10 @@ export function instantiateEnemy(
     stunUntil: 0,
     lastBroadcastX: x,
     lastBroadcastY: y,
+    // Wander seed: start at the spawn position, with no pause —
+    // tickEnemy picks a fresh waypoint on the first idle frame.
+    wanderTargetX: x,
+    wanderTargetY: y,
+    wanderPauseUntil: 0,
   };
 }

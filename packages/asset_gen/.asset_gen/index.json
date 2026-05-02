@@ -277,6 +277,304 @@
         "reasons": []
       },
       "createdAt": "2026-05-02T17:24:57.910Z"
+    },
+    {
+      "assetId": "asset_3c482dc8a08a453bb0ccd4d14e4c6b4e",
+      "cacheKey": "fd5826bf0f23dd9e8a5cd0984dad87f342e326d500e5b36c4d0ad4f39bdd2f26",
+      "request": {
+        "requestId": "smoke:enemy_animation:chaser_melee_idle:asset_cc0a687dc77142f193c50fbd325721bd",
+        "assetKind": "enemy_animation",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chaser_melee_idle",
+          "label": "rat-like tunnel scavenger",
+          "faction": "catacombs"
+        },
+        "visualBrief": {
+          "subject": "rat-like mutant scavenger",
+          "materials": [
+            "patchy fur",
+            "rusted scrap implants"
+          ],
+          "colors": [
+            "#a855f7",
+            "#22c55e",
+            "#111827"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "same creature identity across frames"
+          ],
+          "mustAvoid": [
+            "text",
+            "background scene",
+            "multiple creatures",
+            "sprite sheet"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        },
+        "animation": {
+          "baseAssetId": "asset_cc0a687dc77142f193c50fbd325721bd",
+          "action": "idle",
+          "frameCount": 2,
+          "directionMode": "omnidirectional",
+          "fps": 4,
+          "maxFrameDriftPx": 4
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_3c482dc8a08a453bb0ccd4d14e4c6b4e.png"
+      },
+      "metadata": {
+        "width": 128,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.82
+        },
+        "opaqueBounds": {
+          "x": 15,
+          "y": 10,
+          "w": 97,
+          "h": 40
+        },
+        "averageColors": [
+          "#442939",
+          "#3d2734"
+        ]
+      },
+      "animation": {
+        "action": "idle",
+        "frameCount": 2,
+        "frameWidth": 64,
+        "frameHeight": 64,
+        "fps": 4,
+        "directionMode": "omnidirectional",
+        "maxFrameDriftPx": 4,
+        "frames": [
+          {
+            "name": "idle_0",
+            "x": 0,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 15,
+              "y": 11,
+              "w": 34,
+              "h": 39
+            }
+          },
+          {
+            "name": "idle_1",
+            "x": 64,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 15,
+              "y": 10,
+              "w": 33,
+              "h": 39
+            }
+          }
+        ]
+      },
+      "verification": {
+        "score": 0.8,
+        "verdict": "pass",
+        "summary": "Generated idle cycle passed baseline frame checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-02T17:44:17.024Z"
+    },
+    {
+      "assetId": "asset_f63f913bbb9440458ebcd65633d4b55f",
+      "cacheKey": "fd9dcb9d6a457b30a1b9581e3f6caa2751206ddee768201d843bb03458fa5663",
+      "request": {
+        "requestId": "smoke:enemy_animation:chaser_melee_walk_4:asset_cc0a687dc77142f193c50fbd325721bd",
+        "assetKind": "enemy_animation",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chaser_melee_walk",
+          "label": "rat-like tunnel scavenger",
+          "faction": "catacombs"
+        },
+        "visualBrief": {
+          "subject": "rat-like mutant scavenger",
+          "materials": [
+            "patchy fur",
+            "rusted scrap implants"
+          ],
+          "colors": [
+            "#a855f7",
+            "#22c55e",
+            "#111827"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "same creature identity across frames"
+          ],
+          "mustAvoid": [
+            "text",
+            "background scene",
+            "multiple creatures",
+            "sprite sheet"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        },
+        "animation": {
+          "baseAssetId": "asset_cc0a687dc77142f193c50fbd325721bd",
+          "action": "walk",
+          "frameCount": 4,
+          "directionMode": "omnidirectional",
+          "fps": 8,
+          "maxFrameDriftPx": 5
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_f63f913bbb9440458ebcd65633d4b55f.png"
+      },
+      "metadata": {
+        "width": 256,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.82
+        },
+        "opaqueBounds": {
+          "x": 18,
+          "y": 8,
+          "w": 224,
+          "h": 47
+        },
+        "averageColors": [
+          "#3e1933",
+          "#3c2531",
+          "#361c2c",
+          "#331c27"
+        ]
+      },
+      "animation": {
+        "action": "walk",
+        "frameCount": 4,
+        "frameWidth": 64,
+        "frameHeight": 64,
+        "fps": 8,
+        "directionMode": "omnidirectional",
+        "maxFrameDriftPx": 5,
+        "frames": [
+          {
+            "name": "walk_0",
+            "x": 0,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 18,
+              "y": 10,
+              "w": 29,
+              "h": 43
+            }
+          },
+          {
+            "name": "walk_1",
+            "x": 64,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 15,
+              "y": 8,
+              "w": 35,
+              "h": 47
+            }
+          },
+          {
+            "name": "walk_2",
+            "x": 128,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 15,
+              "y": 9,
+              "w": 34,
+              "h": 44
+            }
+          },
+          {
+            "name": "walk_3",
+            "x": 192,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 14,
+              "y": 9,
+              "w": 36,
+              "h": 44
+            }
+          }
+        ]
+      },
+      "verification": {
+        "score": 0.8,
+        "verdict": "pass",
+        "summary": "Generated walk cycle passed baseline frame checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-02T17:47:22.860Z"
     }
   ],
   "jobs": [
@@ -442,6 +740,192 @@
       "error": null,
       "createdAt": "2026-05-02T17:24:28.413Z",
       "updatedAt": "2026-05-02T17:24:57.911Z"
+    },
+    {
+      "jobId": "job_f93b7c97da94497e862e8bdb29d2cba7",
+      "status": "approved",
+      "cacheKey": "fd5826bf0f23dd9e8a5cd0984dad87f342e326d500e5b36c4d0ad4f39bdd2f26",
+      "request": {
+        "requestId": "smoke:enemy_animation:chaser_melee_idle:asset_cc0a687dc77142f193c50fbd325721bd",
+        "assetKind": "enemy_animation",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chaser_melee_idle",
+          "label": "rat-like tunnel scavenger",
+          "faction": "catacombs"
+        },
+        "visualBrief": {
+          "subject": "rat-like mutant scavenger",
+          "materials": [
+            "patchy fur",
+            "rusted scrap implants"
+          ],
+          "colors": [
+            "#a855f7",
+            "#22c55e",
+            "#111827"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "same creature identity across frames"
+          ],
+          "mustAvoid": [
+            "text",
+            "background scene",
+            "multiple creatures",
+            "sprite sheet"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        },
+        "animation": {
+          "baseAssetId": "asset_cc0a687dc77142f193c50fbd325721bd",
+          "action": "idle",
+          "frameCount": 2,
+          "directionMode": "omnidirectional",
+          "fps": 4,
+          "maxFrameDriftPx": 4
+        }
+      },
+      "assetId": "asset_3c482dc8a08a453bb0ccd4d14e4c6b4e",
+      "error": null,
+      "createdAt": "2026-05-02T17:43:46.540Z",
+      "updatedAt": "2026-05-02T17:44:17.024Z"
+    },
+    {
+      "jobId": "job_99cf10a0a57249dbb716411efb167604",
+      "status": "approved",
+      "cacheKey": "fd9dcb9d6a457b30a1b9581e3f6caa2751206ddee768201d843bb03458fa5663",
+      "request": {
+        "requestId": "smoke:enemy_animation:chaser_melee_walk_4:asset_cc0a687dc77142f193c50fbd325721bd",
+        "assetKind": "enemy_animation",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chaser_melee_walk",
+          "label": "rat-like tunnel scavenger",
+          "faction": "catacombs"
+        },
+        "visualBrief": {
+          "subject": "rat-like mutant scavenger",
+          "materials": [
+            "patchy fur",
+            "rusted scrap implants"
+          ],
+          "colors": [
+            "#a855f7",
+            "#22c55e",
+            "#111827"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "same creature identity across frames"
+          ],
+          "mustAvoid": [
+            "text",
+            "background scene",
+            "multiple creatures",
+            "sprite sheet"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        },
+        "animation": {
+          "baseAssetId": "asset_cc0a687dc77142f193c50fbd325721bd",
+          "action": "walk",
+          "frameCount": 4,
+          "directionMode": "omnidirectional",
+          "fps": 8,
+          "maxFrameDriftPx": 5
+        }
+      },
+      "assetId": "asset_f63f913bbb9440458ebcd65633d4b55f",
+      "error": null,
+      "createdAt": "2026-05-02T17:46:31.163Z",
+      "updatedAt": "2026-05-02T17:47:22.861Z"
+    },
+    {
+      "jobId": "job_d1e3d3faeebc40f9a8d9c32c0b5db987",
+      "status": "generating",
+      "cacheKey": "91be62d381ae270160115352d87e72fc10466d32b0f9412d05d1a9b564f6ea3c",
+      "request": {
+        "requestId": "smoke:enemy_animation:chaser_melee_attack_3:asset_cc0a687dc77142f193c50fbd325721bd",
+        "assetKind": "enemy_animation",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chaser_melee_attack",
+          "label": "rat-like tunnel scavenger",
+          "faction": "catacombs"
+        },
+        "visualBrief": {
+          "subject": "rat-like mutant scavenger",
+          "materials": [
+            "patchy fur",
+            "rusted scrap implants"
+          ],
+          "colors": [
+            "#a855f7",
+            "#22c55e",
+            "#111827"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "same creature identity across frames"
+          ],
+          "mustAvoid": [
+            "text",
+            "background scene",
+            "multiple creatures",
+            "sprite sheet"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        },
+        "animation": {
+          "baseAssetId": "asset_cc0a687dc77142f193c50fbd325721bd",
+          "action": "attack",
+          "frameCount": 3,
+          "directionMode": "omnidirectional",
+          "fps": 8,
+          "maxFrameDriftPx": 5
+        }
+      },
+      "assetId": null,
+      "error": null,
+      "createdAt": "2026-05-02T17:48:11.781Z",
+      "updatedAt": "2026-05-02T17:48:41.720Z"
     }
   ]
 }

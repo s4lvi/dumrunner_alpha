@@ -25,4 +25,12 @@ export type EnemyRuntime = EnemyState & {
   // messages.
   lastBroadcastX: number;
   lastBroadcastY: number;
+
+  // Idle-wander state. While `targetCharacterId` is null and the enemy
+  // template can move, the FSM walks toward a randomly-chosen point
+  // within WANDER_RADIUS of the spawn position, pauses briefly on
+  // arrival, then picks a new point. A stationary template skips this.
+  wanderTargetX: number;
+  wanderTargetY: number;
+  wanderPauseUntil: number;
 };

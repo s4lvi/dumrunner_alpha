@@ -116,6 +116,28 @@ export const TIER_COLORS: Record<PartTier, number> = {
   Alien: 0xf97316,
 };
 
+// Room floor palette. One entry per "theme bucket"; rooms hash to a
+// bucket via their xy origin so the same room always reads the same
+// way. Kept to subtle dark-tinted variants so the floor reads as
+// "lived-in alien architecture" instead of party colours. Add entries
+// here for more variety; the hash space is unlimited.
+const ROOM_FLOOR_PALETTE: number[] = [
+  0x1f242c, // default neutral
+  0x232027, // dusty plum
+  0x1c2630, // damp slate-blue
+  0x252521, // sand-brown
+  0x1d2b25, // moss-green
+  0x2a2228, // rust
+  0x1f2a2c, // teal-grey
+  0x2b251f, // amber-brown
+];
+
+function roomFloorColor(r: Rect): number {
+  // Cheap deterministic mix on the room's tile-aligned origin.
+  const h = (Math.imul(r.x | 0, 0x85ebca6b) ^ Math.imul(r.y | 0, 0xc2b2ae35)) >>> 0;
+  return ROOM_FLOOR_PALETTE[h % ROOM_FLOOR_PALETTE.length];
+}
+
 // Per-material colour for ground-loot rendering. Mirrors MATERIALS in
 // shared/inventory.ts; out-of-band ids fall through to white.
 const MATERIAL_TINT: Record<string, number> = {
@@ -1555,7 +1577,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       // Surface — open world, draw the original infinite-feeling grid.
       drawOpenGrid(layoutLayer);
     } else {
-      drawDungeonFloor(layoutLayer, layout.walkables, layout.tileSize);
+      drawDungeonFloor(
+        layoutLayer,
+        layout.walkables,
+        layout.rooms,
+        layout.tileSize
+      );
     }
 
     if (!layout) return;
@@ -1583,18 +1610,36 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     parent.addChild(origin);
   }
 
-  function drawDungeonFloor(parent: Container, walkables: Rect[], tileSize: number) {
+  function drawDungeonFloor(
+    parent: Container,
+    walkables: Rect[],
+    rooms: Rect[],
+    tileSize: number
+  ) {
     // Dark void background then lit walkable rects on top. Walls are the
     // implicit gap between rects.
     const voidBg = new Graphics();
     voidBg.rect(-6000, -6000, 12000, 12000).fill({ color: 0x05070a });
     parent.addChild(voidBg);
 
+    // Default corridor / walkable fill — neutral. Rooms paint over with
+    // a tinted variant so each chamber reads differently.
     const floor = new Graphics();
     for (const r of walkables) {
       floor.rect(r.x, r.y, r.w, r.h).fill({ color: 0x1f242c });
     }
     parent.addChild(floor);
+
+    // Per-room tinted floors. Palette is derived from the room's stable
+    // identity (its xy origin) so the same dungeon colours the same way
+    // across clients on the same cycle.
+    if (rooms.length > 0) {
+      const tinted = new Graphics();
+      for (const r of rooms) {
+        tinted.rect(r.x, r.y, r.w, r.h).fill({ color: roomFloorColor(r) });
+      }
+      parent.addChild(tinted);
+    }
 
     // Tile gridlines inside walkables — gives the floor a visible grid sense.
     if (tileSize > 0) {

@@ -3,6 +3,8 @@ import type { AssetGenerateRequest } from '../src/schemas.js';
 const base = process.env.ASSET_GEN_PUBLIC_BASE_URL ?? 'http://localhost:8787';
 const token = process.env.ASSET_GEN_SERVICE_TOKEN;
 const mode = process.argv.includes('--animation') ? 'animation' : 'static';
+const animationAction = readOption('action') ?? 'idle';
+const animationFrames = readFrameCount(animationAction, readOption('frames'));
 const headers = {
   'content-type': 'application/json',
   ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -74,10 +76,10 @@ const staticRequests: AssetGenerateRequest[] = [
 function animationRequest(baseAssetId: string): AssetGenerateRequest {
   return {
     ...baseEnemyRequest,
-    requestId: `smoke:enemy_animation:chaser_melee_idle:${baseAssetId}`,
+    requestId: `smoke:enemy_animation:chaser_melee_${animationAction}_${animationFrames}:${baseAssetId}`,
     assetKind: 'enemy_animation',
     gameObject: {
-      id: 'chaser_melee_idle',
+      id: `chaser_melee_${animationAction}`,
       label: 'rat-like tunnel scavenger',
       faction: 'catacombs',
     },
@@ -88,11 +90,11 @@ function animationRequest(baseAssetId: string): AssetGenerateRequest {
     },
     animation: {
       baseAssetId,
-      action: 'idle',
-      frameCount: 2,
+      action: animationAction,
+      frameCount: animationFrames,
       directionMode: 'omnidirectional',
-      fps: 4,
-      maxFrameDriftPx: 4,
+      fps: animationAction === 'idle' ? 4 : 8,
+      maxFrameDriftPx: animationAction === 'death' ? 8 : 5,
     },
   };
 }
@@ -195,6 +197,24 @@ async function jsonFetch<T>(path: string, init: RequestInit): Promise<T> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readOption(name: string): string | null {
+  const prefix = `--${name}=`;
+  const inline = process.argv.find((arg) => arg.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const index = process.argv.indexOf(`--${name}`);
+  return index >= 0 ? process.argv[index + 1] ?? null : null;
+}
+
+function readFrameCount(
+  action: string,
+  raw: string | null
+): 2 | 3 | 4 {
+  if (raw === '2' || raw === '3' || raw === '4') return Number(raw) as 2 | 3 | 4;
+  if (action === 'walk') return 4;
+  if (action === 'attack') return 3;
+  return 2;
 }
 
 await main();
