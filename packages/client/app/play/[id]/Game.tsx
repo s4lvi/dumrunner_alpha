@@ -9,10 +9,16 @@ import {
   emptyInventory,
   AFFIX_DEFS,
   computeSuitStats,
+  ATTACHMENT_DEFS,
   HOTBAR_SIZE,
+  KEY_ARTIFACT_COST,
   listBlueprints,
   listRecipes,
   MATERIALS,
+  TIER_PIECE_SLOTS,
+  TIER_MOD_SLOTS,
+  type WeaponItem,
+  type WeaponPieceKind,
   partPrimaryStat,
   PLAYER_BASE_STATS,
   PROTOCOL_VERSION,
@@ -696,11 +702,18 @@ export function Game({ serverId }: { serverId: string }) {
 
   // Background music tracks scene id. Surface = defense theme,
   // dungeon = dungeon theme, anything else (loading) = silent.
+  // Cleanup stops music on unmount so it doesn't leak into the
+  // server browser / lobby pages after the player exits the match.
   useEffect(() => {
     if (sceneId === 'surface') audio.playMusic('defense');
     else if (sceneId.startsWith('dungeon:')) audio.playMusic('dungeon');
     else audio.playMusic(null);
   }, [sceneId]);
+  useEffect(() => {
+    return () => {
+      audio.playMusic(null);
+    };
+  }, []);
 
   useEffect(() => {
     showTradeModalRef.current = showTradeModal;
@@ -783,7 +796,7 @@ export function Game({ serverId }: { serverId: string }) {
         : null;
     gameRef.current.setBuildMode(kind);
     gameRef.current.setEquippedWeapon(
-      slot?.kind === 'weapon' ? slot.weaponId : null
+      slot?.kind === 'weapon' ? slot.weapon.weaponId : null
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useFps]);
@@ -801,7 +814,7 @@ export function Game({ serverId }: { serverId: string }) {
     gameRef.current?.setBuildMode(kind);
     // Equipped weapon: pistol/knife when the selected slot is a weapon, else
     // null. The renderer gates fire/swing visuals on this.
-    const weapon = slot?.kind === 'weapon' ? slot.weaponId : null;
+    const weapon = slot?.kind === 'weapon' ? slot.weapon.weaponId : null;
     gameRef.current?.setEquippedWeapon(weapon);
   }, [inventory, hotbarSelection, sceneId]);
 
@@ -977,6 +990,21 @@ export function Game({ serverId }: { serverId: string }) {
                 toInventoryIdx,
               })
             }
+            nearElectronicsBench={nearWorkstations.has('electronics_bench')}
+            onAttachSuitAffix={(suitSlot, defId) =>
+              sendOnLiveWs({
+                type: 'attach_suit_affix',
+                suitSlot,
+                attachmentDefId: defId,
+              })
+            }
+            onDetachSuitAffix={(suitSlot, idx) =>
+              sendOnLiveWs({
+                type: 'detach_suit_affix',
+                suitSlot,
+                attachmentIndex: idx,
+              })
+            }
             onCraft={(recipeId) =>
               sendOnLiveWs({ type: 'craft_request', recipeId })
             }
@@ -991,6 +1019,9 @@ export function Game({ serverId }: { serverId: string }) {
             onClose={() => setShowTradeModal(false)}
             onPurchase={(blueprintId) =>
               sendOnLiveWs({ type: 'purchase_blueprint', blueprintId })
+            }
+            onPurchaseKey={(count) =>
+              sendOnLiveWs({ type: 'purchase_key', count })
             }
           />
         )}
@@ -1011,11 +1042,44 @@ export function Game({ serverId }: { serverId: string }) {
               if (
                 kind === 'workbench' ||
                 kind === 'forge' ||
-                kind === 'electronics_bench'
+                kind === 'electronics_bench' ||
+                kind === 'weapon_bench'
               ) {
                 sendOnLiveWs({ type: 'pickup_station_outputs', kind });
               }
             }}
+            onAttachWeaponAffix={(idx, pieceKind, defId) =>
+              sendOnLiveWs({
+                type: 'attach_weapon_affix',
+                weaponInventoryIdx: idx,
+                pieceKind,
+                attachmentDefId: defId,
+              })
+            }
+            onDetachWeaponAffix={(idx, pieceKind) =>
+              sendOnLiveWs({
+                type: 'detach_weapon_affix',
+                weaponInventoryIdx: idx,
+                pieceKind,
+              })
+            }
+            onAttachWeaponMod={(idx, defId) =>
+              sendOnLiveWs({
+                type: 'attach_weapon_mod',
+                weaponInventoryIdx: idx,
+                attachmentDefId: defId,
+              })
+            }
+            onDetachWeaponMod={(idx, modIndex) =>
+              sendOnLiveWs({
+                type: 'detach_weapon_mod',
+                weaponInventoryIdx: idx,
+                modIndex,
+              })
+            }
+            onTierUpWeapon={(idx) =>
+              sendOnLiveWs({ type: 'tier_up_weapon', weaponInventoryIdx: idx })
+            }
           />
         )}
 
@@ -1406,6 +1470,9 @@ function InventoryPanel({
   onContextMenu,
   onEquip,
   onUnequip,
+  nearElectronicsBench,
+  onAttachSuitAffix,
+  onDetachSuitAffix,
   onCraft,
 }: {
   inventory: Inventory;
@@ -1426,6 +1493,9 @@ function InventoryPanel({
   onContextMenu: (slot: number, x: number, y: number) => void;
   onEquip: (fromInventoryIdx: number, suitSlot: SuitSlotKind) => void;
   onUnequip: (suitSlot: SuitSlotKind, toInventoryIdx?: number) => void;
+  nearElectronicsBench: boolean;
+  onAttachSuitAffix: (suitSlot: SuitSlotKind, defId: string) => void;
+  onDetachSuitAffix: (suitSlot: SuitSlotKind, idx: number) => void;
   onCraft: (recipeId: string) => void;
 }) {
   const hotbar = inventory.slice(0, HOTBAR_SIZE);
@@ -1452,12 +1522,21 @@ function InventoryPanel({
         </div>
       </div>
       <div className="p-3 flex gap-4">
-        <CharacterPanel
-          equipment={equipment}
-          stats={stats}
-          onEquip={onEquip}
-          onUnequip={onUnequip}
-        />
+        <div className="flex flex-col gap-3">
+          <CharacterPanel
+            equipment={equipment}
+            stats={stats}
+            onEquip={onEquip}
+            onUnequip={onUnequip}
+          />
+          <SuitAffixPanel
+            equipment={equipment}
+            inventory={inventory}
+            nearElectronicsBench={nearElectronicsBench}
+            onAttach={onAttachSuitAffix}
+            onDetach={onDetachSuitAffix}
+          />
+        </div>
         <div className="space-y-3">
           <div>
             <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
@@ -1525,15 +1604,18 @@ function TradeModal({
   nearUplink,
   onClose,
   onPurchase,
+  onPurchaseKey,
 }: {
   inventory: Inventory;
   knownBlueprints: Set<string>;
   nearUplink: boolean;
   onClose: () => void;
   onPurchase: (blueprintId: string) => void;
+  onPurchaseKey: (count: number) => void;
 }) {
-  const blueprints = listBlueprints();
+  const [tab, setTab] = useState<'blueprints' | 'keys'>('blueprints');
   const artifacts = countMaterial(inventory, 'artifact');
+  const heldKeys = countMaterial(inventory, 'key');
   return (
     <Modal onClose={onClose} width="min(640px, 92vw)">
       <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50 gap-4">
@@ -1552,47 +1634,161 @@ function TradeModal({
           Close
         </button>
       </div>
+      <div className="flex border-b border-[color:var(--panel-border)] bg-[color:var(--bg)]/30">
+        {(['blueprints', 'keys'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={
+              'px-4 py-2 text-xs uppercase tracking-wider transition-colors ' +
+              (tab === t
+                ? 'text-zinc-100 border-b-2 border-[color:var(--accent)] -mb-px'
+                : 'text-zinc-500 hover:text-zinc-300')
+            }
+          >
+            {t}
+          </button>
+        ))}
+      </div>
       {!nearUplink && (
         <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
           Move closer to the uplink to trade.
         </div>
       )}
-      <ul className="divide-y divide-[color:var(--panel-border)]">
-        {blueprints.map((bp) => {
-          const owned = knownBlueprints.has(bp.id);
-          const canAfford = artifacts >= bp.cost;
-          const enabled = nearUplink && !owned && canAfford;
-          let reason = '';
-          if (owned) reason = 'Owned';
-          else if (!nearUplink) reason = 'Out of range';
-          else if (!canAfford) reason = `Need ${bp.cost - artifacts} more`;
-          return (
-            <li key={bp.id} className="px-4 py-3 flex items-center gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold text-zinc-200">
-                  {bp.displayName}
-                </div>
-                <div className="text-[11px] text-zinc-500">{bp.description}</div>
-                <div className="text-[10px] uppercase tracking-wider text-zinc-600 mt-0.5">
-                  {bp.tier}
-                </div>
-              </div>
-              <div className="text-right text-xs text-pink-400 tabular-nums whitespace-nowrap">
-                {bp.cost} artifact{bp.cost === 1 ? '' : 's'}
-              </div>
-              <button
-                onClick={() => onPurchase(bp.id)}
-                disabled={!enabled}
-                title={enabled ? '' : reason}
-                className="px-3 py-1.5 rounded text-xs border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {owned ? 'Owned' : 'Buy'}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+      {tab === 'blueprints' ? (
+        <TradeBlueprintsList
+          knownBlueprints={knownBlueprints}
+          artifacts={artifacts}
+          nearUplink={nearUplink}
+          onPurchase={onPurchase}
+        />
+      ) : (
+        <TradeKeysPanel
+          artifacts={artifacts}
+          heldKeys={heldKeys}
+          nearUplink={nearUplink}
+          onPurchaseKey={onPurchaseKey}
+        />
+      )}
     </Modal>
+  );
+}
+
+function TradeBlueprintsList({
+  knownBlueprints,
+  artifacts,
+  nearUplink,
+  onPurchase,
+}: {
+  knownBlueprints: Set<string>;
+  artifacts: number;
+  nearUplink: boolean;
+  onPurchase: (blueprintId: string) => void;
+}) {
+  const blueprints = listBlueprints();
+  return (
+    <ul className="divide-y divide-[color:var(--panel-border)]">
+      {blueprints.map((bp) => {
+        const owned = knownBlueprints.has(bp.id);
+        const canAfford = artifacts >= bp.cost;
+        const enabled = nearUplink && !owned && canAfford;
+        let reason = '';
+        if (owned) reason = 'Owned';
+        else if (!nearUplink) reason = 'Out of range';
+        else if (!canAfford) reason = `Need ${bp.cost - artifacts} more`;
+        return (
+          <li key={bp.id} className="px-4 py-3 flex items-center gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-zinc-200">
+                {bp.displayName}
+              </div>
+              <div className="text-[11px] text-zinc-500">{bp.description}</div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-600 mt-0.5">
+                {bp.tier}
+              </div>
+            </div>
+            <div className="text-right text-xs text-pink-400 tabular-nums whitespace-nowrap">
+              {bp.cost} artifact{bp.cost === 1 ? '' : 's'}
+            </div>
+            <button
+              onClick={() => onPurchase(bp.id)}
+              disabled={!enabled}
+              title={enabled ? '' : reason}
+              className="px-3 py-1.5 rounded text-xs border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {owned ? 'Owned' : 'Buy'}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function TradeKeysPanel({
+  artifacts,
+  heldKeys,
+  nearUplink,
+  onPurchaseKey,
+}: {
+  artifacts: number;
+  heldKeys: number;
+  nearUplink: boolean;
+  onPurchaseKey: (count: number) => void;
+}) {
+  const [count, setCount] = useState(1);
+  const totalCost = count * KEY_ARTIFACT_COST;
+  const canAfford = artifacts >= totalCost;
+  const enabled = nearUplink && canAfford && count >= 1;
+  const reason = !nearUplink
+    ? 'Out of range'
+    : !canAfford
+    ? `Need ${totalCost - artifacts} more`
+    : '';
+  return (
+    <div className="px-5 py-4 space-y-3">
+      <div className="flex items-center gap-3">
+        <ItemIcon kind="material" subkind="key" />
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-zinc-200">Key</div>
+          <div className="text-[11px] text-zinc-500">
+            Opens any locked dungeon door. {KEY_ARTIFACT_COST} artifact each.
+          </div>
+        </div>
+        <div className="text-[11px] text-zinc-500 whitespace-nowrap">
+          Held: <span className="text-yellow-300 font-semibold">{heldKeys}</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-3 pt-2">
+        <label className="text-xs text-zinc-400">Quantity</label>
+        <input
+          type="number"
+          min={1}
+          max={10}
+          value={count}
+          onChange={(e) => {
+            const n = Math.max(
+              1,
+              Math.min(10, Math.floor(Number(e.target.value) || 1))
+            );
+            setCount(n);
+          }}
+          className="w-16 px-2 py-1 rounded bg-[color:var(--bg)] border border-[color:var(--panel-border)] text-sm text-zinc-100 text-right tabular-nums"
+        />
+        <div className="text-xs text-pink-400 tabular-nums">
+          {totalCost} artifact{totalCost === 1 ? '' : 's'}
+        </div>
+        <div className="flex-1" />
+        <button
+          onClick={() => onPurchaseKey(count)}
+          disabled={!enabled}
+          title={enabled ? '' : reason}
+          className="px-3 py-1.5 rounded text-xs border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Buy
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1643,6 +1839,11 @@ function WorkstationModal({
   onClose,
   onCraft,
   onPickup,
+  onAttachWeaponAffix,
+  onDetachWeaponAffix,
+  onAttachWeaponMod,
+  onDetachWeaponMod,
+  onTierUpWeapon,
 }: {
   kind: BuildingKind;
   inventory: Inventory;
@@ -1653,6 +1854,18 @@ function WorkstationModal({
   onClose: () => void;
   onCraft: (recipeId: string) => void;
   onPickup: (kind: BuildingKind) => void;
+  onAttachWeaponAffix: (
+    weaponIdx: number,
+    pieceKind: WeaponPieceKind,
+    defId: string
+  ) => void;
+  onDetachWeaponAffix: (
+    weaponIdx: number,
+    pieceKind: WeaponPieceKind
+  ) => void;
+  onAttachWeaponMod: (weaponIdx: number, defId: string) => void;
+  onDetachWeaponMod: (weaponIdx: number, modIndex: number) => void;
+  onTierUpWeapon: (weaponIdx: number) => void;
 }) {
   // Jobs running at THIS station kind so the queue stays scoped.
   const jobsAtStation = craftJobs.filter((j) => j.stationKind === kind);
@@ -1843,7 +2056,421 @@ function WorkstationModal({
           </div>
         </div>
       )}
+
+      {kind === 'weapon_bench' && (
+        <WeaponBenchPanel
+          inventory={inventory}
+          inRange={inRange}
+          onAttachWeaponAffix={onAttachWeaponAffix}
+          onDetachWeaponAffix={onDetachWeaponAffix}
+          onAttachWeaponMod={onAttachWeaponMod}
+          onDetachWeaponMod={onDetachWeaponMod}
+          onTierUpWeapon={onTierUpWeapon}
+        />
+      )}
     </Modal>
+  );
+}
+
+// Suit-affix manager. Lives in the inventory panel under the equipment
+// grid. Lists each equipped part and any crafted suit affixes attached
+// to it; offers attach buttons for compatible affixes the player owns.
+// Attach/detach is gated on being near an Electronics Bench since that's
+// where the user 'engineers' the affix into the suit.
+function SuitAffixPanel({
+  equipment,
+  inventory,
+  nearElectronicsBench,
+  onAttach,
+  onDetach,
+}: {
+  equipment: Equipment;
+  inventory: Inventory;
+  nearElectronicsBench: boolean;
+  onAttach: (suitSlot: SuitSlotKind, defId: string) => void;
+  onDetach: (suitSlot: SuitSlotKind, idx: number) => void;
+}) {
+  const owned = new Map<string, number>();
+  for (const s of inventory) {
+    if (s.kind === 'attachment') {
+      owned.set(s.defId, (owned.get(s.defId) ?? 0) + s.count);
+    }
+  }
+  const ownedForSlot = (slot: SuitSlotKind): string[] => {
+    const out: string[] = [];
+    for (const [id, count] of owned) {
+      if (count <= 0) continue;
+      const def = ATTACHMENT_DEFS[id];
+      if (!def || def.kind !== 'suit_affix') continue;
+      if (def.slotKind !== slot) continue;
+      out.push(id);
+    }
+    return out;
+  };
+
+  // Don't render if nothing to manage AND not near a bench (avoids
+  // clutter for new players who don't have suit affixes yet).
+  let anyVisible = false;
+  for (const slot of SUIT_SLOT_KINDS) {
+    const part = equipment[slot];
+    if (!part) continue;
+    if ((part.appliedAttachments?.length ?? 0) > 0) anyVisible = true;
+    if (ownedForSlot(slot).length > 0) anyVisible = true;
+  }
+  if (!anyVisible && !nearElectronicsBench) return null;
+
+  return (
+    <div className="flex flex-col gap-2 p-2 rounded border border-[color:var(--panel-border)] bg-[color:var(--bg)]/30">
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+        Suit Affixes
+      </div>
+      {!nearElectronicsBench && (
+        <div className="text-[10px] text-amber-400/80">
+          Visit an Electronics Bench to attach or remove.
+        </div>
+      )}
+      {SUIT_SLOT_KINDS.map((slot) => {
+        const part = equipment[slot];
+        const candidates = ownedForSlot(slot);
+        const applied = part?.appliedAttachments ?? [];
+        if (!part) return null;
+        if (applied.length === 0 && candidates.length === 0) return null;
+        return (
+          <div key={slot} className="flex flex-col gap-1 text-xs">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+              {SLOT_LABELS[slot] ?? slot}
+            </div>
+            {applied.map((id, i) => {
+              const def = ATTACHMENT_DEFS[id];
+              return (
+                <div
+                  key={`${id}-${i}`}
+                  className="flex items-center justify-between px-2 py-1 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
+                >
+                  <span className="text-emerald-200">
+                    {def?.displayName ?? id}
+                  </span>
+                  <button
+                    onClick={() => onDetach(slot, i)}
+                    disabled={!nearElectronicsBench}
+                    className="px-2 py-0.5 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)] disabled:opacity-40"
+                  >
+                    Detach
+                  </button>
+                </div>
+              );
+            })}
+            {candidates.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {candidates.map((id) => {
+                  const def = ATTACHMENT_DEFS[id];
+                  return (
+                    <button
+                      key={id}
+                      onClick={() => onAttach(slot, id)}
+                      disabled={!nearElectronicsBench}
+                      title={def?.description}
+                      className="px-2 py-0.5 rounded text-[10px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950 disabled:opacity-40"
+                    >
+                      + {def?.displayName ?? id}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Inline manage-weapons panel that hangs off the bottom of the Weapon
+// Bench's WorkstationModal. Surfaces tier-up + per-piece affix attach
+// + mod attach without requiring a separate modal.
+function WeaponBenchPanel({
+  inventory,
+  inRange,
+  onAttachWeaponAffix,
+  onDetachWeaponAffix,
+  onAttachWeaponMod,
+  onDetachWeaponMod,
+  onTierUpWeapon,
+}: {
+  inventory: Inventory;
+  inRange: boolean;
+  onAttachWeaponAffix: (
+    weaponIdx: number,
+    pieceKind: WeaponPieceKind,
+    defId: string
+  ) => void;
+  onDetachWeaponAffix: (
+    weaponIdx: number,
+    pieceKind: WeaponPieceKind
+  ) => void;
+  onAttachWeaponMod: (weaponIdx: number, defId: string) => void;
+  onDetachWeaponMod: (weaponIdx: number, modIndex: number) => void;
+  onTierUpWeapon: (weaponIdx: number) => void;
+}) {
+  // Pull every weapon currently in the player's inventory plus its slot
+  // index — the server expects the index, not the weapon id, for
+  // attach/detach.
+  const weapons: { idx: number; weapon: WeaponItem }[] = [];
+  for (let i = 0; i < inventory.length; i++) {
+    const s = inventory[i];
+    if (s.kind === 'weapon' && s.weapon.weaponId !== 'knife') {
+      weapons.push({ idx: i, weapon: s.weapon });
+    }
+  }
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(
+    weapons[0]?.idx ?? null
+  );
+  useEffect(() => {
+    if (selectedIdx === null && weapons[0]) setSelectedIdx(weapons[0].idx);
+    if (selectedIdx !== null && !weapons.find((w) => w.idx === selectedIdx)) {
+      setSelectedIdx(weapons[0]?.idx ?? null);
+    }
+  }, [weapons, selectedIdx]);
+
+  if (weapons.length === 0) {
+    return (
+      <div className="px-5 py-4 border-t border-[color:var(--panel-border)] text-xs text-zinc-500">
+        Craft a weapon at the Workbench first to manage it here.
+      </div>
+    );
+  }
+  const selected = weapons.find((w) => w.idx === selectedIdx) ?? null;
+  return (
+    <div className="px-5 py-4 border-t border-[color:var(--panel-border)] flex flex-col gap-3">
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+        Manage Weapons
+      </div>
+      {/* Weapon picker row */}
+      <div className="flex flex-wrap gap-2">
+        {weapons.map((w) => (
+          <button
+            key={w.idx}
+            onClick={() => setSelectedIdx(w.idx)}
+            className={
+              'px-2 py-1 rounded text-[11px] border tabular-nums ' +
+              (w.idx === selectedIdx
+                ? 'border-[color:var(--accent)] text-zinc-100 bg-[color:var(--bg)]'
+                : 'border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]')
+            }
+          >
+            T{w.weapon.tier} {w.weapon.weaponId}
+          </button>
+        ))}
+      </div>
+      {selected && (
+        <WeaponEditor
+          weapon={selected.weapon}
+          weaponIdx={selected.idx}
+          inventory={inventory}
+          inRange={inRange}
+          onAttachAffix={(piece, defId) =>
+            onAttachWeaponAffix(selected.idx, piece, defId)
+          }
+          onDetachAffix={(piece) => onDetachWeaponAffix(selected.idx, piece)}
+          onAttachMod={(defId) => onAttachWeaponMod(selected.idx, defId)}
+          onDetachMod={(modIdx) => onDetachWeaponMod(selected.idx, modIdx)}
+          onTierUp={() => onTierUpWeapon(selected.idx)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Per-weapon editor: lists every piece slot at the current tier with its
+// attached affix (if any), every mod slot, and a tier-up button.
+function WeaponEditor({
+  weapon,
+  weaponIdx: _weaponIdx,
+  inventory,
+  inRange,
+  onAttachAffix,
+  onDetachAffix,
+  onAttachMod,
+  onDetachMod,
+  onTierUp,
+}: {
+  weapon: WeaponItem;
+  weaponIdx: number;
+  inventory: Inventory;
+  inRange: boolean;
+  onAttachAffix: (pieceKind: WeaponPieceKind, defId: string) => void;
+  onDetachAffix: (pieceKind: WeaponPieceKind) => void;
+  onAttachMod: (defId: string) => void;
+  onDetachMod: (modIdx: number) => void;
+  onTierUp: () => void;
+}) {
+  const pieces = TIER_PIECE_SLOTS[weapon.tier];
+  const modCap = TIER_MOD_SLOTS[weapon.tier];
+
+  // Build the inventory's stack of attachment defs by id for the
+  // attach-buttons (we need to know which the player has on hand).
+  const ownedAttachments = new Map<string, number>();
+  for (const s of inventory) {
+    if (s.kind === 'attachment') {
+      ownedAttachments.set(s.defId, (ownedAttachments.get(s.defId) ?? 0) + s.count);
+    }
+  }
+  const ownedAffixForPiece = (piece: WeaponPieceKind): string[] => {
+    const out: string[] = [];
+    for (const [id, count] of ownedAttachments) {
+      if (count <= 0) continue;
+      const def = ATTACHMENT_DEFS[id];
+      if (!def || def.kind !== 'weapon_affix') continue;
+      if (def.pieceKind !== piece) continue;
+      out.push(id);
+    }
+    return out;
+  };
+  const ownedMods = (): string[] => {
+    const out: string[] = [];
+    for (const [id, count] of ownedAttachments) {
+      if (count <= 0) continue;
+      const def = ATTACHMENT_DEFS[id];
+      if (!def || def.kind !== 'weapon_mod') continue;
+      out.push(id);
+    }
+    return out;
+  };
+
+  return (
+    <div className="flex flex-col gap-3 text-xs">
+      {/* Pieces */}
+      <div className="flex flex-col gap-1.5">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+          Pieces
+        </div>
+        {pieces.map((piece) => {
+          const attached = weapon.pieces[piece];
+          const def = attached ? ATTACHMENT_DEFS[attached.id] : null;
+          const candidates = ownedAffixForPiece(piece);
+          return (
+            <div
+              key={piece}
+              className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
+            >
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  {piece}
+                </span>
+                <span className="text-zinc-200">
+                  {def?.displayName ?? '— empty —'}
+                </span>
+              </div>
+              {attached ? (
+                <button
+                  onClick={() => onDetachAffix(piece)}
+                  disabled={!inRange}
+                  className="px-2 py-1 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)] disabled:opacity-40"
+                >
+                  Detach
+                </button>
+              ) : (
+                <div className="flex flex-wrap gap-1 justify-end">
+                  {candidates.length === 0 ? (
+                    <span className="text-[10px] text-zinc-600">
+                      no compatible affix
+                    </span>
+                  ) : (
+                    candidates.map((id) => {
+                      const cdef = ATTACHMENT_DEFS[id];
+                      return (
+                        <button
+                          key={id}
+                          onClick={() => onAttachAffix(piece, id)}
+                          disabled={!inRange}
+                          title={cdef?.description}
+                          className="px-2 py-1 rounded text-[10px] border border-violet-700 bg-violet-950/30 text-violet-200 hover:bg-violet-950 disabled:opacity-40"
+                        >
+                          + {cdef?.displayName ?? id}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Mods */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+            Mods
+          </div>
+          <div className="text-[10px] text-zinc-500 tabular-nums">
+            {weapon.mods.length}/{modCap}
+          </div>
+        </div>
+        {weapon.mods.length === 0 && modCap === 0 && (
+          <div className="text-[10px] text-zinc-600 px-2">
+            Tier up to unlock mod slots.
+          </div>
+        )}
+        {weapon.mods.map((mod, i) => {
+          const def = ATTACHMENT_DEFS[mod.id];
+          return (
+            <div
+              key={i}
+              className="flex items-center justify-between px-2 py-1.5 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
+            >
+              <span className="text-zinc-200">{def?.displayName ?? mod.id}</span>
+              <button
+                onClick={() => onDetachMod(i)}
+                disabled={!inRange}
+                className="px-2 py-1 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)] disabled:opacity-40"
+              >
+                Detach
+              </button>
+            </div>
+          );
+        })}
+        {weapon.mods.length < modCap && (
+          <div className="flex flex-wrap gap-1">
+            {ownedMods().length === 0 ? (
+              <span className="text-[10px] text-zinc-600 px-2">
+                no mods in inventory
+              </span>
+            ) : (
+              ownedMods().map((id) => {
+                const def = ATTACHMENT_DEFS[id];
+                return (
+                  <button
+                    key={id}
+                    onClick={() => onAttachMod(id)}
+                    disabled={!inRange}
+                    title={def?.description}
+                    className="px-2 py-1 rounded text-[10px] border border-blue-700 bg-blue-950/30 text-blue-200 hover:bg-blue-950 disabled:opacity-40"
+                  >
+                    + {def?.displayName ?? id}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Tier-up */}
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-[color:var(--panel-border)]">
+        <span className="text-zinc-300">
+          Current Tier <span className="text-zinc-100 font-semibold">T{weapon.tier}</span>
+        </span>
+        <button
+          onClick={onTierUp}
+          disabled={!inRange || weapon.tier >= 4}
+          className="px-3 py-1.5 rounded text-[11px] border border-amber-700 bg-amber-950/30 text-amber-200 hover:bg-amber-950 disabled:opacity-40"
+        >
+          {weapon.tier >= 4 ? 'Max Tier' : `Tier Up → T${weapon.tier + 1}`}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1858,7 +2485,11 @@ function outputSlotLabel(slot: InventorySlot): string {
   if (slot.kind === 'ammo') {
     return `${slot.count}× ${slot.ammoId.replace(/_/g, ' ')}`;
   }
-  if (slot.kind === 'weapon') return slot.weaponId;
+  if (slot.kind === 'weapon') return slot.weapon.weaponId;
+  if (slot.kind === 'attachment') {
+    const def = ATTACHMENT_DEFS[slot.defId];
+    return `${slot.count}× ${def?.displayName ?? slot.defId}`;
+  }
   if (slot.kind === 'part') return `${slot.part.tier} ${slot.part.slot}`;
   return '?';
 }
@@ -1914,10 +2545,7 @@ function RecipeDetails({
   const allSatisfied = inputRows.every((r) => r.satisfied);
   const enabled = inRange && allSatisfied;
 
-  const outLabel =
-    recipe.output.kind === 'placeable'
-      ? `${recipe.output.count}× ${STATION_LABEL[recipe.output.buildingKind] ?? recipe.output.buildingKind}`
-      : `${recipe.output.count}× ${recipe.output.ammoId.replace(/_/g, ' ')}`;
+  const outLabel = formatRecipeOutput(recipe.output);
 
   return (
     <div className="flex flex-col h-full">
@@ -2007,12 +2635,27 @@ function CraftPanel({
 }
 const EMPTY_STATION_SET: Set<BuildingKind> = new Set();
 
+function formatRecipeOutput(out: Recipe['output']): string {
+  if (out.kind === 'placeable') {
+    return `${out.count}× ${STATION_LABEL[out.buildingKind] ?? out.buildingKind}`;
+  }
+  if (out.kind === 'ammo') {
+    return `${out.count}× ${out.ammoId.replace(/_/g, ' ')}`;
+  }
+  if (out.kind === 'attachment') {
+    const def = ATTACHMENT_DEFS[out.defId];
+    return `${out.count}× ${def?.displayName ?? out.defId}`;
+  }
+  return out.weaponId.replace(/_/g, ' ');
+}
+
 const STATION_LABEL: Record<BuildingKind, string> = {
   wall: 'wall',
   turret: 'turret',
   workbench: 'Workbench',
   forge: 'Forge',
   electronics_bench: 'Electronics Bench',
+  weapon_bench: 'Weapon Bench',
   artifact_uplink: 'Artifact Uplink',
   power_link: 'Power Link',
   door: 'Door',
@@ -2057,10 +2700,7 @@ function CraftRow({
   if (!allInputsSatisfied) reasons.push('Insufficient materials');
   const enabled = reasons.length === 0;
 
-  const outLabel =
-    recipe.output.kind === 'placeable'
-      ? `${recipe.output.count}× ${STATION_LABEL[recipe.output.buildingKind] ?? recipe.output.buildingKind}`
-      : `${recipe.output.count}× ${recipe.output.ammoId.replace(/_/g, ' ')}`;
+  const outLabel = formatRecipeOutput(recipe.output);
 
   return (
     <li className="flex items-start justify-between gap-3 text-xs py-1.5">
@@ -2383,7 +3023,8 @@ const DRAG_MIME = 'application/x-dumrunner-slot';
 // can compare an Mk2 chassis on the ground vs. their Mk1 in the suit.
 function slotTooltip(slot: InventorySlot): string | undefined {
   if (slot.kind === 'empty') return undefined;
-  if (slot.kind === 'weapon') return slot.weaponId;
+  if (slot.kind === 'weapon')
+    return `T${slot.weapon.tier} ${slot.weapon.weaponId}`;
   if (slot.kind === 'material') {
     const def = MATERIALS[slot.materialId];
     return `${def?.name ?? slot.materialId} ×${slot.count}`;
@@ -2393,6 +3034,10 @@ function slotTooltip(slot: InventorySlot): string | undefined {
   }
   if (slot.kind === 'placeable') {
     return `${slot.buildingKind.replace(/_/g, ' ')} ×${slot.count}`;
+  }
+  if (slot.kind === 'attachment') {
+    const def = ATTACHMENT_DEFS[slot.defId];
+    return `${def?.displayName ?? slot.defId} ×${slot.count}\n${def?.description ?? ''}`;
   }
   if (slot.kind === 'part') {
     const part = slot.part;
@@ -2552,8 +3197,10 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
   if (slot.kind === 'weapon') {
     return (
       <div className="flex flex-col items-center leading-tight gap-0.5">
-        <ItemIcon kind="weapon" subkind={slot.weaponId} />
-        <span className="text-zinc-300 text-[9px] capitalize">{slot.weaponId}</span>
+        <ItemIcon kind="weapon" subkind={slot.weapon.weaponId} />
+        <span className="text-zinc-300 text-[9px] capitalize">
+          {slot.weapon.weaponId}
+        </span>
       </div>
     );
   }
@@ -2582,6 +3229,27 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
       <div className="flex flex-col items-center leading-tight gap-0.5">
         <ItemIcon kind="ammo" subkind={slot.ammoId} />
         <span className="text-zinc-300 text-[10px]">{slot.count}</span>
+      </div>
+    );
+  }
+  if (slot.kind === 'attachment') {
+    const def = ATTACHMENT_DEFS[slot.defId];
+    const tint =
+      def?.kind === 'weapon_mod'
+        ? 0x60a5fa
+        : def?.kind === 'weapon_affix'
+        ? 0xa78bfa
+        : 0x34d399;
+    return (
+      <div className="flex flex-col items-center leading-tight gap-0.5">
+        <div
+          className="w-6 h-6 rounded-sm border"
+          style={{
+            background: `#${tint.toString(16).padStart(6, '0')}33`,
+            borderColor: `#${tint.toString(16).padStart(6, '0')}`,
+          }}
+        />
+        <span className="text-zinc-300 text-[9px]">×{slot.count}</span>
       </div>
     );
   }

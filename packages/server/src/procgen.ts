@@ -221,9 +221,9 @@ type TemplateWeights = Record<string, number>;
 // interesting behaviour. Removed from the live spawn pool; the
 // template stays in the AI library for ad-hoc smoke tests.
 const DEPTH_WEIGHTS: { maxFloor: number; weights: TemplateWeights }[] = [
-  { maxFloor: 2, weights: { chaser_melee: 70, shooter_drone: 30 } },
-  { maxFloor: 5, weights: { chaser_melee: 40, shooter_drone: 40, brute_chaser: 20 } },
-  { maxFloor: 10, weights: { chaser_melee: 30, shooter_drone: 35, brute_chaser: 35 } },
+  { maxFloor: 2, weights: { swarmer: 30, chaser_melee: 50, shooter_drone: 20 } },
+  { maxFloor: 5, weights: { swarmer: 25, chaser_melee: 30, shooter_drone: 30, brute_chaser: 15 } },
+  { maxFloor: 10, weights: { swarmer: 15, chaser_melee: 25, shooter_drone: 30, brute_chaser: 30 } },
   { maxFloor: Infinity, weights: { brute_chaser: 50, shooter_drone: 35, chaser_melee: 15 } },
 ];
 
@@ -435,6 +435,15 @@ export function generateLockedRoomMeta(
       }
     }
   }
+  // Procgen connects rooms in a strict chain (each i is corridor-
+  // connected only to i-1), so to reach room S the player must pass
+  // through every preceding room. Locking ANY room in [1..S] blocks
+  // progression. Restrict lock candidates to indices strictly past
+  // the stairs room — those rooms are off the entrance→stairs
+  // critical path and can be locked without breaking progression.
+  // (When the stairs room is the last in the chain, no rooms qualify
+  // and the floor simply has no locked doors. Acceptable until
+  // procgen grows side-branches.)
   const lockedSet = new Set<number>();
   const lockChance = Math.min(
     0.55,
@@ -442,7 +451,7 @@ export function generateLockedRoomMeta(
   );
   const doors: InitialDoor[] = [];
   for (let i = 1; i < layout.rooms.length; i++) {
-    if (i === stairsRoomIndex) continue;
+    if (stairsRoomIndex >= 0 && i <= stairsRoomIndex) continue;
     if (rng() > lockChance) continue;
     const room = layout.rooms[i];
     const tiles = pickDoorTilesForRoom(room, corridorRects, tileSize);

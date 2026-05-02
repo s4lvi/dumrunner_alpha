@@ -37,11 +37,18 @@ export function circleFits(
   return true;
 }
 
-const LOS_SAMPLE_STEP_PX = 16;
+const LOS_SAMPLE_STEP_PX = 8;
+// Half-thickness of the LoS "ribbon" tested perpendicular to the segment.
+// Without it, a 0-width segment can pass through the single point shared
+// by two diagonally-adjacent walkables — geometrically a wall corner —
+// and erroneously return "visible." 4px is small enough not to clip
+// legitimate corridor turns.
+const LOS_THICKNESS_HALF_PX = 4;
 
-// Returns true iff a segment from (x1,y1) to (x2,y2) stays entirely inside
-// the union of walkable rects. Implementation samples points along the
-// segment at fixed intervals.
+// Returns true iff a thick segment from (x1,y1) to (x2,y2) stays
+// entirely inside the union of walkable rects. Samples along the
+// centre of the segment AND at ±LOS_THICKNESS_HALF_PX perpendicular
+// offsets so diagonal-corner gaps don't leak sight.
 export function segmentInsideWalkables(
   rects: Rect[],
   x1: number,
@@ -55,12 +62,20 @@ export function segmentInsideWalkables(
   const length = Math.hypot(dx, dy);
   if (length === 0) return isInsideAny(rects, x1, y1);
 
+  // Perpendicular unit vector for the offset samples.
+  const px = -dy / length;
+  const py = dx / length;
+  const offX = px * LOS_THICKNESS_HALF_PX;
+  const offY = py * LOS_THICKNESS_HALF_PX;
+
   const steps = Math.max(1, Math.ceil(length / LOS_SAMPLE_STEP_PX));
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const sx = x1 + dx * t;
     const sy = y1 + dy * t;
     if (!isInsideAny(rects, sx, sy)) return false;
+    if (!isInsideAny(rects, sx + offX, sy + offY)) return false;
+    if (!isInsideAny(rects, sx - offX, sy - offY)) return false;
   }
   return true;
 }

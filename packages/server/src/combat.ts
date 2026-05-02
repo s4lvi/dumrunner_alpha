@@ -1,5 +1,73 @@
 // Combat constants. Tuning lives here so balance changes are one-place.
 
+import type { AmmoKind, WeaponFamily } from '@dumrunner/shared';
+
+// Per-family stat sheet for ranged weapons. SMG = high RoF, low dmg; shotgun
+// = burst pellets, short range; rifle = single high-dmg slug; pistol = the
+// balanced baseline. `pelletCount > 1` means a single trigger pull spawns
+// multiple projectiles within `spreadRad` radians of the aim line.
+export type RangedWeaponStats = {
+  damage: number;
+  fireIntervalMs: number;
+  projectileSpeed: number;
+  projectileTtlMs: number;
+  projectileRadius: number;
+  pelletCount: number;
+  spreadRad: number;
+  color: number;
+  ammoKind: AmmoKind;
+};
+
+export const WEAPON_STATS: Record<
+  Exclude<WeaponFamily, 'melee'>,
+  RangedWeaponStats
+> = {
+  pistol: {
+    damage: 25,
+    fireIntervalMs: 250,
+    projectileSpeed: 2250,
+    projectileTtlMs: 800,
+    projectileRadius: 4,
+    pelletCount: 1,
+    spreadRad: 0,
+    color: 0xfafafa,
+    ammoKind: 'pistol_basic',
+  },
+  smg: {
+    damage: 12,
+    fireIntervalMs: 90,
+    projectileSpeed: 2200,
+    projectileTtlMs: 700,
+    projectileRadius: 3,
+    pelletCount: 1,
+    spreadRad: 0.07,
+    color: 0xffe066,
+    ammoKind: 'smg_basic',
+  },
+  shotgun: {
+    damage: 14, // per pellet; 6 pellets ≈ 84 dmg burst at point-blank
+    fireIntervalMs: 700,
+    projectileSpeed: 1900,
+    projectileTtlMs: 350,
+    projectileRadius: 4,
+    pelletCount: 6,
+    spreadRad: 0.35,
+    color: 0xff8a3d,
+    ammoKind: 'shotgun_shells',
+  },
+  rifle: {
+    damage: 60,
+    fireIntervalMs: 700,
+    projectileSpeed: 2800,
+    projectileTtlMs: 1200,
+    projectileRadius: 4,
+    pelletCount: 1,
+    spreadRad: 0,
+    color: 0x7dd3fc,
+    ammoKind: 'rifle_rounds',
+  },
+};
+
 export const COMBAT = {
   TICK_HZ: 20,
   TICK_MS: 50,

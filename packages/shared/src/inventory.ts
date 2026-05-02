@@ -51,15 +51,100 @@ export const MATERIALS: Record<MaterialKind, MaterialDef> = {
   key: { id: 'key', name: 'Key', tier: 2, color: 0xfacc15 },
 };
 
-export type AmmoKind = 'pistol_basic';
-export type WeaponKind = 'pistol' | 'knife';
+// Flat artifact-per-key price at the artifact uplink. Tunable; cheap
+// enough that the player can stockpile a few without grinding.
+export const KEY_ARTIFACT_COST = 1;
+
+export type AmmoKind =
+  | 'pistol_basic'
+  | 'smg_basic'
+  | 'shotgun_shells'
+  | 'rifle_rounds';
+export type WeaponKind = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'knife';
+
+// Family groups weapons that share ammo, mod compatibility, and turret
+// variants. `melee` covers the knife (no ammo, no piece-affix slots).
+export type WeaponFamily = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'melee';
+export const WEAPON_FAMILY: Record<WeaponKind, WeaponFamily> = {
+  pistol: 'pistol',
+  smg: 'smg',
+  shotgun: 'shotgun',
+  rifle: 'rifle',
+  knife: 'melee',
+};
+
+// Tiering controls slot count + crafting station gate. T1 craftable at
+// the Workbench; T2+ requires a Weapon Bench.
+export type WeaponTier = 1 | 2 | 3 | 4;
+export const WEAPON_TIERS: WeaponTier[] = [1, 2, 3, 4];
+
+// Pieces are the affix attach points on a weapon. Higher tier unlocks
+// more pieces (= more stackable affix slots). Affixes within the same
+// piece don't stack — different pieces do.
+export type WeaponPieceKind = 'frame' | 'grip' | 'magazine' | 'barrel';
+
+export const TIER_PIECE_SLOTS: Record<WeaponTier, WeaponPieceKind[]> = {
+  1: ['frame'],
+  2: ['frame', 'grip'],
+  3: ['frame', 'grip', 'magazine'],
+  4: ['frame', 'grip', 'magazine', 'barrel'],
+};
+
+// Mods are discrete attachments that aren't piece-bound (suppressor,
+// scope, foregrip). Mod slot count also scales with tier.
+export const TIER_MOD_SLOTS: Record<WeaponTier, number> = {
+  1: 0,
+  2: 1,
+  3: 2,
+  4: 3,
+};
+
+// Weapon affix instance — same shape as suit affix (id + rolled value).
+// The affix definition registry (kept separate from suit affixes since
+// the apply() target is different) lives in `weapon-affix.ts` once the
+// content lands in commit 5; the type is open enough that both registries
+// can use it.
+export type WeaponAffix = {
+  id: string;
+  value: number;
+};
+
+// Per-weapon piece-affix map. Only entries for pieces unlocked by the
+// weapon's current tier should be populated; the rest stay omitted.
+export type WeaponPieces = Partial<Record<WeaponPieceKind, WeaponAffix | null>>;
+
+export type WeaponMod = {
+  id: string;
+};
+
+// A weapon instance carries the base id + its rolled affixes/mods. Two
+// pistols of the same family but different tiers/affixes are distinct
+// items. Slotted into the inventory as `{ kind: 'weapon', weapon }`.
+export type WeaponItem = {
+  weaponId: WeaponKind;
+  tier: WeaponTier;
+  pieces: WeaponPieces;
+  mods: WeaponMod[];
+};
+
+export function makeWeapon(
+  weaponId: WeaponKind,
+  tier: WeaponTier = 1
+): WeaponItem {
+  return { weaponId, tier, pieces: {}, mods: [] };
+}
+
+export function weaponFamily(weaponId: WeaponKind): WeaponFamily {
+  return WEAPON_FAMILY[weaponId];
+}
 
 export type InventorySlot =
   | { kind: 'empty' }
   | { kind: 'part'; part: CarriedPart }
   | { kind: 'material'; materialId: MaterialKind; count: number }
   | { kind: 'ammo'; ammoId: AmmoKind; count: number }
-  | { kind: 'weapon'; weaponId: WeaponKind }
+  | { kind: 'weapon'; weapon: WeaponItem }
+  | { kind: 'attachment'; defId: string; count: number }
   | { kind: 'placeable'; buildingKind: BuildingKind; count: number };
 
 export type Inventory = InventorySlot[];
@@ -183,6 +268,18 @@ export function computeSuitStats(equipment: Equipment): SuitStats {
       const def = AFFIX_DEFS[affix.id];
       if (def) def.apply(stats, affix.value);
     }
+    // Crafted suit-affix attachments — slot independent, reads the
+    // ATTACHMENT_DEFS registry and folds the effect onto the same
+    // SuitStats accumulator.
+    for (const attachId of part.appliedAttachments ?? []) {
+      const def = ATTACHMENT_DEFS[attachId];
+      if (!def || def.kind !== 'suit_affix') continue;
+      stats.hpBonus += def.effect.hpBonus ?? 0;
+      stats.shieldBonus += def.effect.shieldBonus ?? 0;
+      stats.staminaMaxBonus += def.effect.staminaMaxBonus ?? 0;
+      stats.staminaRegenBonus += def.effect.staminaRegenBonus ?? 0;
+      stats.moveSpeedMult += def.effect.moveSpeedMult ?? 0;
+    }
   }
   return stats;
 }
@@ -290,6 +387,160 @@ export const AFFIX_DEFS: Record<string, AffixDef> = {
     validSlots: SUIT_SLOTS_ALL,
   },
 };
+
+// ---------- attachment registry ----------
+// Three flavours of attachment items live in the player inventory and slot
+// onto a target item:
+//   - weapon_mod    → goes into a weapon's mod slot list (count-based)
+//   - weapon_affix  → goes into a weapon piece (frame/grip/magazine/barrel)
+//   - suit_affix    → goes into a suit slot (plating/utility/etc)
+// All three crafted from blueprints at the relevant station; the stack
+// `kind: 'attachment'` slot stores them in inventory by id.
+
+export type WeaponEffect = {
+  // Multiplicative on damage. 1.0 = no change.
+  damageMult?: number;
+  // Multiplicative on fire interval (lower = faster cadence).
+  fireIntervalMult?: number;
+  // Multiplicative on spread cone (lower = tighter pattern).
+  spreadMult?: number;
+  // Additive to projectile speed (px/sec).
+  projectileSpeedAdd?: number;
+};
+
+export type SuitEffect = {
+  hpBonus?: number;
+  shieldBonus?: number;
+  staminaMaxBonus?: number;
+  staminaRegenBonus?: number;
+  moveSpeedMult?: number;
+};
+
+export type AttachmentDef =
+  | {
+      kind: 'weapon_mod';
+      id: string;
+      displayName: string;
+      description: string;
+      // null = any ranged family
+      family: WeaponFamily | null;
+      effect: WeaponEffect;
+    }
+  | {
+      kind: 'weapon_affix';
+      id: string;
+      displayName: string;
+      description: string;
+      pieceKind: WeaponPieceKind;
+      family: WeaponFamily | null;
+      effect: WeaponEffect;
+      value: number;
+    }
+  | {
+      kind: 'suit_affix';
+      id: string;
+      displayName: string;
+      description: string;
+      slotKind: SuitSlotKind;
+      effect: SuitEffect;
+      value: number;
+    };
+
+export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
+  // ---- weapon mods (slot into a weapon's mod list) ----
+  mod_foregrip: {
+    kind: 'weapon_mod',
+    id: 'mod_foregrip',
+    displayName: 'Foregrip',
+    description: '-30% spread. Best on shotguns and SMGs.',
+    family: null,
+    effect: { spreadMult: 0.7 },
+  },
+  mod_high_velocity: {
+    kind: 'weapon_mod',
+    id: 'mod_high_velocity',
+    displayName: 'High-Velocity Barrel',
+    description: '+25% projectile speed. Better tracking at range.',
+    family: null,
+    effect: { projectileSpeedAdd: 500 },
+  },
+
+  // ---- weapon affixes (slot onto a weapon piece) ----
+  aff_damage_15: {
+    kind: 'weapon_affix',
+    id: 'aff_damage_15',
+    displayName: '+15% Damage (Frame)',
+    description: 'Reinforced frame: +15% damage on every shot.',
+    pieceKind: 'frame',
+    family: null,
+    effect: { damageMult: 1.15 },
+    value: 0.15,
+  },
+  aff_firerate_25: {
+    kind: 'weapon_affix',
+    id: 'aff_firerate_25',
+    displayName: '+25% Fire Rate (Grip)',
+    description: 'Lightweight grip: 25% faster cadence.',
+    pieceKind: 'grip',
+    family: null,
+    effect: { fireIntervalMult: 0.8 },
+    value: 0.25,
+  },
+
+  // ---- suit affixes (slot onto a suit slot) ----
+  aff_shield_25: {
+    kind: 'suit_affix',
+    id: 'aff_shield_25',
+    displayName: '+25 Shield (Plating)',
+    description: 'Hardened plating: +25 max shield.',
+    slotKind: 'plating',
+    effect: { shieldBonus: 25 },
+    value: 25,
+  },
+  aff_speed_5: {
+    kind: 'suit_affix',
+    id: 'aff_speed_5',
+    displayName: '+5% Move Speed (Utility)',
+    description: 'Servomotor tune-up: +5% movement speed.',
+    slotKind: 'utility_mod',
+    effect: { moveSpeedMult: 0.05 },
+    value: 0.05,
+  },
+};
+
+export function listAttachments(): AttachmentDef[] {
+  return Object.values(ATTACHMENT_DEFS);
+}
+
+// Combine a weapon's frame + piece-affix + mod effects into a single
+// resolved multiplier set. Server uses this when firing to scale base
+// WEAPON_STATS.
+export function computeWeaponEffect(weapon: WeaponItem): Required<WeaponEffect> {
+  const out: Required<WeaponEffect> = {
+    damageMult: 1,
+    fireIntervalMult: 1,
+    spreadMult: 1,
+    projectileSpeedAdd: 0,
+  };
+  for (const piece of Object.values(weapon.pieces)) {
+    if (!piece) continue;
+    const def = ATTACHMENT_DEFS[piece.id];
+    if (!def || def.kind !== 'weapon_affix') continue;
+    out.damageMult *= def.effect.damageMult ?? 1;
+    out.fireIntervalMult *= def.effect.fireIntervalMult ?? 1;
+    out.spreadMult *= def.effect.spreadMult ?? 1;
+    out.projectileSpeedAdd += def.effect.projectileSpeedAdd ?? 0;
+  }
+  for (const mod of weapon.mods) {
+    const def = ATTACHMENT_DEFS[mod.id];
+    if (!def || def.kind !== 'weapon_mod') continue;
+    out.damageMult *= def.effect.damageMult ?? 1;
+    out.fireIntervalMult *= def.effect.fireIntervalMult ?? 1;
+    out.spreadMult *= def.effect.spreadMult ?? 1;
+    out.projectileSpeedAdd += def.effect.projectileSpeedAdd ?? 0;
+  }
+  return out;
+}
 
 export function affixIdsForSlot(slot: PartSlot): string[] {
   const out: string[] = [];
@@ -416,10 +667,10 @@ export function addAmmo(
   return 0;
 }
 
-export function addWeapon(inv: Inventory, weaponId: WeaponKind): boolean {
+export function addWeapon(inv: Inventory, weapon: WeaponItem): boolean {
   const i = findEmptySlot(inv);
   if (i < 0) return false;
-  inv[i] = { kind: 'weapon', weaponId };
+  inv[i] = { kind: 'weapon', weapon };
   return true;
 }
 
@@ -557,6 +808,15 @@ export function swapSlots(inv: Inventory, from: number, to: number): boolean {
     inv[from] = { ...EMPTY };
     return true;
   }
+  if (
+    a.kind === 'attachment' &&
+    b.kind === 'attachment' &&
+    a.defId === b.defId
+  ) {
+    b.count += a.count;
+    inv[from] = { ...EMPTY };
+    return true;
+  }
   // Plain swap.
   inv[from] = b;
   inv[to] = a;
@@ -571,13 +831,58 @@ export function discardSlot(inv: Inventory, slot: number, all: boolean): boolean
   if (s.kind === 'empty') return false;
   if (
     !all &&
-    (s.kind === 'material' || s.kind === 'ammo' || s.kind === 'placeable') &&
+    (s.kind === 'material' ||
+      s.kind === 'ammo' ||
+      s.kind === 'placeable' ||
+      s.kind === 'attachment') &&
     s.count > 1
   ) {
     s.count -= 1;
     return true;
   }
   inv[slot] = { ...EMPTY };
+  return true;
+}
+
+export function findAttachmentSlot(inv: Inventory, defId: string): number {
+  for (let i = 0; i < inv.length; i++) {
+    const s = inv[i];
+    if (s.kind === 'attachment' && s.defId === defId) return i;
+  }
+  return -1;
+}
+
+export function addAttachment(
+  inv: Inventory,
+  defId: string,
+  count = 1
+): boolean {
+  if (count <= 0) return true;
+  const existing = findAttachmentSlot(inv, defId);
+  if (existing >= 0) {
+    const s = inv[existing];
+    if (s.kind === 'attachment') {
+      s.count += count;
+      return true;
+    }
+  }
+  const empty = findEmptySlot(inv);
+  if (empty < 0) return false;
+  inv[empty] = { kind: 'attachment', defId, count };
+  return true;
+}
+
+export function consumeAttachment(
+  inv: Inventory,
+  defId: string,
+  count = 1
+): boolean {
+  const i = findAttachmentSlot(inv, defId);
+  if (i < 0) return false;
+  const s = inv[i];
+  if (s.kind !== 'attachment' || s.count < count) return false;
+  s.count -= count;
+  if (s.count <= 0) inv[i] = { kind: 'empty' };
   return true;
 }
 
@@ -596,11 +901,13 @@ export function sortBag(inv: Inventory): void {
     ammo: Map<string, number>;
     material: Map<string, number>;
     placeable: Map<string, number>;
+    attachment: Map<string, number>;
   };
   const stacks: Stack = {
     ammo: new Map(),
     material: new Map(),
     placeable: new Map(),
+    attachment: new Map(),
   };
   const others: InventorySlot[] = [];
   for (const s of tail) {
@@ -617,6 +924,11 @@ export function sortBag(inv: Inventory): void {
         s.buildingKind,
         (stacks.placeable.get(s.buildingKind) ?? 0) + s.count
       );
+    } else if (s.kind === 'attachment') {
+      stacks.attachment.set(
+        s.defId,
+        (stacks.attachment.get(s.defId) ?? 0) + s.count
+      );
     } else {
       others.push(s);
     }
@@ -632,8 +944,10 @@ export function sortBag(inv: Inventory): void {
         return 2;
       case 'ammo':
         return 3;
-      case 'part':
+      case 'attachment':
         return 4;
+      case 'part':
+        return 5;
       default:
         return 99;
     }
@@ -654,6 +968,10 @@ export function sortBag(inv: Inventory): void {
   // Then ammo.
   for (const [id, count] of stacks.ammo) {
     rebuilt.push({ kind: 'ammo', ammoId: id as AmmoKind, count });
+  }
+  // Then attachments.
+  for (const [defId, count] of stacks.attachment) {
+    rebuilt.push({ kind: 'attachment', defId, count });
   }
   // Pad to original tail length.
   while (rebuilt.length < tail.length) rebuilt.push({ ...EMPTY });

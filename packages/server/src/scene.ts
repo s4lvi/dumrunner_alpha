@@ -25,6 +25,7 @@ import type {
   ProjectileState,
   SceneLayout,
   ServerMessage,
+  WeaponFamily,
 } from '@dumrunner/shared';
 import {
   addAmmo,
@@ -32,10 +33,12 @@ import {
   addPart,
   addPlaceable,
   addWeapon,
+  computeWeaponEffect,
   consumeAmmo,
   consumePlaceable,
+  weaponFamily,
 } from '@dumrunner/shared';
-import { COMBAT } from './combat.js';
+import { COMBAT, WEAPON_STATS } from './combat.js';
 import { TEMPLATES, SURFACE_SPAWNS } from './ai/templates.js';
 import {
   instantiateEnemy,
@@ -150,6 +153,7 @@ const STATION_KINDS = new Set<BuildingKind>([
   'workbench',
   'forge',
   'electronics_bench',
+  'weapon_bench',
 ]);
 
 function emptyOutputBuffer(): import('@dumrunner/shared').InventorySlot[] {
@@ -167,6 +171,7 @@ const BUILDING_STATS: Record<BuildingKind, { maxHp: number }> = {
   workbench: { maxHp: 150 },
   forge: { maxHp: 220 },
   electronics_bench: { maxHp: 130 },
+  weapon_bench: { maxHp: 160 },
   artifact_uplink: { maxHp: 200 },
   power_link: { maxHp: 800 },
   // Doors are conceptually indestructible — only opened, not broken.
@@ -186,6 +191,7 @@ const BUILDING_TARGET_PRIORITY: Partial<Record<BuildingKind, number>> = {
   workbench: 25,
   forge: 25,
   electronics_bench: 25,
+  weapon_bench: 25,
   artifact_uplink: 25,
   wall: 10,
 };
@@ -620,19 +626,37 @@ export class Scene {
     const nx = dirX / len;
     const ny = dirY / len;
 
-    if (slot.weaponId === 'pistol') {
-      this.firePistol(conn, nx, ny);
-    } else if (slot.weaponId === 'knife') {
+    const family = weaponFamily(slot.weapon.weaponId);
+    if (family === 'melee') {
       this.swingKnife(conn, nx, ny);
+    } else {
+      this.fireRanged(conn, nx, ny, family);
     }
   }
 
-  private firePistol(conn: SceneConnection, nx: number, ny: number): void {
+  private fireRanged(
+    conn: SceneConnection,
+    nx: number,
+    ny: number,
+    family: Exclude<WeaponFamily, 'melee'>
+  ): void {
+    const slot = conn.inventory[conn.hotbarSelection];
+    if (!slot || slot.kind !== 'weapon') return;
+    const stats = WEAPON_STATS[family];
+    // Mods + piece affixes on the weapon scale the base WEAPON_STATS.
+    // computeWeaponEffect returns a fully-defaulted multiplier set so
+    // the math below stays branch-free.
+    const eff = computeWeaponEffect(slot.weapon);
+    const fireInterval = stats.fireIntervalMs * eff.fireIntervalMult;
+    const damage = stats.damage * eff.damageMult;
+    const projectileSpeed = stats.projectileSpeed + eff.projectileSpeedAdd;
+    const spreadRad = stats.spreadRad * eff.spreadMult;
     const now = Date.now();
-    if (now - conn.lastFireAt < COMBAT.PISTOL_FIRE_INTERVAL_MS) return;
+    if (now - conn.lastFireAt < fireInterval) return;
 
-    // Ammo gate. No ammo, no shot.
-    const ok = consumeAmmo(conn.inventory, 'pistol_basic', 1);
+    // Ammo gate. One trigger pull = one ammo unit, regardless of pellet
+    // count — shotgun shells fan out from a single shell.
+    const ok = consumeAmmo(conn.inventory, stats.ammoKind, 1);
     if (!ok) return;
     conn.inventoryDirty = true;
     this.bindings.send(conn.characterId, {
@@ -641,19 +665,31 @@ export class Scene {
     });
 
     conn.lastFireAt = now;
-    this.spawnProjectile({
-      ownerKind: 'player',
-      ownerId: conn.characterId,
-      fromX: conn.x,
-      fromY: conn.y,
-      dirX: nx,
-      dirY: ny,
-      speed: COMBAT.PISTOL_PROJECTILE_SPEED,
-      damage: COMBAT.PISTOL_DAMAGE,
-      ttlMs: COMBAT.PISTOL_PROJECTILE_TTL_MS,
-      radius: COMBAT.PISTOL_PROJECTILE_RADIUS,
-      color: 0xfafafa,
-    });
+
+    // Spread cone. Pellets fan out evenly around the aim line; for
+    // pelletCount=1 the offsets list is just [0] so the math stays simple.
+    const pellets = Math.max(1, stats.pelletCount);
+    for (let i = 0; i < pellets; i++) {
+      const t = pellets === 1 ? 0 : i / (pellets - 1) - 0.5; // [-0.5, 0.5]
+      const angle = t * spreadRad;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const dx = nx * cos - ny * sin;
+      const dy = nx * sin + ny * cos;
+      this.spawnProjectile({
+        ownerKind: 'player',
+        ownerId: conn.characterId,
+        fromX: conn.x,
+        fromY: conn.y,
+        dirX: dx,
+        dirY: dy,
+        speed: projectileSpeed,
+        damage,
+        ttlMs: stats.projectileTtlMs,
+        radius: stats.projectileRadius,
+        color: stats.color,
+      });
+    }
   }
 
   private swingKnife(conn: SceneConnection, nx: number, ny: number): void {
@@ -875,7 +911,7 @@ export class Scene {
             addAmmo(closest.inventory, slot.ammoId, slot.count);
             break;
           case 'weapon':
-            addWeapon(closest.inventory, slot.weaponId);
+            addWeapon(closest.inventory, slot.weapon);
             break;
           case 'placeable':
             addPlaceable(closest.inventory, slot.buildingKind, slot.count);
@@ -1320,7 +1356,7 @@ export class Scene {
       return addPart(inv, s.part);
     }
     if (s.kind === 'weapon') {
-      return addWeapon(inv, s.weaponId);
+      return addWeapon(inv, s.weapon);
     }
     return true;
   }

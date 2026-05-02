@@ -57,6 +57,9 @@ export type CarriedPart = {
   // affix rolling shipped don't fail to deserialize; treated as [] when
   // missing.
   affixes?: Affix[];
+  // Crafted suit-affix attachment ids glued onto this part. Slots
+  // gained at the workbench are baked here. Stacks with rolled affixes.
+  appliedAttachments?: string[];
 };
 
 // Loot on the ground. Discriminated by `content.kind`:
@@ -118,7 +121,7 @@ export type CraftJobState = {
   characterId: string;
   // The station kind this job runs at. Currently informational; future
   // rules (e.g. "destroying the station cancels its jobs") use it.
-  stationKind: 'workbench' | 'forge' | 'electronics_bench';
+  stationKind: 'workbench' | 'forge' | 'electronics_bench' | 'weapon_bench';
   // The specific station building running the job. Each station has its
   // own parallel-slot budget; jobs are bound to the building so multiple
   // stations of the same kind work as parallel queues.
@@ -138,20 +141,31 @@ export type BuildingKind =
   | 'workbench'
   | 'forge'
   | 'electronics_bench'
+  | 'weapon_bench'
   | 'artifact_uplink'
   | 'power_link'
   | 'door';
 
 // Subset of BuildingKind that acts as a crafting workstation. Recipes can
 // require the player to be in range of one of these to craft.
-export type WorkstationKind = 'workbench' | 'forge' | 'electronics_bench';
+export type WorkstationKind =
+  | 'workbench'
+  | 'forge'
+  | 'electronics_bench'
+  | 'weapon_bench';
 export const WORKSTATION_KINDS: WorkstationKind[] = [
   'workbench',
   'forge',
   'electronics_bench',
+  'weapon_bench',
 ];
 export function isWorkstationKind(k: BuildingKind): k is WorkstationKind {
-  return k === 'workbench' || k === 'forge' || k === 'electronics_bench';
+  return (
+    k === 'workbench' ||
+    k === 'forge' ||
+    k === 'electronics_bench' ||
+    k === 'weapon_bench'
+  );
 }
 
 export type BuildingState = {
@@ -268,6 +282,7 @@ const BuildingKindSchema = z.enum([
   'workbench',
   'forge',
   'electronics_bench',
+  'weapon_bench',
   'artifact_uplink',
   'power_link',
   'door',
@@ -343,12 +358,20 @@ export const PurchaseBlueprintMsgSchema = z.object({
   blueprintId: z.string().min(1).max(64),
 });
 
+// Player buys keys at an artifact uplink. Flat per-key artifact cost
+// (KEY_ARTIFACT_COST in inventory.ts). Server validates proximity +
+// affordability; consumes artifacts and adds keys to inventory.
+export const PurchaseKeyMsgSchema = z.object({
+  type: z.literal('purchase_key'),
+  count: z.number().int().min(1).max(10),
+});
+
 // Player picks up everything in the output buffers of nearby stations of
 // the given kind. Server validates proximity; output stacks merge into
 // the player's inventory.
 export const PickupStationOutputsMsgSchema = z.object({
   type: z.literal('pickup_station_outputs'),
-  kind: z.enum(['workbench', 'forge', 'electronics_bench']),
+  kind: z.enum(['workbench', 'forge', 'electronics_bench', 'weapon_bench']),
 });
 
 // Player tries to open a locked door. Server validates proximity + that
@@ -357,6 +380,76 @@ export const PickupStationOutputsMsgSchema = z.object({
 export const OpenDoorMsgSchema = z.object({
   type: z.literal('open_door'),
   buildingId: z.string().min(1).max(64),
+});
+
+// ---------- weapon bench actions ----------
+// All of these require the player to be in range of a weapon_bench
+// building on the surface. Server validates each action against the
+// rolled state of the target weapon (tier, slots, family compatibility)
+// and the inventory contents.
+
+const WEAPON_PIECE_KINDS = z.enum(['frame', 'grip', 'magazine', 'barrel']);
+const SUIT_SLOT_KINDS_SCHEMA = z.enum([
+  'chassis',
+  'plating',
+  'life_support',
+  'utility_mod',
+  'cargo_grid',
+]);
+
+// Player attaches a weapon affix (piece-bound) to a weapon. Server reads
+// the attachment def to confirm it's a weapon_affix, the weapon's tier
+// permits that piece, and the piece is empty.
+export const AttachWeaponAffixMsgSchema = z.object({
+  type: z.literal('attach_weapon_affix'),
+  weaponInventoryIdx: slotIndex,
+  pieceKind: WEAPON_PIECE_KINDS,
+  attachmentDefId: z.string().min(1).max(64),
+});
+
+// Detach a piece affix; the affix returns to inventory as a stack.
+export const DetachWeaponAffixMsgSchema = z.object({
+  type: z.literal('detach_weapon_affix'),
+  weaponInventoryIdx: slotIndex,
+  pieceKind: WEAPON_PIECE_KINDS,
+});
+
+// Attach a weapon mod (free slot, not piece-bound). Server checks the
+// weapon's tier mod-slot count.
+export const AttachWeaponModMsgSchema = z.object({
+  type: z.literal('attach_weapon_mod'),
+  weaponInventoryIdx: slotIndex,
+  attachmentDefId: z.string().min(1).max(64),
+});
+
+// Detach a weapon mod by index in the mods array.
+export const DetachWeaponModMsgSchema = z.object({
+  type: z.literal('detach_weapon_mod'),
+  weaponInventoryIdx: slotIndex,
+  modIndex: z.number().int().min(0).max(15),
+});
+
+// Attach a suit affix to the equipped suit. (Suit affixes attach to
+// the part currently equipped in the matching slot.)
+export const AttachSuitAffixMsgSchema = z.object({
+  type: z.literal('attach_suit_affix'),
+  suitSlot: SUIT_SLOT_KINDS_SCHEMA,
+  attachmentDefId: z.string().min(1).max(64),
+});
+
+export const DetachSuitAffixMsgSchema = z.object({
+  type: z.literal('detach_suit_affix'),
+  suitSlot: SUIT_SLOT_KINDS_SCHEMA,
+  attachmentIndex: z.number().int().min(0).max(15),
+});
+
+// Tier-up a weapon at the weapon bench. Consumes materials (registered
+// in TIER_UP_RECIPES on the server) and increments the weapon's tier,
+// preserving every existing piece affix and mod. Adds slots up to the
+// new tier's allotment.
+export const TierUpWeaponMsgSchema = z.object({
+  type: z.literal('tier_up_weapon'),
+  weaponInventoryIdx: slotIndex,
 });
 
 export const ClientMessageSchema = z.discriminatedUnion('type', [
@@ -374,8 +467,16 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   InteractMsgSchema,
   CraftRequestMsgSchema,
   PurchaseBlueprintMsgSchema,
+  PurchaseKeyMsgSchema,
   PickupStationOutputsMsgSchema,
   OpenDoorMsgSchema,
+  AttachWeaponAffixMsgSchema,
+  DetachWeaponAffixMsgSchema,
+  AttachWeaponModMsgSchema,
+  DetachWeaponModMsgSchema,
+  AttachSuitAffixMsgSchema,
+  DetachSuitAffixMsgSchema,
+  TierUpWeaponMsgSchema,
 ]);
 
 
@@ -521,4 +622,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 24;
+export const PROTOCOL_VERSION = 25;

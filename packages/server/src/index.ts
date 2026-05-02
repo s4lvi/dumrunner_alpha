@@ -207,6 +207,11 @@ wss.on('connection', (ws: WebSocket) => {
         world?.handlePurchaseBlueprint(player.characterId, msg.blueprintId);
         break;
       }
+      case 'purchase_key': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handlePurchaseKey(player.characterId, msg.count);
+        break;
+      }
       case 'pickup_station_outputs': {
         const world = serverId ? registry.get(serverId) : undefined;
         world?.handlePickupStationOutputs(player.characterId, msg.kind);
@@ -215,6 +220,66 @@ wss.on('connection', (ws: WebSocket) => {
       case 'open_door': {
         const world = serverId ? registry.get(serverId) : undefined;
         world?.handleOpenDoor(player.characterId, msg.buildingId);
+        break;
+      }
+      case 'attach_weapon_affix': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleAttachWeaponAffix(
+          player.characterId,
+          msg.weaponInventoryIdx,
+          msg.pieceKind,
+          msg.attachmentDefId
+        );
+        break;
+      }
+      case 'detach_weapon_affix': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleDetachWeaponAffix(
+          player.characterId,
+          msg.weaponInventoryIdx,
+          msg.pieceKind
+        );
+        break;
+      }
+      case 'attach_weapon_mod': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleAttachWeaponMod(
+          player.characterId,
+          msg.weaponInventoryIdx,
+          msg.attachmentDefId
+        );
+        break;
+      }
+      case 'detach_weapon_mod': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleDetachWeaponMod(
+          player.characterId,
+          msg.weaponInventoryIdx,
+          msg.modIndex
+        );
+        break;
+      }
+      case 'attach_suit_affix': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleAttachSuitAffix(
+          player.characterId,
+          msg.suitSlot,
+          msg.attachmentDefId
+        );
+        break;
+      }
+      case 'detach_suit_affix': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleDetachSuitAffix(
+          player.characterId,
+          msg.suitSlot,
+          msg.attachmentIndex
+        );
+        break;
+      }
+      case 'tier_up_weapon': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleTierUpWeapon(player.characterId, msg.weaponInventoryIdx);
         break;
       }
       case 'auth':

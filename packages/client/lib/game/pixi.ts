@@ -101,7 +101,9 @@ export type GameHandle = {
   setBuildMode(kind: BuildingKind | null): void;
   // The currently-equipped weapon (selected hotbar slot if it's a weapon),
   // or null. Pixi gates fire/swing visuals + outbound fire messages on this.
-  setEquippedWeapon(weaponId: 'pistol' | 'knife' | null): void;
+  setEquippedWeapon(
+    weaponId: 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'knife' | null
+  ): void;
   swapScene(state: SceneState): void;
   // Snapshot of the renderer's current scene state. Used by the host to
   // hot-swap renderers (FPS ↔ top-down) without losing position / entities.
@@ -378,7 +380,13 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // Currently equipped weapon (or null when no weapon is selected). Driven
   // externally; gates fire/swing locally so we don't show animation for
   // clicks the server will reject.
-  let equippedWeapon: 'pistol' | 'knife' | null = null;
+  let equippedWeapon:
+    | 'pistol'
+    | 'smg'
+    | 'shotgun'
+    | 'rifle'
+    | 'knife'
+    | null = null;
   let pendingBuildAction: 'place' | 'demolish' | null = null;
 
   function onKeyDown(e: KeyboardEvent) {
@@ -564,7 +572,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
             lastFireAt = now;
             // Only ranged weapons get the muzzle flash; knife uses the
             // weapon_swung server message to render its slash.
-            if (equippedWeapon === 'pistol') {
+            if (equippedWeapon !== 'knife') {
               spawnMuzzleFlash(selfX, selfY, fdx, fdy);
             }
           }
@@ -1183,6 +1191,22 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       body
         .rect(w * 0.4, h * 0.88, w * 0.2, h * 0.12)
         .fill({ color: 0xfbcfe8 });
+    } else if (b.kind === 'weapon_bench') {
+      // Gunsmith bench: dark steel surface with a stylised pistol
+      // silhouette on top + a brass-tone vise at one end. Reads as
+      // "you build / mod weapons here."
+      body.rect(0, 0, w, h).fill({ color: 0x1f2937 });
+      body.rect(0, 0, w, h).stroke({ color: 0x0b1220, width: 2 });
+      // Bench top.
+      body.rect(w * 0.1, h * 0.18, w * 0.8, h * 0.22).fill({ color: 0x374151 });
+      // Pistol silhouette (rectangular slide + handle).
+      body.rect(w * 0.22, h * 0.5, w * 0.5, h * 0.14).fill({ color: 0x9ca3af });
+      body.rect(w * 0.34, h * 0.62, w * 0.18, h * 0.22).fill({ color: 0x9ca3af });
+      // Vise on the right.
+      body
+        .rect(w * 0.74, h * 0.52, w * 0.14, h * 0.28)
+        .fill({ color: 0xb45309 })
+        .stroke({ color: 0x78350f, width: 1 });
     } else if (b.kind === 'electronics_bench') {
       // Electronics bench: green PCB-like surface with a yellow LED.
       body.rect(0, 0, w, h).fill({ color: 0x064e3b });
@@ -1470,6 +1494,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         b.kind !== 'workbench' &&
         b.kind !== 'forge' &&
         b.kind !== 'electronics_bench' &&
+        b.kind !== 'weapon_bench' &&
         b.kind !== 'artifact_uplink'
       ) {
         continue;

@@ -166,7 +166,13 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const keys = new Set<string>();
   let pointerLocked = false;
   let mouseDown = false;
-  let equippedWeapon: 'pistol' | 'knife' | null = null;
+  let equippedWeapon:
+    | 'pistol'
+    | 'smg'
+    | 'shotgun'
+    | 'rifle'
+    | 'knife'
+    | null = null;
   // Brief muzzle-flash window so the crosshair pulses on every fire frame.
   let lastFireFlashAt = 0;
   // Damage feedback: full-screen red tint on self damage, per-enemy white
@@ -429,6 +435,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         b.kind !== 'workbench' &&
         b.kind !== 'forge' &&
         b.kind !== 'electronics_bench' &&
+        b.kind !== 'weapon_bench' &&
         b.kind !== 'artifact_uplink'
       ) {
         continue;

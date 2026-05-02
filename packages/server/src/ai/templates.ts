@@ -85,6 +85,31 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     visual: { shape: 'circle', color: 0x60a5fa, size: 14 },
   },
 
+  // Swarmer: low-HP, fast melee. Spawns in packs of 4-6 (procgen
+  // multiplies its room weight). Solo it's trivial; the threat model is
+  // the SHOTGUN bait — clusters of weak enemies that reward a wide-spread
+  // weapon over a single-target pistol/rifle.
+  swarmer: {
+    id: 'swarmer',
+    faction: 'catacombs',
+    maxHp: 22,
+    radius: 11,
+    moveSpeed: 165,
+    senseRadius: 380,
+    movement: { kind: 'chase' },
+    attacks: [
+      { kind: 'melee', range: 30, damagePerSec: 14 },
+    ],
+    fleeBelowHpRatio: null,
+    stunDurationOnHitMs: 140,
+    lootTable: [
+      { materialId: 'scrap',  chance: 0.8, min: 1, max: 2 },
+      { materialId: 'biotic', chance: 0.2, min: 1, max: 1 },
+      { materialId: 'key',    chance: 0.04, min: 1, max: 1 },
+    ],
+    visual: { shape: 'triangle', color: 0xfb7185, size: 12 },
+  },
+
   brute_chaser: {
     id: 'brute_chaser',
     faction: 'sun_bleached',

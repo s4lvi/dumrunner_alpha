@@ -4,13 +4,14 @@
 
 import {
   emptyInventory,
+  makeWeapon,
   type Inventory,
 } from '@dumrunner/shared';
 
 export function buildStarterInventory(): Inventory {
   const inv = emptyInventory();
-  inv[0] = { kind: 'weapon', weaponId: 'pistol' };
-  inv[1] = { kind: 'weapon', weaponId: 'knife' };
+  inv[0] = { kind: 'weapon', weapon: makeWeapon('pistol') };
+  inv[1] = { kind: 'weapon', weapon: makeWeapon('knife') };
   inv[2] = { kind: 'ammo', ammoId: 'pistol_basic', count: 100 };
   // Materials enough to bootstrap the full crafting chain for testing.
   // The recipes a fresh player needs are:

@@ -29,13 +29,26 @@ import {
   isSuitPart,
   findEmptySlot,
   addAmmo,
+  addAttachment,
+  addMaterial,
   addPlaceable,
+  addWeapon,
+  ATTACHMENT_DEFS,
+  consumeAttachment,
+  makeWeapon,
+  weaponFamily as weaponFamilyOf,
+  TIER_PIECE_SLOTS,
+  TIER_MOD_SLOTS,
+  type MaterialKind,
+  type WeaponPieceKind,
+  type WeaponTier,
   BLUEPRINT_CATALOG,
   computeSuitStats,
   consumeAmmo,
   consumeMaterial,
   countAmmo,
   countMaterial,
+  KEY_ARTIFACT_COST,
   RECIPES,
 } from '@dumrunner/shared';
 import { supabase } from './supabase.js';
@@ -137,13 +150,35 @@ const STATION_PARALLEL_SLOTS: Partial<Record<BuildingKind, number>> = {
   workbench: 1,
   forge: 1,
   electronics_bench: 1,
+  weapon_bench: 1,
+};
+
+// Materials consumed when tier-upping a weapon. Index by current tier
+// (e.g. TIER_UP_COSTS[1] is the cost to go from T1 → T2). T4 is the
+// cap; no entry there.
+const TIER_UP_COSTS: Record<number, { materialId: MaterialKind; count: number }[]> = {
+  1: [
+    { materialId: 'alloy', count: 6 },
+    { materialId: 'circuit', count: 2 },
+  ],
+  2: [
+    { materialId: 'alloy', count: 12 },
+    { materialId: 'circuit', count: 5 },
+    { materialId: 'crystal', count: 1 },
+  ],
+  3: [
+    { materialId: 'alloy', count: 24 },
+    { materialId: 'circuit', count: 10 },
+    { materialId: 'crystal', count: 3 },
+    { materialId: 'artifact', count: 2 },
+  ],
 };
 
 // Starter blueprints granted on connect / re-granted at every cycle reset.
-// The artifact-trade store is the real source of new blueprints now;
-// this list stays empty so the loop is honest. Bring entries back here
-// only for testing convenience.
-const STARTER_BLUEPRINTS: string[] = [];
+// The artifact-trade store is the real source of new blueprints; only
+// items the player should always be able to make end up here. The pistol
+// is the baseline weapon every run starts with.
+const STARTER_BLUEPRINTS: string[] = ['bp_pistol'];
 
 function dungeonSceneId(floorIndex: number): string {
   return `${DUNGEON_SCENE_PREFIX}${floorIndex}`;
@@ -856,7 +891,8 @@ export class World {
         stationKind: recipe.workstation as
           | 'workbench'
           | 'forge'
-          | 'electronics_bench',
+          | 'electronics_bench'
+          | 'weapon_bench',
         stationBuildingId: chosenStationId!,
         startedAt: now,
         completesAt: now + craftTimeMs,
@@ -877,8 +913,12 @@ export class World {
     const out = recipe.output;
     if (out.kind === 'placeable') {
       addPlaceable(conn.inventory, out.buildingKind, out.count);
-    } else {
+    } else if (out.kind === 'ammo') {
       addAmmo(conn.inventory, out.ammoId, out.count);
+    } else if (out.kind === 'weapon') {
+      addWeapon(conn.inventory, makeWeapon(out.weaponId));
+    } else {
+      addAttachment(conn.inventory, out.defId, out.count);
     }
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
@@ -913,7 +953,11 @@ export class World {
       const outputSlot: import('@dumrunner/shared').InventorySlot =
         out.kind === 'placeable'
           ? { kind: 'placeable', buildingKind: out.buildingKind, count: out.count }
-          : { kind: 'ammo', ammoId: out.ammoId, count: out.count };
+          : out.kind === 'ammo'
+          ? { kind: 'ammo', ammoId: out.ammoId, count: out.count }
+          : out.kind === 'weapon'
+          ? { kind: 'weapon', weapon: makeWeapon(out.weaponId) }
+          : { kind: 'attachment', defId: out.defId, count: out.count };
 
       const surface = this.scenes.get(SURFACE_SCENE_ID);
       const deposited = surface?.depositToStationOutput(
@@ -926,8 +970,12 @@ export class World {
         // doesn't silently disappear.
         if (out.kind === 'placeable') {
           addPlaceable(conn.inventory, out.buildingKind, out.count);
-        } else {
+        } else if (out.kind === 'ammo') {
           addAmmo(conn.inventory, out.ammoId, out.count);
+        } else if (out.kind === 'weapon') {
+          addWeapon(conn.inventory, makeWeapon(out.weaponId));
+        } else {
+          addAttachment(conn.inventory, out.defId, out.count);
         }
         conn.inventoryDirty = true;
         this.sendDirect(conn.ws, {
@@ -945,7 +993,7 @@ export class World {
   // within range into the player's inventory.
   handlePickupStationOutputs(
     characterId: string,
-    kind: 'workbench' | 'forge' | 'electronics_bench'
+    kind: 'workbench' | 'forge' | 'electronics_bench' | 'weapon_bench'
   ): void {
     const conn = this.connections.get(characterId);
     if (!conn) return;
@@ -1038,6 +1086,245 @@ export class World {
     this.sendDirect(conn.ws, {
       type: 'blueprints_changed',
       knownBlueprints: mergedBlueprints(conn),
+    });
+  }
+
+  // ---------- weapon bench actions ----------
+  // All of these require the player to be on the surface within
+  // CRAFT_STATION_RANGE_PX of a weapon_bench. Each returns silently on
+  // any validation failure — the client UI gates buttons by the same
+  // rules so users won't normally see a no-op.
+
+  private isNearWeaponBench(conn: Connection): boolean {
+    if (conn.sceneId !== SURFACE_SCENE_ID) return false;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    return !!surface?.hasBuildingNearby(
+      conn.x,
+      conn.y,
+      'weapon_bench',
+      COMBAT.CRAFT_STATION_RANGE_PX
+    );
+  }
+
+  handleAttachWeaponAffix(
+    characterId: string,
+    weaponInventoryIdx: number,
+    pieceKind: WeaponPieceKind,
+    attachmentDefId: string
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (!this.isNearWeaponBench(conn)) return;
+    const slot = conn.inventory[weaponInventoryIdx];
+    if (!slot || slot.kind !== 'weapon') return;
+    const def = ATTACHMENT_DEFS[attachmentDefId];
+    if (!def || def.kind !== 'weapon_affix') return;
+    if (def.pieceKind !== pieceKind) return;
+    const allowedPieces = TIER_PIECE_SLOTS[slot.weapon.tier];
+    if (!allowedPieces.includes(pieceKind)) return;
+    if (slot.weapon.pieces[pieceKind]) return; // already filled
+    if (def.family && def.family !== weaponFamilyOf(slot.weapon.weaponId)) return;
+    if (!consumeAttachment(conn.inventory, attachmentDefId, 1)) return;
+    slot.weapon.pieces[pieceKind] = { id: attachmentDefId, value: def.value };
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  handleDetachWeaponAffix(
+    characterId: string,
+    weaponInventoryIdx: number,
+    pieceKind: WeaponPieceKind
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (!this.isNearWeaponBench(conn)) return;
+    const slot = conn.inventory[weaponInventoryIdx];
+    if (!slot || slot.kind !== 'weapon') return;
+    const existing = slot.weapon.pieces[pieceKind];
+    if (!existing) return;
+    if (!addAttachment(conn.inventory, existing.id, 1)) return;
+    slot.weapon.pieces[pieceKind] = null;
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  handleAttachWeaponMod(
+    characterId: string,
+    weaponInventoryIdx: number,
+    attachmentDefId: string
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (!this.isNearWeaponBench(conn)) return;
+    const slot = conn.inventory[weaponInventoryIdx];
+    if (!slot || slot.kind !== 'weapon') return;
+    const def = ATTACHMENT_DEFS[attachmentDefId];
+    if (!def || def.kind !== 'weapon_mod') return;
+    const cap = TIER_MOD_SLOTS[slot.weapon.tier];
+    if (slot.weapon.mods.length >= cap) return;
+    if (def.family && def.family !== weaponFamilyOf(slot.weapon.weaponId)) return;
+    if (!consumeAttachment(conn.inventory, attachmentDefId, 1)) return;
+    slot.weapon.mods.push({ id: attachmentDefId });
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  handleDetachWeaponMod(
+    characterId: string,
+    weaponInventoryIdx: number,
+    modIndex: number
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (!this.isNearWeaponBench(conn)) return;
+    const slot = conn.inventory[weaponInventoryIdx];
+    if (!slot || slot.kind !== 'weapon') return;
+    const mod = slot.weapon.mods[modIndex];
+    if (!mod) return;
+    if (!addAttachment(conn.inventory, mod.id, 1)) return;
+    slot.weapon.mods.splice(modIndex, 1);
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  handleAttachSuitAffix(
+    characterId: string,
+    suitSlot: SuitSlotKind,
+    attachmentDefId: string
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    // Suit affixes craft at electronics_bench but attach at the equipment
+    // panel — gated on being near an electronics_bench so it's clear
+    // where this happens.
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (
+      !surface?.hasBuildingNearby(
+        conn.x,
+        conn.y,
+        'electronics_bench',
+        COMBAT.CRAFT_STATION_RANGE_PX
+      )
+    ) {
+      return;
+    }
+    const part = conn.equipment[suitSlot];
+    if (!part) return;
+    const def = ATTACHMENT_DEFS[attachmentDefId];
+    if (!def || def.kind !== 'suit_affix') return;
+    if (def.slotKind !== suitSlot) return;
+    if (!consumeAttachment(conn.inventory, attachmentDefId, 1)) return;
+    if (!part.appliedAttachments) part.appliedAttachments = [];
+    part.appliedAttachments.push(attachmentDefId);
+    conn.inventoryDirty = true;
+    this.recomputePlayerStats(conn);
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  handleDetachSuitAffix(
+    characterId: string,
+    suitSlot: SuitSlotKind,
+    attachmentIndex: number
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (
+      !surface?.hasBuildingNearby(
+        conn.x,
+        conn.y,
+        'electronics_bench',
+        COMBAT.CRAFT_STATION_RANGE_PX
+      )
+    ) {
+      return;
+    }
+    const part = conn.equipment[suitSlot];
+    if (!part || !part.appliedAttachments) return;
+    const id = part.appliedAttachments[attachmentIndex];
+    if (!id) return;
+    if (!addAttachment(conn.inventory, id, 1)) return;
+    part.appliedAttachments.splice(attachmentIndex, 1);
+    conn.inventoryDirty = true;
+    this.recomputePlayerStats(conn);
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Tier-up: T1 → T2 → T3 → T4. Consumes a tier-scaled material cost
+  // and increments the weapon's tier. Existing pieces and mods are
+  // preserved; the new tier exposes additional piece slots that the
+  // player can fill at a later visit.
+  handleTierUpWeapon(characterId: string, weaponInventoryIdx: number): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (!this.isNearWeaponBench(conn)) return;
+    const slot = conn.inventory[weaponInventoryIdx];
+    if (!slot || slot.kind !== 'weapon') return;
+    if (slot.weapon.tier >= 4) return;
+    const cost = TIER_UP_COSTS[slot.weapon.tier];
+    if (!cost) return;
+    for (const c of cost) {
+      if (countMaterial(conn.inventory, c.materialId) < c.count) return;
+    }
+    for (const c of cost) {
+      consumeMaterial(conn.inventory, c.materialId, c.count);
+    }
+    slot.weapon.tier = (slot.weapon.tier + 1) as WeaponTier;
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Player buys keys at an artifact uplink. Mirrors handlePurchaseBlueprint
+  // — surface only, in range of an uplink, must afford `count *
+  // KEY_ARTIFACT_COST` artifacts. Atomic: nothing changes if any check fails.
+  handlePurchaseKey(characterId: string, count: number): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (!Number.isInteger(count) || count < 1 || count > 10) return;
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (
+      !surface?.hasBuildingNearby(
+        conn.x,
+        conn.y,
+        'artifact_uplink',
+        COMBAT.CRAFT_STATION_RANGE_PX
+      )
+    ) {
+      return;
+    }
+    const totalCost = count * KEY_ARTIFACT_COST;
+    if (countMaterial(conn.inventory, 'artifact') < totalCost) return;
+
+    consumeMaterial(conn.inventory, 'artifact', totalCost);
+    addMaterial(conn.inventory, 'key', count);
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
     });
   }
 
