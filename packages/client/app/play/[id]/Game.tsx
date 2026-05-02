@@ -122,6 +122,10 @@ export function Game({ serverId }: { serverId: string }) {
     null
   );
   const nearestStationRef = useRef<BuildingKind | null>(null);
+  // Nearest door building id within reach. Drives the "Open Door" prompt
+  // and the E action when no other interactable / station wins.
+  const [nearestDoorId, setNearestDoorId] = useState<string | null>(null);
+  const nearestDoorIdRef = useRef<string | null>(null);
   const [showTradeModal, setShowTradeModal] = useState(false);
   // Refs mirror the modal flags so the global keydown effect (set up with
   // [] deps) reads live values without needing exhaustive deps.
@@ -172,6 +176,7 @@ export function Game({ serverId }: { serverId: string }) {
     onNearWorkstationsChanged: (state: {
       all: BuildingKind[];
       nearest: BuildingKind | null;
+      nearestDoorId: string | null;
     }) => void;
   } | null>(null);
   // Holds the live ws so number-key handlers can send select_hotbar without
@@ -378,12 +383,14 @@ export function Game({ serverId }: { serverId: string }) {
             nearInteractableRef.current = near;
             setNearInteractable(near);
           },
-          onNearWorkstationsChanged: ({ all, nearest }) => {
+          onNearWorkstationsChanged: ({ all, nearest, nearestDoorId }) => {
             const set = new Set(all);
             nearWorkstationsRef.current = set;
             setNearWorkstations(set);
             nearestStationRef.current = nearest;
             setNearestStation(nearest);
+            nearestDoorIdRef.current = nearestDoorId;
+            setNearestDoorId(nearestDoorId);
           },
         };
         requestAnimationFrame(() => {
@@ -754,6 +761,7 @@ export function Game({ serverId }: { serverId: string }) {
       //   1. layout interactables (stairs / extract)
       //   2. nearest station — uplink opens trade modal,
       //      workbench/forge/electronics_bench opens its modal
+      //   3. nearest door — sends open_door (server consumes a key)
       if (e.key === 'e' || e.key === 'E') {
         const near = nearInteractableRef.current;
         if (near) {
@@ -773,6 +781,11 @@ export function Game({ serverId }: { serverId: string }) {
         ) {
           setShowTradeModal(false);
           setStationModalKind(nearestKind);
+          return;
+        }
+        const doorId = nearestDoorIdRef.current;
+        if (doorId) {
+          sendOnLiveWs({ type: 'open_door', buildingId: doorId });
           return;
         }
         return;
@@ -847,6 +860,15 @@ export function Game({ serverId }: { serverId: string }) {
               label={`Use — ${STATION_LABEL[nearestStation]}`}
             />
           )}
+        {!nearInteractable && nearestStation === null && nearestDoorId && (
+          <InteractPrompt
+            label={
+              countMaterial(inventory, 'key') > 0
+                ? 'Open Door — costs 1 key'
+                : 'Locked — need a key'
+            }
+          />
+        )}
         <ControlsHint useFps={useFps} />
         {toast && <Toast message={toast.message} keyId={toast.key} />}
         {linkSeveredAt !== null && <LinkSeveredOverlay />}
@@ -1893,6 +1915,7 @@ const STATION_LABEL: Record<BuildingKind, string> = {
   electronics_bench: 'Electronics Bench',
   artifact_uplink: 'Artifact Uplink',
   power_link: 'Power Link',
+  door: 'Door',
 };
 
 function CraftRow({
@@ -2674,6 +2697,18 @@ function ItemIcon({
             strokeWidth="0.5"
             opacity="0.4"
           />
+        </svg>
+      );
+    }
+    if (subkind === 'key') {
+      // Skeleton key — golden head with two prongs.
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24">
+          <circle cx="7" cy="12" r="4" fill="#facc15" stroke="#0b0d10" strokeWidth={stroke} />
+          <circle cx="7" cy="12" r="1.5" fill="#0b0d10" />
+          <rect x="10" y="11" width="11" height="2" fill="#facc15" stroke="#0b0d10" strokeWidth={stroke} />
+          <rect x="17" y="13" width="2" height="3" fill="#facc15" stroke="#0b0d10" strokeWidth={stroke} />
+          <rect x="20" y="13" width="2" height="3" fill="#facc15" stroke="#0b0d10" strokeWidth={stroke} />
         </svg>
       );
     }

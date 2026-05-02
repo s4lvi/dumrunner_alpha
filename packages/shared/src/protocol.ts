@@ -139,7 +139,8 @@ export type BuildingKind =
   | 'forge'
   | 'electronics_bench'
   | 'artifact_uplink'
-  | 'power_link';
+  | 'power_link'
+  | 'door';
 
 // Subset of BuildingKind that acts as a crafting workstation. Recipes can
 // require the player to be in range of one of these to craft.
@@ -269,6 +270,7 @@ const BuildingKindSchema = z.enum([
   'electronics_bench',
   'artifact_uplink',
   'power_link',
+  'door',
 ]);
 
 export const BuildRequestMsgSchema = z.object({
@@ -349,6 +351,14 @@ export const PickupStationOutputsMsgSchema = z.object({
   kind: z.enum(['workbench', 'forge', 'electronics_bench']),
 });
 
+// Player tries to open a locked door. Server validates proximity + that
+// the player has a key in inventory; consumes one key and removes the
+// door building so the room is enterable.
+export const OpenDoorMsgSchema = z.object({
+  type: z.literal('open_door'),
+  buildingId: z.string().min(1).max(64),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMsgSchema,
   InputMsgSchema,
@@ -365,6 +375,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   CraftRequestMsgSchema,
   PurchaseBlueprintMsgSchema,
   PickupStationOutputsMsgSchema,
+  OpenDoorMsgSchema,
 ]);
 
 
@@ -510,4 +521,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 23;
+export const PROTOCOL_VERSION = 24;

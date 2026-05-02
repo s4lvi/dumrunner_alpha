@@ -21,7 +21,8 @@ export type MaterialKind =
   | 'alloy'
   | 'biotic'
   | 'crystal'
-  | 'artifact';
+  | 'artifact'
+  | 'key';
 
 // Single source of truth for material metadata. Server uses this for loot
 // rolls; client uses it for icon tint + tooltip name.
@@ -45,6 +46,9 @@ export const MATERIALS: Record<MaterialKind, MaterialDef> = {
   // Artifacts are the "currency" tier — only spent at the artifact uplink
   // to learn blueprints. Drop weighting handled in the AI loot tables.
   artifact: { id: 'artifact', name: 'Artifact', tier: 3, color: 0xf472b6 },
+  // Keys unlock dungeon doors. Drops from dungeon enemies; later tiers
+  // will add craftable variants. V1: any key opens any locked door.
+  key: { id: 'key', name: 'Key', tier: 2, color: 0xfacc15 },
 };
 
 export type AmmoKind = 'pistol_basic';

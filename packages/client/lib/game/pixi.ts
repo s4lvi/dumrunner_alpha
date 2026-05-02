@@ -51,11 +51,12 @@ export type GameInit = {
   // Called whenever the set of workstation building kinds the player is
   // standing within crafting range of changes. `all` drives recipe
   // enable/disable; `nearest` drives the "Press E — <station>" prompt
-  // and the E-key target so overlapping ranges don't show conflicting
-  // prompts. Both update together each frame.
+  // and the E-key target. `nearestDoorId` is the id of the closest
+  // dungeon door in range (for the open-door prompt) — null when none.
   onNearWorkstationsChanged: (state: {
     all: BuildingKind[];
     nearest: BuildingKind | null;
+    nearestDoorId: string | null;
   }) => void;
 };
 
@@ -148,6 +149,7 @@ const MATERIAL_TINT: Record<string, number> = {
   biotic: 0xa855f7,
   crystal: 0x06b6d4,
   artifact: 0xf472b6,
+  key: 0xfacc15,
 };
 
 // Client-side visual lookup keyed by EnemyKind (the server template id).
@@ -1096,6 +1098,25 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       body
         .circle(w / 2, h / 2, w * 0.15)
         .fill({ color: 0xfbbf24 });
+    } else if (b.kind === 'door') {
+      // Wood-tone door with a metal lock plate centred on the tile.
+      // Reads as "interactable, not just another wall."
+      body.rect(0, 0, w, h).fill({ color: 0x8b5e34 });
+      body.rect(0, 0, w, h).stroke({ color: 0x3a2614, width: 2 });
+      body
+        .rect(w * 0.1, h * 0.1, w * 0.8, h * 0.8)
+        .stroke({ color: 0x6b4221, width: 1 });
+      body
+        .rect(w * 0.4, h * 0.42, w * 0.2, h * 0.16)
+        .fill({ color: 0xfacc15 })
+        .stroke({ color: 0x854d0e, width: 1 });
+      // Vertical wood grain.
+      body
+        .moveTo(w * 0.5, h * 0.1)
+        .lineTo(w * 0.5, h * 0.42)
+        .moveTo(w * 0.5, h * 0.58)
+        .lineTo(w * 0.5, h * 0.9)
+        .stroke({ color: 0x6b4221, width: 1 });
     } else if (b.kind === 'power_link') {
       // Massive central pillar with a bright cyan-violet plasma core. Reads
       // as both "this is the dungeon portal" and "this is the power source"
@@ -1355,7 +1376,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     if (tileSize <= 0 || buildings.size === 0) {
       if (lastWorkstationKey !== '') {
         lastWorkstationKey = '';
-        init.onNearWorkstationsChanged({ all: [], nearest: null });
+        init.onNearWorkstationsChanged({
+          all: [],
+          nearest: null,
+          nearestDoorId: null,
+        });
       }
       return;
     }
@@ -1363,8 +1388,24 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const found = new Set<BuildingKind>();
     let nearestKind: BuildingKind | null = null;
     let nearestDsq = Infinity;
+    let nearestDoorId: string | null = null;
+    let nearestDoorDsq = Infinity;
     for (const rb of buildings.values()) {
       const b = rb.data;
+      const cx = (b.tileX + b.width / 2) * tileSize;
+      const cy = (b.tileY + b.height / 2) * tileSize;
+      const halfW = (b.width * tileSize) / 2;
+      const halfH = (b.height * tileSize) / 2;
+      const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
+      const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
+      const dsq = dx * dx + dy * dy;
+      if (b.kind === 'door') {
+        if (dsq <= r2 && dsq < nearestDoorDsq) {
+          nearestDoorDsq = dsq;
+          nearestDoorId = b.id;
+        }
+        continue;
+      }
       if (
         b.kind !== 'workbench' &&
         b.kind !== 'forge' &&
@@ -1373,13 +1414,6 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       ) {
         continue;
       }
-      const cx = (b.tileX + b.width / 2) * tileSize;
-      const cy = (b.tileY + b.height / 2) * tileSize;
-      const halfW = (b.width * tileSize) / 2;
-      const halfH = (b.height * tileSize) / 2;
-      const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
-      const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
-      const dsq = dx * dx + dy * dy;
       if (dsq <= r2) {
         found.add(b.kind);
         if (dsq < nearestDsq) {
@@ -1388,12 +1422,18 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         }
       }
     }
-    const key = [...found].sort().join(',') + '|' + (nearestKind ?? '');
+    const key =
+      [...found].sort().join(',') +
+      '|' +
+      (nearestKind ?? '') +
+      '|' +
+      (nearestDoorId ?? '');
     if (key !== lastWorkstationKey) {
       lastWorkstationKey = key;
       init.onNearWorkstationsChanged({
         all: [...found],
         nearest: nearestKind,
+        nearestDoorId,
       });
     }
   }

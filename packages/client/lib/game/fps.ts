@@ -115,6 +115,7 @@ const MATERIAL_TINT: Record<string, number> = {
   biotic: 0xa855f7,
   crystal: 0x06b6d4,
   artifact: 0xf472b6,
+  key: 0xfacc15,
 };
 const PART_TIER_COLOR: Record<string, number> = {
   Mk1: 0x9ca3af,
@@ -394,7 +395,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     if (!layout || layout.tileSize <= 0 || buildings.size === 0) {
       if (lastStationKey !== '') {
         lastStationKey = '';
-        init.onNearWorkstationsChanged({ all: [], nearest: null });
+        init.onNearWorkstationsChanged({
+          all: [],
+          nearest: null,
+          nearestDoorId: null,
+        });
       }
       return;
     }
@@ -403,7 +408,23 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const found = new Set<import('@dumrunner/shared').BuildingKind>();
     let nearestKind: import('@dumrunner/shared').BuildingKind | null = null;
     let nearestDsq = Infinity;
+    let nearestDoorId: string | null = null;
+    let nearestDoorDsq = Infinity;
     for (const b of buildings.values()) {
+      const cx = (b.tileX + b.width / 2) * tileSize;
+      const cy = (b.tileY + b.height / 2) * tileSize;
+      const halfW = (b.width * tileSize) / 2;
+      const halfH = (b.height * tileSize) / 2;
+      const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
+      const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
+      const dsq = dx * dx + dy * dy;
+      if (b.kind === 'door') {
+        if (dsq <= r2 && dsq < nearestDoorDsq) {
+          nearestDoorDsq = dsq;
+          nearestDoorId = b.id;
+        }
+        continue;
+      }
       if (
         b.kind !== 'workbench' &&
         b.kind !== 'forge' &&
@@ -412,13 +433,6 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       ) {
         continue;
       }
-      const cx = (b.tileX + b.width / 2) * tileSize;
-      const cy = (b.tileY + b.height / 2) * tileSize;
-      const halfW = (b.width * tileSize) / 2;
-      const halfH = (b.height * tileSize) / 2;
-      const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
-      const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
-      const dsq = dx * dx + dy * dy;
       if (dsq <= r2) {
         found.add(b.kind);
         if (dsq < nearestDsq) {
@@ -427,12 +441,18 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         }
       }
     }
-    const key = [...found].sort().join(',') + '|' + (nearestKind ?? '');
+    const key =
+      [...found].sort().join(',') +
+      '|' +
+      (nearestKind ?? '') +
+      '|' +
+      (nearestDoorId ?? '');
     if (key !== lastStationKey) {
       lastStationKey = key;
       init.onNearWorkstationsChanged({
         all: [...found],
         nearest: nearestKind,
+        nearestDoorId,
       });
     }
   }

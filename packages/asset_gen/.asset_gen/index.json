@@ -575,6 +575,155 @@
         "reasons": []
       },
       "createdAt": "2026-05-02T17:47:22.860Z"
+    },
+    {
+      "assetId": "asset_88ec9774dbcb4635951d9a78b5766fd4",
+      "cacheKey": "91be62d381ae270160115352d87e72fc10466d32b0f9412d05d1a9b564f6ea3c",
+      "request": {
+        "requestId": "smoke:enemy_animation:chaser_melee_attack_3:asset_cc0a687dc77142f193c50fbd325721bd",
+        "assetKind": "enemy_animation",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chaser_melee_attack",
+          "label": "rat-like tunnel scavenger",
+          "faction": "catacombs"
+        },
+        "visualBrief": {
+          "subject": "rat-like mutant scavenger",
+          "materials": [
+            "patchy fur",
+            "rusted scrap implants"
+          ],
+          "colors": [
+            "#a855f7",
+            "#22c55e",
+            "#111827"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "same creature identity across frames"
+          ],
+          "mustAvoid": [
+            "text",
+            "background scene",
+            "multiple creatures",
+            "sprite sheet"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        },
+        "animation": {
+          "baseAssetId": "asset_cc0a687dc77142f193c50fbd325721bd",
+          "action": "attack",
+          "frameCount": 3,
+          "directionMode": "omnidirectional",
+          "fps": 8,
+          "maxFrameDriftPx": 5
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_88ec9774dbcb4635951d9a78b5766fd4.png"
+      },
+      "metadata": {
+        "width": 192,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.82
+        },
+        "opaqueBounds": {
+          "x": 11,
+          "y": 7,
+          "w": 167,
+          "h": 47
+        },
+        "averageColors": [
+          "#44273a",
+          "#2e1424",
+          "#412738"
+        ]
+      },
+      "animation": {
+        "action": "attack",
+        "frameCount": 3,
+        "frameWidth": 64,
+        "frameHeight": 64,
+        "fps": 8,
+        "directionMode": "omnidirectional",
+        "maxFrameDriftPx": 5,
+        "frames": [
+          {
+            "name": "attack_0",
+            "x": 0,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 11,
+              "y": 7,
+              "w": 41,
+              "h": 47
+            }
+          },
+          {
+            "name": "attack_1",
+            "x": 64,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 13,
+              "y": 9,
+              "w": 37,
+              "h": 44
+            }
+          },
+          {
+            "name": "attack_2",
+            "x": 128,
+            "y": 0,
+            "w": 64,
+            "h": 64,
+            "anchor": {
+              "x": 0.5,
+              "y": 0.82
+            },
+            "opaqueBounds": {
+              "x": 14,
+              "y": 10,
+              "w": 36,
+              "h": 41
+            }
+          }
+        ]
+      },
+      "verification": {
+        "score": 0.8,
+        "verdict": "pass",
+        "summary": "Generated attack cycle passed baseline frame checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-02T17:48:54.944Z"
     }
   ],
   "jobs": [
@@ -867,7 +1016,7 @@
     },
     {
       "jobId": "job_d1e3d3faeebc40f9a8d9c32c0b5db987",
-      "status": "generating",
+      "status": "approved",
       "cacheKey": "91be62d381ae270160115352d87e72fc10466d32b0f9412d05d1a9b564f6ea3c",
       "request": {
         "requestId": "smoke:enemy_animation:chaser_melee_attack_3:asset_cc0a687dc77142f193c50fbd325721bd",
@@ -922,10 +1071,10 @@
           "maxFrameDriftPx": 5
         }
       },
-      "assetId": null,
+      "assetId": "asset_88ec9774dbcb4635951d9a78b5766fd4",
       "error": null,
       "createdAt": "2026-05-02T17:48:11.781Z",
-      "updatedAt": "2026-05-02T17:48:41.720Z"
+      "updatedAt": "2026-05-02T17:48:54.945Z"
     }
   ]
 }

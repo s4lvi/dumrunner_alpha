@@ -47,6 +47,7 @@ import type { EnemyRuntime } from './ai/runtime.js';
 import { rollDropsForKill, killTierBiasFromHp } from './loot.js';
 import { isInsideAny, segmentInsideWalkables } from '@dumrunner/shared';
 import {
+  type InitialDoor,
   type InitialEnemySpawn,
   type InitialLootDrop,
 } from './procgen.js';
@@ -168,6 +169,10 @@ const BUILDING_STATS: Record<BuildingKind, { maxHp: number }> = {
   electronics_bench: { maxHp: 130 },
   artifact_uplink: { maxHp: 200 },
   power_link: { maxHp: 800 },
+  // Doors are conceptually indestructible — only opened, not broken.
+  // Server skips enemy melee damage on this kind. HP is high so any
+  // accidental hit (e.g. from a stray projectile path) doesn't kill it.
+  door: { maxHp: 9999 },
 };
 
 // Horde-mode target priority. Higher = picked first by enemy AI when
@@ -275,7 +280,8 @@ export class Scene {
     bindings: SceneBindings,
     layout: SceneLayout | null = null,
     initialSpawns: InitialEnemySpawn[] | null = null,
-    initialLoot: InitialLootDrop[] | null = null
+    initialLoot: InitialLootDrop[] | null = null,
+    initialDoors: InitialDoor[] | null = null
   ) {
     this.id = id;
     this.kind = kind;
@@ -289,6 +295,28 @@ export class Scene {
     }
     if (kind === 'dungeon_floor' && initialLoot) {
       this.populateInitialLoot(initialLoot);
+    }
+    if (kind === 'dungeon_floor' && initialDoors) {
+      this.populateDoors(initialDoors);
+    }
+  }
+
+  private populateDoors(doors: InitialDoor[]): void {
+    const stats = BUILDING_STATS.door;
+    for (const d of doors) {
+      const id = `b${this.nextBuildingId++}`;
+      this.buildings.set(id, {
+        id,
+        kind: 'door',
+        tileX: d.tileX,
+        tileY: d.tileY,
+        width: 1,
+        height: 1,
+        hp: stats.maxHp,
+        maxHp: stats.maxHp,
+        lastFireAt: 0,
+        output: [],
+      });
     }
   }
 
@@ -1341,6 +1369,9 @@ export class Scene {
     let nearest: BuildingRuntime | null = null;
     let nearestDist = Infinity;
     for (const b of this.buildings.values()) {
+      // Doors are dungeon fixtures, not destructible — wandering enemies
+      // shouldn't chew through them.
+      if (b.kind === 'door') continue;
       const cx = (b.tileX + b.width / 2) * tileSize;
       const cy = (b.tileY + b.height / 2) * tileSize;
       // AABB-vs-circle distance (treat the building footprint as a rect).
@@ -1795,6 +1826,18 @@ export class Scene {
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
     this.bindings.onBuildingsChanged();
     return building;
+  }
+
+  // Open (remove) a door building. Used by the world's open_door
+  // handler after key validation. Broadcasts the building_destroyed
+  // message so clients drop the door from their state and the tile
+  // becomes walkable again.
+  openDoor(buildingId: string): boolean {
+    const b = this.buildings.get(buildingId);
+    if (!b || b.kind !== 'door') return false;
+    this.buildings.delete(buildingId);
+    this.broadcast({ type: 'building_destroyed', id: buildingId });
+    return true;
   }
 
   // Look up a building by id (for World callbacks that need to inspect

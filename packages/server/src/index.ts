@@ -212,6 +212,11 @@ wss.on('connection', (ws: WebSocket) => {
         world?.handlePickupStationOutputs(player.characterId, msg.kind);
         break;
       }
+      case 'open_door': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleOpenDoor(player.characterId, msg.buildingId);
+        break;
+      }
       case 'auth':
         sendError(ws, 'already_authed');
         break;

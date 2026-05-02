@@ -50,6 +50,7 @@ import {
   generateFloorLayout,
   generateInitialEnemies,
   generateInitialLoot,
+  generateLockedRoomMeta,
 } from './procgen.js';
 import type { SceneLayout } from '@dumrunner/shared';
 
@@ -966,6 +967,39 @@ export class World {
     });
   }
 
+  // Player tries to open a locked door. Validates: same scene, in
+  // range, has at least one key. Consumes the key and removes the door
+  // building so the tile becomes walkable.
+  handleOpenDoor(characterId: string, buildingId: string): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const scene = this.scenes.get(conn.sceneId);
+    if (!scene) return;
+    const layout = scene.layout;
+    if (!layout || layout.tileSize <= 0) return;
+    const b = scene.getBuilding(buildingId);
+    if (!b || b.kind !== 'door') return;
+
+    const tileSize = layout.tileSize;
+    const cx = (b.tileX + 0.5) * tileSize;
+    const cy = (b.tileY + 0.5) * tileSize;
+    // Reach: ~2 tiles from the door centre. Generous so the player
+    // doesn't have to wedge into a wall corner to interact.
+    if (Math.hypot(conn.x - cx, conn.y - cy) > 64) return;
+
+    if (countMaterial(conn.inventory, 'key') < 1) {
+      this.sendDirect(conn.ws, { type: 'error', message: 'no_key' });
+      return;
+    }
+    consumeMaterial(conn.inventory, 'key', 1);
+    scene.openDoor(buildingId);
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
   // Player spends artifacts at an artifact_uplink to learn a blueprint.
   // Validates: player is on the surface, within range of an uplink, has
   // enough artifacts, and doesn't already know it. Consumes the artifacts
@@ -1415,6 +1449,12 @@ export class World {
   private createDungeonScene(floorIndex: number): Scene {
     const sceneId = dungeonSceneId(floorIndex);
     const layout = generateFloorLayout(this.worldSeed, this.cycle, floorIndex);
+    const meta = generateLockedRoomMeta(
+      layout,
+      this.worldSeed,
+      this.cycle,
+      floorIndex
+    );
     const initialSpawns = generateInitialEnemies(
       layout,
       this.worldSeed,
@@ -1425,7 +1465,8 @@ export class World {
       layout,
       this.worldSeed,
       this.cycle,
-      floorIndex
+      floorIndex,
+      meta.lockedRoomIndices
     );
     const scene = new Scene(
       sceneId,
@@ -1433,7 +1474,8 @@ export class World {
       this.bindings,
       layout,
       initialSpawns,
-      initialLoot
+      initialLoot,
+      meta.doors
     );
     this.scenes.set(sceneId, scene);
     return scene;
