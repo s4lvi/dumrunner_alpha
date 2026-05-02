@@ -146,11 +146,13 @@ function pickTarget(
 ): AiTarget | null {
   const r = enemy.template.senseRadius;
 
-  // Buildings come first when any are in range. They're already supplied
-  // pre-filtered by world state (only the surface scene during horde
-  // currently passes any), with priority encoded so a Power Link beats a
-  // turret beats a wall. We deliberately ignore line-of-sight for
-  // buildings — enemies can hear/sense the base from across the surface.
+  // Buildings come first whenever any are passed in. The list is already
+  // pre-filtered by world state (currently only the surface scene during
+  // horde populates it), so its mere presence signals "this enemy is in
+  // a horde — go zerg the base." We deliberately ignore both sense
+  // radius AND line-of-sight here: wave-spawned enemies appear well
+  // outside any reasonable sense radius from the base, and the design
+  // intent is that hordes know where the alien tech is.
   let bestBuilding: AiBuildingTarget | null = null;
   let bestBuildingPriority = -Infinity;
   let bestBuildingDist = Infinity;
@@ -158,7 +160,6 @@ function pickTarget(
     const dx = b.x - enemy.x;
     const dy = b.y - enemy.y;
     const dist = Math.hypot(dx, dy);
-    if (dist > r) continue;
     if (
       b.priority > bestBuildingPriority ||
       (b.priority === bestBuildingPriority && dist < bestBuildingDist)
