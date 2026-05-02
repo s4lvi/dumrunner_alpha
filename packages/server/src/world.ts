@@ -1240,6 +1240,16 @@ export class World {
     // their own enemies; the horde is a surface-only event.
     const surface = this.scenes.get(SURFACE_SCENE_ID);
     surface?.startHorde(this.hordeEndsAt, this.cycle);
+
+    // Anyone caught in a dungeon when perihelion fires gets the LINK
+    // SEVERED treatment: glitch overlay, kill-in-place (corpse drops on
+    // the dungeon floor with their loot), respawn at the surface.
+    for (const [characterId, conn] of this.connections) {
+      if (conn.sceneId === SURFACE_SCENE_ID) continue;
+      this.sendDirect(conn.ws, { type: 'link_severed' });
+      const scene = this.scenes.get(conn.sceneId);
+      scene?.killMemberInPlace(characterId, now);
+    }
   }
 
   private endHorde(_now: number): void {

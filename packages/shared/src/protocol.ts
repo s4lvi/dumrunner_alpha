@@ -448,6 +448,14 @@ export type ServerMessage =
       poweredBuildingIds: string[];
     }
   | {
+      // Sent to a single player who was caught in a dungeon scene at the
+      // moment perihelion fires. Client renders a "LINK SEVERED" glitch
+      // overlay; the server kills them in place (corpse drops where they
+      // were standing) and the standard respawn timer puts them back on
+      // the surface a few seconds later.
+      type: 'link_severed';
+    }
+  | {
       // Sent at the moment perihelion fires. Client can play a stinger /
       // colour shift / camera shake.
       type: 'horde_started';
@@ -502,4 +510,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 22;
+export const PROTOCOL_VERSION = 23;

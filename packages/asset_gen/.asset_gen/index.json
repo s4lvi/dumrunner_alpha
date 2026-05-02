@@ -1,0 +1,258 @@
+{
+  "assets": [
+    {
+      "assetId": "asset_cc0a687dc77142f193c50fbd325721bd",
+      "cacheKey": "c350e493edcc2e4a9028342d1e58b4cc45ad0d67ce53b9291015e461109ab42b",
+      "request": {
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chaser_melee",
+          "label": "rat-like tunnel scavenger",
+          "faction": "catacombs"
+        },
+        "visualBrief": {
+          "subject": "rat-like mutant scavenger",
+          "materials": [
+            "patchy fur",
+            "rusted scrap implants"
+          ],
+          "colors": [
+            "#a855f7",
+            "#22c55e",
+            "#111827"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "single enemy sprite"
+          ],
+          "mustAvoid": [
+            "text",
+            "background scene",
+            "multiple creatures"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_cc0a687dc77142f193c50fbd325721bd.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.82
+        },
+        "opaqueBounds": {
+          "x": 14,
+          "y": 6,
+          "w": 37,
+          "h": 50
+        },
+        "averageColors": [
+          "#36252d"
+        ]
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated enemy asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-02T17:11:51.009Z"
+    },
+    {
+      "assetId": "asset_2a9a8916504d4a8ca069bd26df270179",
+      "cacheKey": "1685008c21669e05b7a7864ac786412f796e13eb3219f0c80b06d51c64d6b6cd",
+      "request": {
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "scrap",
+          "label": "Scrap",
+          "materialId": "scrap"
+        },
+        "visualBrief": {
+          "subject": "small stack of rusty scrap metal",
+          "materials": [
+            "rusty metal",
+            "bolted plate fragments"
+          ],
+          "colors": [
+            "#c2410c",
+            "#94a3b8",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_2a9a8916504d4a8ca069bd26df270179.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 8,
+          "y": 16,
+          "w": 48,
+          "h": 31
+        },
+        "averageColors": [
+          "#533f35"
+        ]
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated material asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-02T17:12:04.367Z"
+    }
+  ],
+  "jobs": [
+    {
+      "jobId": "job_842cd6acd2e241dc83eb72e72940fb8e",
+      "status": "approved",
+      "cacheKey": "c350e493edcc2e4a9028342d1e58b4cc45ad0d67ce53b9291015e461109ab42b",
+      "request": {
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chaser_melee",
+          "label": "rat-like tunnel scavenger",
+          "faction": "catacombs"
+        },
+        "visualBrief": {
+          "subject": "rat-like mutant scavenger",
+          "materials": [
+            "patchy fur",
+            "rusted scrap implants"
+          ],
+          "colors": [
+            "#a855f7",
+            "#22c55e",
+            "#111827"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "single enemy sprite"
+          ],
+          "mustAvoid": [
+            "text",
+            "background scene",
+            "multiple creatures"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_cc0a687dc77142f193c50fbd325721bd",
+      "error": null,
+      "createdAt": "2026-05-02T17:11:38.022Z",
+      "updatedAt": "2026-05-02T17:11:51.009Z"
+    },
+    {
+      "jobId": "job_a622424dd7114f9984d0aeb798cb4cd9",
+      "status": "approved",
+      "cacheKey": "1685008c21669e05b7a7864ac786412f796e13eb3219f0c80b06d51c64d6b6cd",
+      "request": {
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "scrap",
+          "label": "Scrap",
+          "materialId": "scrap"
+        },
+        "visualBrief": {
+          "subject": "small stack of rusty scrap metal",
+          "materials": [
+            "rusty metal",
+            "bolted plate fragments"
+          ],
+          "colors": [
+            "#c2410c",
+            "#94a3b8",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_2a9a8916504d4a8ca069bd26df270179",
+      "error": null,
+      "createdAt": "2026-05-02T17:11:53.046Z",
+      "updatedAt": "2026-05-02T17:12:04.368Z"
+    }
+  ]
+}

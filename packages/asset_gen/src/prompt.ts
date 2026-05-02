@@ -45,3 +45,51 @@ export function compileAssetPrompt(request: AssetGenerateRequest): string {
   ];
   return parts.filter(Boolean).join('\n');
 }
+
+export function compileAnimationFramePrompt(
+  request: AssetGenerateRequest,
+  frameIndex: number
+): string {
+  if (!request.animation) {
+    return compileAssetPrompt(request);
+  }
+
+  const base = compileAssetPrompt(request);
+  const action = request.animation.action;
+  const cyclePosition = request.animation.frameCount === 1
+    ? 'single keyframe'
+    : `${frameIndex + 1} of ${request.animation.frameCount}`;
+  const frameDirection = actionCopy(action, frameIndex, request.animation.frameCount);
+
+  return [
+    base,
+    '',
+    `Animation frame: ${cyclePosition} for a ${action} cycle.`,
+    `Pose direction: ${frameDirection}.`,
+    'Keep the exact same character identity, palette, scale, camera angle, and silhouette family across all frames.',
+    'Change only the pose enough to imply motion; avoid changing species, armor design, colors, or facing angle.',
+    'Single isolated frame only, not a sprite sheet, not multiple poses in one image.',
+  ].join('\n');
+}
+
+function actionCopy(action: string, frameIndex: number, frameCount: number): string {
+  const t = frameCount <= 1 ? 0 : frameIndex / (frameCount - 1);
+  switch (action) {
+    case 'idle':
+      return t < 0.5
+        ? 'neutral breathing pose, compact silhouette'
+        : 'slightly raised breathing pose, same footing and silhouette';
+    case 'walk':
+      if (frameCount === 2) return frameIndex === 0 ? 'left-step stride' : 'right-step stride';
+      if (frameCount === 3) return ['left-step stride', 'center passing pose', 'right-step stride'][frameIndex] ?? 'walk pose';
+      return ['left-step stride', 'center passing pose', 'right-step stride', 'center recovery pose'][frameIndex] ?? 'walk pose';
+    case 'attack':
+      if (frameCount === 2) return frameIndex === 0 ? 'wind-up attack pose' : 'strike follow-through pose';
+      return ['wind-up attack pose', 'impact strike pose', 'follow-through recovery pose', 'return-to-ready pose'][frameIndex] ?? 'attack pose';
+    case 'death':
+      if (frameCount === 2) return frameIndex === 0 ? 'collapsing pose' : 'fallen corpse pose';
+      return ['staggering collapse pose', 'falling pose', 'fallen corpse pose', 'settled corpse pose'][frameIndex] ?? 'death pose';
+    default:
+      return 'subtle animation pose';
+  }
+}

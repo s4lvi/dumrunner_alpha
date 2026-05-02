@@ -97,6 +97,13 @@ export function Game({ serverId }: { serverId: string }) {
   const [buildings, setBuildings] = useState<Map<string, BuildingState>>(
     () => new Map()
   );
+  // Transient on-screen toast for server-pushed error messages.
+  const [toast, setToast] = useState<{ message: string; key: number } | null>(
+    null
+  );
+  // Triggers the LINK SEVERED full-screen glitch overlay when set. Auto-
+  // clears after a short window; the regular respawn flow handles state.
+  const [linkSeveredAt, setLinkSeveredAt] = useState<number | null>(null);
   // Blueprints the server says the player can craft from. Wiped + re-granted
   // each cycle.
   const [knownBlueprints, setKnownBlueprints] = useState<Set<string>>(
@@ -109,7 +116,18 @@ export function Game({ serverId }: { serverId: string }) {
   );
   // Ref mirror so the keydown effect (set up once) reads the live value.
   const nearWorkstationsRef = useRef<Set<BuildingKind>>(new Set());
+  // Single closest station kind in range — drives the E prompt and the
+  // E action so overlapping ranges don't show two prompts.
+  const [nearestStation, setNearestStation] = useState<BuildingKind | null>(
+    null
+  );
+  const nearestStationRef = useRef<BuildingKind | null>(null);
   const [showTradeModal, setShowTradeModal] = useState(false);
+  // Refs mirror the modal flags so the global keydown effect (set up with
+  // [] deps) reads live values without needing exhaustive deps.
+  const showTradeModalRef = useRef(false);
+  const stationModalKindRef = useRef<BuildingKind | null>(null);
+  const showInventoryRef = useRef(false);
   // Currently-open workstation modal (workbench / forge / electronics_bench),
   // or null when no station modal is mounted. Mutually exclusive with the
   // trade modal — opening one closes the other.
@@ -151,7 +169,10 @@ export function Game({ serverId }: { serverId: string }) {
     onNearInteractableChanged: (
       near: { id: string; label: string } | null
     ) => void;
-    onNearWorkstationsChanged: (kinds: BuildingKind[]) => void;
+    onNearWorkstationsChanged: (state: {
+      all: BuildingKind[];
+      nearest: BuildingKind | null;
+    }) => void;
   } | null>(null);
   // Holds the live ws so number-key handlers can send select_hotbar without
   // closing over render-time scope.
@@ -357,10 +378,12 @@ export function Game({ serverId }: { serverId: string }) {
             nearInteractableRef.current = near;
             setNearInteractable(near);
           },
-          onNearWorkstationsChanged: (kinds) => {
-            const set = new Set(kinds);
+          onNearWorkstationsChanged: ({ all, nearest }) => {
+            const set = new Set(all);
             nearWorkstationsRef.current = set;
             setNearWorkstations(set);
+            nearestStationRef.current = nearest;
+            setNearestStation(nearest);
           },
         };
         requestAnimationFrame(() => {
@@ -556,6 +579,9 @@ export function Game({ serverId }: { serverId: string }) {
       case 'craft_jobs_state':
         setCraftJobs(msg.jobs);
         break;
+      case 'link_severed':
+        setLinkSeveredAt(Date.now());
+        break;
       case 'horde_started':
         setWorldClock({
           cycle: msg.cycle,
@@ -581,6 +607,10 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'error':
         console.error('[server error]', msg.message);
+        setToast({
+          message: friendlyErrorMessage(msg.message),
+          key: Date.now(),
+        });
         break;
     }
   }
@@ -590,6 +620,32 @@ export function Game({ serverId }: { serverId: string }) {
     return teardown;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptJoin]);
+
+  useEffect(() => {
+    showTradeModalRef.current = showTradeModal;
+  }, [showTradeModal]);
+  useEffect(() => {
+    stationModalKindRef.current = stationModalKind;
+  }, [stationModalKind]);
+  useEffect(() => {
+    showInventoryRef.current = showInventory;
+  }, [showInventory]);
+
+  // Toast auto-dismiss after a few seconds.
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => {
+      setToast((cur) => (cur && cur.key === toast.key ? null : cur));
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // Clear the LINK SEVERED overlay once the dramatic window has passed.
+  useEffect(() => {
+    if (linkSeveredAt === null) return;
+    const t = setTimeout(() => setLinkSeveredAt(null), 3500);
+    return () => clearTimeout(t);
+  }, [linkSeveredAt]);
 
   // Opening any UI overlay (inventory, trade modal, …) needs to release
   // pointer lock so the cursor reappears for clicking. Closing the overlay
@@ -674,6 +730,17 @@ export function Game({ serverId }: { serverId: string }) {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Tab') {
         e.preventDefault();
+        // Tab closes any modal first; only toggles inventory when nothing
+        // else is open. Avoids the "Tab opens inventory ON TOP of trade
+        // modal" stack.
+        if (showTradeModalRef.current) {
+          setShowTradeModal(false);
+          return;
+        }
+        if (stationModalKindRef.current !== null) {
+          setStationModalKind(null);
+          return;
+        }
         setShowInventory((s) => !s);
         return;
       }
@@ -685,33 +752,28 @@ export function Game({ serverId }: { serverId: string }) {
       }
       // E to interact. Precedence:
       //   1. layout interactables (stairs / extract)
-      //   2. artifact uplink → opens trade modal
-      //   3. workstation (workbench / forge / electronics_bench) →
-      //      opens that station's crafting modal
+      //   2. nearest station — uplink opens trade modal,
+      //      workbench/forge/electronics_bench opens its modal
       if (e.key === 'e' || e.key === 'E') {
         const near = nearInteractableRef.current;
         if (near) {
           sendOnLiveWs({ type: 'interact', interactableId: near.id });
           return;
         }
-        const stations = nearWorkstationsRef.current;
-        if (stations.has('artifact_uplink')) {
+        const nearestKind = nearestStationRef.current;
+        if (nearestKind === 'artifact_uplink') {
           setStationModalKind(null);
           setShowTradeModal(true);
           return;
         }
-        // Pick a deterministic workstation when multiple overlap.
-        const stationOrder: BuildingKind[] = [
-          'workbench',
-          'forge',
-          'electronics_bench',
-        ];
-        for (const k of stationOrder) {
-          if (stations.has(k)) {
-            setShowTradeModal(false);
-            setStationModalKind(k);
-            return;
-          }
+        if (
+          nearestKind === 'workbench' ||
+          nearestKind === 'forge' ||
+          nearestKind === 'electronics_bench'
+        ) {
+          setShowTradeModal(false);
+          setStationModalKind(nearestKind);
+          return;
         }
         return;
       }
@@ -774,26 +836,20 @@ export function Game({ serverId }: { serverId: string }) {
         {nearInteractable && (
           <InteractPrompt label={nearInteractable.label} />
         )}
-        {!nearInteractable && nearWorkstations.has('artifact_uplink') && (
+        {!nearInteractable && nearestStation === 'artifact_uplink' && (
           <InteractPrompt label="Trade — Artifact Uplink" />
         )}
         {!nearInteractable &&
-          !nearWorkstations.has('artifact_uplink') &&
-          (() => {
-            for (const k of [
-              'workbench',
-              'forge',
-              'electronics_bench',
-            ] as BuildingKind[]) {
-              if (nearWorkstations.has(k)) {
-                return (
-                  <InteractPrompt label={`Use — ${STATION_LABEL[k]}`} />
-                );
-              }
-            }
-            return null;
-          })()}
+          (nearestStation === 'workbench' ||
+            nearestStation === 'forge' ||
+            nearestStation === 'electronics_bench') && (
+            <InteractPrompt
+              label={`Use — ${STATION_LABEL[nearestStation]}`}
+            />
+          )}
         <ControlsHint useFps={useFps} />
+        {toast && <Toast message={toast.message} keyId={toast.key} />}
+        {linkSeveredAt !== null && <LinkSeveredOverlay />}
 
         {showInventory && (
           <InventoryPanel
@@ -1002,6 +1058,78 @@ function ControlsHint({ useFps }: { useFps: boolean }) {
 
 // Top-centre clock + perihelion countdown. Switches into a red "siege"
 // state while the horde is active.
+// Full-screen "LINK SEVERED" glitch overlay. Fires when perihelion catches
+// the player in a dungeon — they're killed in place and respawn at the
+// surface; this overlay sells the dramatic moment.
+function LinkSeveredOverlay() {
+  return (
+    <div className="absolute inset-0 z-50 pointer-events-none flex items-center justify-center select-none">
+      <div className="absolute inset-0 bg-black/85 animate-pulse" />
+      <div className="absolute inset-0 mix-blend-screen opacity-80">
+        {/* Scanline / static pattern */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              'repeating-linear-gradient(0deg, rgba(255,0,80,0.08) 0px, rgba(255,0,80,0.08) 2px, transparent 2px, transparent 4px)',
+          }}
+        />
+      </div>
+      <div className="relative flex flex-col items-center gap-3">
+        <div
+          className="text-red-500 font-bold tracking-[0.3em] text-5xl uppercase"
+          style={{
+            textShadow:
+              '2px 0 #00ffff, -2px 0 #ff0080, 0 0 24px rgba(255, 0, 80, 0.8)',
+            animation: 'link-severed-glitch 200ms steps(2) infinite',
+          }}
+        >
+          Link Severed
+        </div>
+        <div className="text-zinc-300 text-sm tracking-widest uppercase">
+          Returning to surface…
+        </div>
+      </div>
+      <style jsx>{`
+        @keyframes link-severed-glitch {
+          0% { transform: translate(0, 0); }
+          25% { transform: translate(-2px, 1px); }
+          50% { transform: translate(2px, -1px); }
+          75% { transform: translate(-1px, 2px); }
+          100% { transform: translate(0, 0); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// Map server error codes to player-facing copy. Anything not listed
+// falls through to a humanised version of the raw code.
+function friendlyErrorMessage(code: string): string {
+  switch (code) {
+    case 'station_busy':
+      return 'Station is busy — wait for the current job or build another station.';
+    case 'insufficient_power':
+      return 'Not enough power. Push deeper into the dungeon to raise capacity.';
+    case 'power_link_offline':
+      return 'Power Link is destroyed. Wait for the next perihelion to rebuild.';
+    default:
+      return code.replace(/_/g, ' ');
+  }
+}
+
+// Transient on-screen toast for server-pushed errors. Shows top-right
+// of the canvas; auto-dismisses via a useEffect on the host.
+function Toast({ message }: { message: string; keyId: number }) {
+  return (
+    <div className="absolute top-3 right-3 pointer-events-none z-40 select-none animate-fade-in">
+      <div className="px-3 py-2 rounded border-2 border-amber-500 bg-amber-950/95 text-amber-100 text-xs shadow-[0_4px_16px_rgba(0,0,0,0.5)] max-w-xs">
+        {message}
+      </div>
+    </div>
+  );
+}
+
 // Compact "Power N/M" overlay. Sits below the cycle clock so the player
 // can read both at a glance. Goes red when capacity = 0 (Power Link
 // destroyed or never alive).

@@ -4,6 +4,7 @@ export const ASSET_API_VERSION = 1;
 
 export const AssetKindSchema = z.enum([
   'enemy',
+  'enemy_animation',
   'weapon_part',
   'suit_part',
   'projectile',
@@ -78,6 +79,27 @@ export const AssetConstraintsSchema = z.object({
   minReadableAtPx: z.union([z.literal(16), z.literal(32), z.literal(64)]).default(32),
 });
 
+export const AnimationActionSchema = z.enum([
+  'idle',
+  'walk',
+  'attack',
+  'death',
+]);
+
+export const DirectionModeSchema = z.enum([
+  'omnidirectional',
+  'four_way',
+]);
+
+export const AnimationSpecSchema = z.object({
+  baseAssetId: z.string().min(1).max(128).optional(),
+  action: AnimationActionSchema,
+  frameCount: z.union([z.literal(2), z.literal(3), z.literal(4)]).default(2),
+  directionMode: DirectionModeSchema.default('omnidirectional'),
+  fps: z.number().int().min(1).max(24).default(8),
+  maxFrameDriftPx: z.number().int().min(0).max(16).default(3),
+});
+
 export const AssetGenerateRequestSchema = z.object({
   requestId: z.string().min(1).max(128).optional(),
   assetKind: AssetKindSchema,
@@ -87,6 +109,22 @@ export const AssetGenerateRequestSchema = z.object({
   gameObject: GameObjectSchema,
   visualBrief: VisualBriefSchema,
   constraints: AssetConstraintsSchema.default({}),
+  animation: AnimationSpecSchema.optional(),
+}).superRefine((request, ctx) => {
+  if (request.assetKind === 'enemy_animation' && !request.animation) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['animation'],
+      message: 'enemy_animation requests require animation',
+    });
+  }
+  if (request.assetKind !== 'enemy_animation' && request.animation) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['animation'],
+      message: 'animation is only valid for enemy_animation assets',
+    });
+  }
 });
 
 export const AssetPrewarmRequestSchema = z.object({
@@ -112,6 +150,7 @@ export type AssetKind = z.infer<typeof AssetKindSchema>;
 export type RenderTarget = z.infer<typeof RenderTargetSchema>;
 export type AssetSize = z.infer<typeof AssetSizeSchema>;
 export type AssetStyle = z.infer<typeof AssetStyleSchema>;
+export type AnimationSpec = z.infer<typeof AnimationSpecSchema>;
 export type AssetGenerateRequest = z.infer<typeof AssetGenerateRequestSchema>;
 export type AssetPrewarmRequest = z.infer<typeof AssetPrewarmRequestSchema>;
 export type JobStatus = z.infer<typeof JobStatusSchema>;
@@ -132,12 +171,34 @@ export type VerificationResult = {
   reasons: string[];
 };
 
+export type AnimationFrameMetadata = {
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  anchor: { x: number; y: number };
+  opaqueBounds: { x: number; y: number; w: number; h: number };
+};
+
+export type AnimationMetadata = {
+  action: z.infer<typeof AnimationActionSchema>;
+  frameCount: number;
+  frameWidth: number;
+  frameHeight: number;
+  fps: number;
+  directionMode: z.infer<typeof DirectionModeSchema>;
+  maxFrameDriftPx: number;
+  frames: AnimationFrameMetadata[];
+};
+
 export type AssetRecord = {
   assetId: string;
   cacheKey: string;
   request: AssetGenerateRequest;
   urls: { png: string; webp?: string };
   metadata: AssetMetadata;
+  animation?: AnimationMetadata;
   verification: VerificationResult;
   createdAt: string;
 };

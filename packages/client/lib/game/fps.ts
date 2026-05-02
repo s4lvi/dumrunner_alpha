@@ -183,14 +183,46 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const wallLayer = new Graphics();
   const spriteLayer = new Graphics();
   const hudLayer = new Graphics();
+  // Inline X/Y labels rendered on top of each status bar.
   const hpText = new Text({
     text: '',
-    style: { fill: '#e6e8eb', fontSize: 14, fontFamily: 'system-ui, sans-serif' },
+    style: {
+      fill: '#ffffff',
+      fontSize: 11,
+      fontFamily: 'system-ui, sans-serif',
+      fontWeight: 'bold',
+      stroke: { color: '#000000', width: 2 },
+    },
   });
+  const staminaText = new Text({
+    text: '',
+    style: {
+      fill: '#fef3c7',
+      fontSize: 9,
+      fontFamily: 'system-ui, sans-serif',
+      fontWeight: 'bold',
+      stroke: { color: '#000000', width: 2 },
+    },
+  });
+  const shieldText = new Text({
+    text: '',
+    style: {
+      fill: '#cffafe',
+      fontSize: 9,
+      fontFamily: 'system-ui, sans-serif',
+      fontWeight: 'bold',
+      stroke: { color: '#000000', width: 2 },
+    },
+  });
+  hpText.anchor.set(0.5, 0.5);
+  staminaText.anchor.set(0.5, 0.5);
+  shieldText.anchor.set(0.5, 0.5);
   root.addChild(wallLayer);
   root.addChild(spriteLayer);
   root.addChild(hudLayer);
   root.addChild(hpText);
+  root.addChild(staminaText);
+  root.addChild(shieldText);
 
   // Per-column perpendicular distance to the wall hit. Indexed by column
   // (i = screenX / COLUMN_STEP_PX). Sprites z-test against this so a wall
@@ -329,7 +361,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       }
       return;
     }
-    const r = 60; // mirror top-down INTERACTABLE_RADIUS
+    const r = 60; // matches INTERACTABLE_RADIUS on the server + top-down
     const r2 = r * r;
     let bestId: string | null = null;
     let bestLabel: string | null = null;
@@ -362,13 +394,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     if (!layout || layout.tileSize <= 0 || buildings.size === 0) {
       if (lastStationKey !== '') {
         lastStationKey = '';
-        init.onNearWorkstationsChanged([]);
+        init.onNearWorkstationsChanged({ all: [], nearest: null });
       }
       return;
     }
     const tileSize = layout.tileSize;
     const r2 = STATION_RANGE * STATION_RANGE;
     const found = new Set<import('@dumrunner/shared').BuildingKind>();
+    let nearestKind: import('@dumrunner/shared').BuildingKind | null = null;
+    let nearestDsq = Infinity;
     for (const b of buildings.values()) {
       if (
         b.kind !== 'workbench' &&
@@ -384,12 +418,22 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const halfH = (b.height * tileSize) / 2;
       const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
       const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
-      if (dx * dx + dy * dy <= r2) found.add(b.kind);
+      const dsq = dx * dx + dy * dy;
+      if (dsq <= r2) {
+        found.add(b.kind);
+        if (dsq < nearestDsq) {
+          nearestDsq = dsq;
+          nearestKind = b.kind;
+        }
+      }
     }
-    const key = [...found].sort().join(',');
+    const key = [...found].sort().join(',') + '|' + (nearestKind ?? '');
     if (key !== lastStationKey) {
       lastStationKey = key;
-      init.onNearWorkstationsChanged([...found]);
+      init.onNearWorkstationsChanged({
+        all: [...found],
+        nearest: nearestKind,
+      });
     }
   }
 
@@ -672,10 +716,18 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const stamY = hpY + barH + gap;
     const shieldY = hpY - shieldH - gap;
 
-    // Numeric "HP X / Y" label above the bar — same style + position as
-    // the top-down renderer.
-    hpText.text = `HP ${Math.round(self.hp)} / ${self.maxHp}`;
-    hpText.position.set(margin + 8, hpY - 22);
+    // Inline X/Y labels — centred over each bar.
+    hpText.text = `${Math.round(self.hp)} / ${Math.round(self.maxHp)}`;
+    hpText.position.set(margin + barW / 2, hpY + barH / 2);
+    staminaText.text = `${Math.round(self.stamina)} / ${Math.round(self.maxStamina)}`;
+    staminaText.position.set(margin + barW / 2, stamY + stamH / 2);
+    if (self.maxShield > 0) {
+      shieldText.visible = true;
+      shieldText.text = `${Math.round(self.shield)} / ${Math.round(self.maxShield)}`;
+      shieldText.position.set(margin + barW / 2, shieldY + shieldH / 2);
+    } else {
+      shieldText.visible = false;
+    }
 
     // HP — green / yellow / red gradient by ratio.
     const hpRatio = self.maxHp > 0 ? Math.max(0, self.hp / self.maxHp) : 0;

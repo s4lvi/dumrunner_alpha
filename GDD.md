@@ -108,12 +108,12 @@ Within any band, the last floor (the fifth) hosts a faction champion (themed to 
 
 ## Death & Loot
 
-- **Full-loot stakes.** On death, you drop **everything you were carrying that run, including equipped weapons and suit.**
-- **Corpse persists where you died** until the next perihelion. You (or anyone) can return to that floor and recover the gear.
-- **Perihelion wipes corpses** along with the dungeon reset — gear left unrecovered is lost forever.
-- **Naked respawn.** Respawning at the surface base does **not** restore the starter loadout — you reappear at the surface entrance with an empty inventory and have to either recover your corpse, scavenge fresh, or get a teammate to hand you something. The risk of dying is meaningful exactly because of this.
+- **Bag-loot stakes.** On death, the player's **inventory bag** drops as a corpse — every loose item, every part, every material stack, every ammo pile, every placeable. **Equipped gear** (chassis, plating, life-support, utility mod, cargo grid) **stays on the player.** "What you're wearing" is yours; "what you were carrying" is up for grabs.
+- **Corpse persists where you died** until the next perihelion. You (or anyone) can return to that floor and recover the bag.
+- **Perihelion wipes corpses** along with the dungeon reset — anything left unrecovered is lost forever.
+- **Naked respawn.** Respawning at the surface base does **not** restore the starter loadout into the bag — you reappear at the surface entrance with the suit you died in but an empty bag. You either recover your corpse, scavenge fresh, or get a teammate to hand you a weapon.
 
-This creates a meaningful corpse-run loop: a bad death deep in the dungeon is recoverable but expensive, and the perihelion clock makes recovery time-pressured.
+This creates a meaningful corpse-run loop without making death feel like total ladder-reset: gear that defines your build survives, but everything you scavenged that run is on the line. The perihelion clock makes recovery time-pressured.
 
 ## Items & Procedural Generation
 

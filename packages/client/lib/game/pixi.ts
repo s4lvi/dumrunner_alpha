@@ -26,7 +26,7 @@ const PLAYER_RADIUS = 14;
 const BUILD_RADIUS_TILES = 2;
 
 // Must match server: INTERACTABLE_RADIUS in scene.ts.
-const INTERACTABLE_RADIUS = 36;
+const INTERACTABLE_RADIUS = 60;
 
 export type GameInit = {
   self: Player;
@@ -49,9 +49,14 @@ export type GameInit = {
     near: { id: string; label: string } | null
   ) => void;
   // Called whenever the set of workstation building kinds the player is
-  // standing within crafting range of changes. The host UI uses this to
-  // enable / disable recipes that require a station.
-  onNearWorkstationsChanged: (kinds: BuildingKind[]) => void;
+  // standing within crafting range of changes. `all` drives recipe
+  // enable/disable; `nearest` drives the "Press E — <station>" prompt
+  // and the E-key target so overlapping ranges don't show conflicting
+  // prompts. Both update together each frame.
+  onNearWorkstationsChanged: (state: {
+    all: BuildingKind[];
+    nearest: BuildingKind | null;
+  }) => void;
 };
 
 // Subset of state we need to apply when the player transitions between scenes
@@ -289,10 +294,41 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   const hpBarFill = new Graphics();
   const staminaBarBg = new Graphics();
   const staminaBarFill = new Graphics();
+  // Inline X/Y labels rendered ON TOP of each bar, centred. Replaces the
+  // old "HP 100/100" text floating above the HP bar.
   const hpText = new Text({
     text: '',
-    style: { fill: '#e6e8eb', fontSize: 14, fontFamily: 'system-ui, sans-serif' },
+    style: {
+      fill: '#ffffff',
+      fontSize: 11,
+      fontFamily: 'system-ui, sans-serif',
+      fontWeight: 'bold',
+      stroke: { color: '#000000', width: 2 },
+    },
   });
+  const staminaText = new Text({
+    text: '',
+    style: {
+      fill: '#fef3c7',
+      fontSize: 9,
+      fontFamily: 'system-ui, sans-serif',
+      fontWeight: 'bold',
+      stroke: { color: '#000000', width: 2 },
+    },
+  });
+  const shieldText = new Text({
+    text: '',
+    style: {
+      fill: '#cffafe',
+      fontSize: 9,
+      fontFamily: 'system-ui, sans-serif',
+      fontWeight: 'bold',
+      stroke: { color: '#000000', width: 2 },
+    },
+  });
+  hpText.anchor.set(0.5, 0.5);
+  staminaText.anchor.set(0.5, 0.5);
+  shieldText.anchor.set(0.5, 0.5);
   const deadOverlay = new Container();
   const deadText = new Text({
     text: 'YOU ARE DOWN — respawning…',
@@ -403,6 +439,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         staminaBarBg,
         staminaBarFill,
         hpText,
+        staminaText,
+        shieldText,
         deadOverlay
       );
       drawHpBar();
@@ -668,7 +706,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     staminaBarFill.position.set(margin, stamY);
     shieldBarBg.position.set(margin, shieldY);
     shieldBarFill.position.set(margin, shieldY);
-    hpText.position.set(margin + 8, hpY - 22);
+    // Inline labels — centred over their respective bars.
+    const barW = 220;
+    hpText.position.set(margin + barW / 2, hpY + barH / 2);
+    staminaText.position.set(margin + barW / 2, stamY + stamH / 2);
+    shieldText.position.set(margin + barW / 2, shieldY + shieldH / 2);
     drawHpBar();
 
     // Dead overlay centred.
@@ -723,7 +765,14 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       shieldBarFill.visible = false;
     }
 
-    hpText.text = `HP ${Math.round(selfHp)} / ${selfMaxHp}`;
+    hpText.text = `${Math.round(selfHp)} / ${Math.round(selfMaxHp)}`;
+    staminaText.text = `${Math.round(selfStamina)} / ${Math.round(selfMaxStamina)}`;
+    if (selfMaxShield > 0) {
+      shieldText.visible = true;
+      shieldText.text = `${Math.round(selfShield)} / ${Math.round(selfMaxShield)}`;
+    } else {
+      shieldText.visible = false;
+    }
   }
 
   // ---------- combat effects ----------
@@ -1284,12 +1333,14 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     if (tileSize <= 0 || buildings.size === 0) {
       if (lastWorkstationKey !== '') {
         lastWorkstationKey = '';
-        init.onNearWorkstationsChanged([]);
+        init.onNearWorkstationsChanged({ all: [], nearest: null });
       }
       return;
     }
     const r2 = CRAFT_STATION_RANGE_PX * CRAFT_STATION_RANGE_PX;
     const found = new Set<BuildingKind>();
+    let nearestKind: BuildingKind | null = null;
+    let nearestDsq = Infinity;
     for (const rb of buildings.values()) {
       const b = rb.data;
       if (
@@ -1306,12 +1357,22 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       const halfH = (b.height * tileSize) / 2;
       const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
       const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
-      if (dx * dx + dy * dy <= r2) found.add(b.kind);
+      const dsq = dx * dx + dy * dy;
+      if (dsq <= r2) {
+        found.add(b.kind);
+        if (dsq < nearestDsq) {
+          nearestDsq = dsq;
+          nearestKind = b.kind;
+        }
+      }
     }
-    const key = [...found].sort().join(',');
+    const key = [...found].sort().join(',') + '|' + (nearestKind ?? '');
     if (key !== lastWorkstationKey) {
       lastWorkstationKey = key;
-      init.onNearWorkstationsChanged([...found]);
+      init.onNearWorkstationsChanged({
+        all: [...found],
+        nearest: nearestKind,
+      });
     }
   }
 

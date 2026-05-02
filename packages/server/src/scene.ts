@@ -52,7 +52,12 @@ import {
 } from './procgen.js';
 import type { AiEnvironment } from './ai/fsm.js';
 
-const INTERACTABLE_RADIUS = 36;
+// 60 covers diagonal approaches to a 1×1 wall-tile building (e.g. the
+// Power Link): a player can't enter the tile so they stand at most
+// PLAYER_RADIUS + tileSize/2 ≈ 30px away on each axis; sqrt(2)·30 ≈ 42
+// at the corner, plus a safety margin so first-frame collision jitter
+// doesn't cause a missed interaction.
+const INTERACTABLE_RADIUS = 60;
 
 // 16 unit-circle directions used by Scene.circlePassable. Mirrors the
 // shared geometry sampler so player and AI bounding-circle tests are
@@ -1548,6 +1553,17 @@ export class Scene {
     });
   }
 
+  // Public entry for World-driven kills (Power Link severance, future
+  // forced deaths). Looks up the scene member by characterId; no-op if
+  // they're not in this scene or already dead.
+  killMemberInPlace(characterId: string, now: number): void {
+    if (!this.members.has(characterId)) return;
+    const conn = this.bindings.connection(characterId);
+    if (!conn || !conn.alive) return;
+    conn.hp = 0;
+    this.killPlayer(conn, now);
+  }
+
   private killPlayer(conn: SceneConnection, now: number): void {
     conn.alive = false;
     conn.respawnAt = now + COMBAT.PLAYER_RESPAWN_MS;
@@ -1556,9 +1572,12 @@ export class Scene {
       characterId: conn.characterId,
     });
 
-    // Drop everything the player was carrying as a corpse at the death
-    // position. The corpse persists in this scene until perihelion or until
-    // someone picks it up.
+    // Drop the player's bag contents to a corpse at the death position.
+    // EQUIPPED gear (chassis / plating / life-support / utility / cargo
+    // grid) intentionally stays on the player — it's "what you're
+    // wearing." Only loose inventory + ammo + materials goes to the
+    // corpse. The corpse persists in this scene until perihelion or
+    // until someone picks it up.
     const hasAny = conn.inventory.some((s) => s.kind !== 'empty');
     if (hasAny) {
       const corpseId = `c${this.nextCorpseId++}`;
