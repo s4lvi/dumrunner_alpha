@@ -118,7 +118,8 @@ export type BuildingKind =
   | 'workbench'
   | 'forge'
   | 'electronics_bench'
-  | 'artifact_uplink';
+  | 'artifact_uplink'
+  | 'power_link';
 
 // Subset of BuildingKind that acts as a crafting workstation. Recipes can
 // require the player to be in range of one of these to craft.
@@ -243,6 +244,7 @@ const BuildingKindSchema = z.enum([
   'forge',
   'electronics_bench',
   'artifact_uplink',
+  'power_link',
 ]);
 
 export const BuildRequestMsgSchema = z.object({
@@ -438,4 +440,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;

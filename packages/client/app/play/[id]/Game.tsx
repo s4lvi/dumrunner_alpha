@@ -1484,6 +1484,7 @@ const STATION_LABEL: Record<BuildingKind, string> = {
   forge: 'Forge',
   electronics_bench: 'Electronics Bench',
   artifact_uplink: 'Artifact Uplink',
+  power_link: 'Power Link',
 };
 
 function CraftRow({
@@ -2156,6 +2157,16 @@ function ItemIcon({
         <rect x="3" y="3" width="18" height="18" fill="#1c1917" stroke="#000" strokeWidth={stroke} />
         <circle cx="12" cy="12" r="6" fill="#dc2626" stroke="#7f1d1d" strokeWidth="1" />
         <circle cx="12" cy="12" r="3" fill="#fbbf24" />
+      </svg>
+    );
+  }
+  if (kind === 'placeable' && subkind === 'power_link') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <rect x="3" y="3" width="18" height="18" fill="#0c1126" stroke="#000" strokeWidth={stroke} />
+        <circle cx="12" cy="12" r="7" fill="#4338ca" />
+        <circle cx="12" cy="12" r="4" fill="#06b6d4" />
+        <circle cx="12" cy="12" r="2" fill="#e0f2fe" />
       </svg>
     );
   }

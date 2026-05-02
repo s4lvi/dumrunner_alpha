@@ -9,6 +9,23 @@ export type AiPlayer = {
   y: number;
 };
 
+// Building target — passed in only during the horde event so enemies will
+// path toward and attack player structures (Power Link first, then turrets,
+// workstations, walls). Higher priority = picked first; ties resolve by
+// distance.
+export type AiBuildingTarget = {
+  buildingId: string;
+  x: number;
+  y: number;
+  priority: number;
+};
+
+// What the AI is currently locked onto. Discriminated so fsm.ts can branch
+// movement / attack behaviour without leaking world ids into the FSM core.
+export type AiTarget =
+  | { kind: 'player'; characterId: string; x: number; y: number }
+  | { kind: 'building'; buildingId: string; x: number; y: number };
+
 // What the FSM emits on each tick. The Room consumes these and is responsible
 // for applying damage / spawning projectiles / broadcasting state changes.
 // Keeps fsm.ts pure-ish (no I/O) and easy to test.
@@ -54,7 +71,8 @@ export function tickEnemy(
   dt: number,
   now: number,
   players: AiPlayer[],
-  env: AiEnvironment = {}
+  env: AiEnvironment = {},
+  buildingTargets: AiBuildingTarget[] = []
 ): AiOutcome {
   const outcome: AiOutcome = {
     meleeDamage: [],
@@ -67,8 +85,12 @@ export function tickEnemy(
   const tpl = enemy.template;
 
   // ---------- target acquisition ----------
-  const target = pickTarget(enemy, players, env);
-  enemy.targetCharacterId = target?.characterId ?? null;
+  // During a horde, building targets are passed in with priorities. The
+  // AI picks the highest-priority building in sense range; otherwise it
+  // falls back to the nearest visible player.
+  const target = pickTarget(enemy, players, buildingTargets, env);
+  enemy.targetCharacterId =
+    target && target.kind === 'player' ? target.characterId : null;
 
   // ---------- state transitions ----------
   if (!target) {
@@ -119,22 +141,63 @@ export function tickEnemy(
 function pickTarget(
   enemy: EnemyRuntime,
   players: AiPlayer[],
+  buildingTargets: AiBuildingTarget[],
   env: AiEnvironment
-): AiPlayer | null {
+): AiTarget | null {
   const r = enemy.template.senseRadius;
-  let best: AiPlayer | null = null;
+
+  // Buildings come first when any are in range. They're already supplied
+  // pre-filtered by world state (only the surface scene during horde
+  // currently passes any), with priority encoded so a Power Link beats a
+  // turret beats a wall. We deliberately ignore line-of-sight for
+  // buildings — enemies can hear/sense the base from across the surface.
+  let bestBuilding: AiBuildingTarget | null = null;
+  let bestBuildingPriority = -Infinity;
+  let bestBuildingDist = Infinity;
+  for (const b of buildingTargets) {
+    const dx = b.x - enemy.x;
+    const dy = b.y - enemy.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > r) continue;
+    if (
+      b.priority > bestBuildingPriority ||
+      (b.priority === bestBuildingPriority && dist < bestBuildingDist)
+    ) {
+      bestBuilding = b;
+      bestBuildingPriority = b.priority;
+      bestBuildingDist = dist;
+    }
+  }
+  if (bestBuilding) {
+    return {
+      kind: 'building',
+      buildingId: bestBuilding.buildingId,
+      x: bestBuilding.x,
+      y: bestBuilding.y,
+    };
+  }
+
+  // Otherwise fall back to nearest visible player.
+  let bestPlayer: AiPlayer | null = null;
   let bestDist = r;
   for (const p of players) {
     const dx = p.x - enemy.x;
     const dy = p.y - enemy.y;
     const dist = Math.hypot(dx, dy);
     if (dist > bestDist) continue;
-    // Line-of-sight gate. Without it, enemies aggro through walls.
     if (env.lineOfSight && !env.lineOfSight(enemy.x, enemy.y, p.x, p.y)) continue;
-    best = p;
+    bestPlayer = p;
     bestDist = dist;
   }
-  return best;
+  if (bestPlayer) {
+    return {
+      kind: 'player',
+      characterId: bestPlayer.characterId,
+      x: bestPlayer.x,
+      y: bestPlayer.y,
+    };
+  }
+  return null;
 }
 
 // Try to commit (proposedX, proposedY). On wall hit, slide along the
@@ -171,7 +234,7 @@ function moveWithCollision(
 
 function applyMovement(
   enemy: EnemyRuntime,
-  target: AiPlayer,
+  target: AiTarget,
   dt: number,
   env: AiEnvironment
 ): void {
@@ -203,7 +266,7 @@ function applyMovement(
 
 function applyFlee(
   enemy: EnemyRuntime,
-  target: AiPlayer,
+  target: AiTarget,
   dt: number,
   env: AiEnvironment
 ): void {
@@ -222,7 +285,7 @@ function applyFlee(
 
 function runAttacks(
   enemy: EnemyRuntime,
-  target: AiPlayer,
+  target: AiTarget,
   dt: number,
   now: number,
   outcome: AiOutcome
@@ -234,7 +297,11 @@ function runAttacks(
   for (let i = 0; i < enemy.template.attacks.length; i++) {
     const atk = enemy.template.attacks[i];
     if (atk.kind === 'melee') {
-      if (dist <= atk.range) {
+      if (dist <= atk.range && target.kind === 'player') {
+        // Player melee — emit so scene applies HP damage. Building
+        // melee already happens via Scene.tickEnemyBuildingAttacks
+        // (any enemy in melee range of a wall/turret/etc. chews
+        // through it regardless of declared target).
         outcome.meleeDamage.push({
           targetCharacterId: target.characterId,
           amount: atk.damagePerSec * dt,

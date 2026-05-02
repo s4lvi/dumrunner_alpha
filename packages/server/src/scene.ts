@@ -41,6 +41,7 @@ import {
   instantiateEnemy,
   tickEnemy,
   type AiPlayer,
+  type AiBuildingTarget,
 } from './ai/fsm.js';
 import type { EnemyRuntime } from './ai/runtime.js';
 import { rollDropsForKill, killTierBiasFromHp } from './loot.js';
@@ -142,7 +143,24 @@ const BUILDING_STATS: Record<BuildingKind, { maxHp: number }> = {
   forge: { maxHp: 220 },
   electronics_bench: { maxHp: 130 },
   artifact_uplink: { maxHp: 200 },
+  power_link: { maxHp: 800 },
 };
+
+// Horde-mode target priority. Higher = picked first by enemy AI when
+// multiple buildings are in sense range. Power Link is the headline
+// objective; turrets next because killing them silences ranged defence;
+// then crafting infrastructure; walls last since they're the natural
+// soak that leads enemies to higher-value targets.
+const BUILDING_TARGET_PRIORITY: Partial<Record<BuildingKind, number>> = {
+  power_link: 100,
+  turret: 50,
+  workbench: 25,
+  forge: 25,
+  electronics_bench: 25,
+  artifact_uplink: 25,
+  wall: 10,
+};
+const EMPTY_BUILDING_TARGETS: AiBuildingTarget[] = [];
 
 export type SceneKind = 'surface' | 'dungeon_floor';
 
@@ -629,6 +647,10 @@ export class Scene {
     if (this.buildings.size === 0) return;
     const tileSize = this.layout?.tileSize ?? 0;
     if (tileSize <= 0) return;
+    // Powered defences require an alive Power Link. When the Link is
+    // destroyed mid-cycle, every turret on the surface goes silent until
+    // perihelion rebuilds it.
+    if (!this.bindings.isPowerOnline()) return;
     for (const b of this.buildings.values()) {
       if (b.kind !== 'turret') continue;
       if (now - b.lastFireAt < COMBAT.TURRET_FIRE_INTERVAL_MS) continue;
@@ -1004,9 +1026,25 @@ export class Scene {
         }
       : {};
 
+    // Building targets are passed only on the surface during horde, so
+    // dungeon AI keeps targeting players exclusively (no base structures
+    // down there anyway). Priority hierarchy:
+    //   power_link 100 > turret 50 > workbench/forge/etc 25 > wall 10
+    const buildingTargets =
+      this.kind === 'surface' && this.hordeActive
+        ? this.buildBuildingTargets()
+        : EMPTY_BUILDING_TARGETS;
+
     for (const enemy of this.enemies.values()) {
       if (!enemy.alive) continue;
-      const outcome = tickEnemy(enemy, dt, now, livePlayers, env);
+      const outcome = tickEnemy(
+        enemy,
+        dt,
+        now,
+        livePlayers,
+        env,
+        buildingTargets
+      );
 
       for (const hit of outcome.meleeDamage) {
         const target = this.bindings.connection(hit.targetCharacterId);
@@ -1078,6 +1116,27 @@ export class Scene {
     return false;
   }
 
+  // Build the AiBuildingTarget list for horde-mode AI. Priority hierarchy
+  // shapes which structures enemies path toward first.
+  private buildBuildingTargets(): AiBuildingTarget[] {
+    if (this.buildings.size === 0) return EMPTY_BUILDING_TARGETS;
+    const tileSize = this.layout?.tileSize ?? 0;
+    if (tileSize <= 0) return EMPTY_BUILDING_TARGETS;
+    const out: AiBuildingTarget[] = [];
+    for (const b of this.buildings.values()) {
+      if (b.hp <= 0) continue;
+      const priority = BUILDING_TARGET_PRIORITY[b.kind];
+      if (priority === undefined) continue;
+      out.push({
+        buildingId: b.id,
+        x: (b.tileX + b.width / 2) * tileSize,
+        y: (b.tileY + b.height / 2) * tileSize,
+        priority,
+      });
+    }
+    return out;
+  }
+
   // Damage any building within melee range of this enemy. Uses the first
   // melee attack the template defines; stationary turrets won't apply.
   private tickEnemyBuildingAttacks(
@@ -1128,8 +1187,13 @@ export class Scene {
     if (amount <= 0) return;
     b.hp -= amount;
     if (b.hp <= 0) {
+      const wasPowerLink = b.kind === 'power_link';
       this.buildings.delete(b.id);
       this.broadcast({ type: 'building_destroyed', id: b.id });
+      // Power Link destruction kicks off the world-level reset (drop
+      // dungeon scenes, evict players, reset deepest-floor counter,
+      // disable powered defences). World handles the cascade.
+      if (wasPowerLink) this.bindings.onPowerLinkDestroyed();
       return;
     }
     this.broadcast({
@@ -1169,6 +1233,7 @@ export class Scene {
         if (hit) continue;
       } else {
         let hit = false;
+        // Enemy projectiles hit players first.
         for (const memberId of this.members) {
           const conn = this.bindings.connection(memberId);
           if (!conn || !conn.alive) continue;
@@ -1187,6 +1252,31 @@ export class Scene {
           }
         }
         if (hit) continue;
+        // Then buildings — so drones during a horde can actually erode
+        // the base from range, not just walk past walls.
+        const tileSize = this.layout?.tileSize ?? 0;
+        if (tileSize > 0) {
+          for (const b of this.buildings.values()) {
+            const cx = (b.tileX + b.width / 2) * tileSize;
+            const cy = (b.tileY + b.height / 2) * tileSize;
+            const halfW = (b.width * tileSize) / 2;
+            const halfH = (b.height * tileSize) / 2;
+            const dx = Math.max(Math.abs(p.x - cx) - halfW, 0);
+            const dy = Math.max(Math.abs(p.y - cy) - halfH, 0);
+            if (dx * dx + dy * dy <= p.radius * p.radius) {
+              this.damageBuilding(b, p.damage, now);
+              this.projectiles.delete(id);
+              this.broadcast({
+                type: 'projectile_despawned',
+                id,
+                reason: 'hit',
+              });
+              hit = true;
+              break;
+            }
+          }
+          if (hit) continue;
+        }
       }
     }
   }
@@ -1469,6 +1559,55 @@ export class Scene {
 
   // ---------- enemy spawning ----------
 
+  // Idempotently seed the surface Power Link at the configured tile.
+  // Skips if a power_link already exists (e.g. loaded from snapshot or
+  // already alive). Returns the building (existing or new).
+  ensurePowerLink(
+    tileX: number,
+    tileY: number,
+    width: number,
+    height: number
+  ): BuildingRuntime {
+    if (this.kind !== 'surface') {
+      throw new Error('ensurePowerLink called on non-surface scene');
+    }
+    for (const b of this.buildings.values()) {
+      if (b.kind === 'power_link') return b;
+    }
+    const stats = BUILDING_STATS.power_link;
+    const id = `b${this.nextBuildingId++}`;
+    const building: BuildingRuntime = {
+      id,
+      kind: 'power_link',
+      tileX,
+      tileY,
+      width,
+      height,
+      hp: stats.maxHp,
+      maxHp: stats.maxHp,
+      lastFireAt: 0,
+    };
+    this.buildings.set(id, building);
+    this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
+    return building;
+  }
+
+  // Look up a building by id (for World callbacks that need to inspect
+  // the live state, e.g. checking whether the Power Link is still alive).
+  getBuilding(id: string): BuildingState | null {
+    const b = this.buildings.get(id);
+    return b ? { ...b } : null;
+  }
+
+  // Returns the first alive building of the given kind, or null. Used to
+  // gate the surface descent on the Power Link being intact.
+  findBuildingByKind(kind: BuildingKind): BuildingState | null {
+    for (const b of this.buildings.values()) {
+      if (b.kind === kind) return { ...b };
+    }
+    return null;
+  }
+
   private populateSurface(): void {
     for (const spawn of SURFACE_SPAWNS) {
       const tpl = TEMPLATES[spawn.templateId];
@@ -1544,6 +1683,13 @@ export interface SceneBindings {
   // HP and transitions the player back to the surface base. The corpse
   // stays in the original scene for recovery.
   onPlayerRespawn(characterId: string): void;
+  // Triggered the moment a power_link building is destroyed. World owns
+  // the cascading reset (drop dungeon scenes, evict any players in them,
+  // reset deepest-floor counter, mark power offline).
+  onPowerLinkDestroyed(): void;
+  // Read-only: whether the world's Power Link is alive. Scene's turret
+  // tick gates fire on this so destroying the Link silences defences.
+  isPowerOnline(): boolean;
 }
 
 // ---------- helpers ----------

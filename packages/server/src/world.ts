@@ -61,7 +61,20 @@ import type { SceneLayout } from '@dumrunner/shared';
 const SURFACE_ENTRANCE_X = 80;
 const SURFACE_ENTRANCE_Y = 0;
 
+// Tile location of the Power Link on the surface. The interactable sits
+// at the same world-space centre so E-interact picks it up when the
+// player walks up.
+const POWER_LINK_TILE_X = 6;
+const POWER_LINK_TILE_Y = -1; // straddles y=0 cleanly with a 1×2 footprint
+const POWER_LINK_TILE_W = 1;
+const POWER_LINK_TILE_H = 1;
+
 function surfaceLayout(): SceneLayout {
+  // Power Link sits at tile (6, -1). World-space centre = tile centre at
+  // 32px tiles → (6.5*32, -0.5*32) = (208, -16). Use that as the
+  // interactable's anchor so the prompt fires when the player is near.
+  const linkX = (POWER_LINK_TILE_X + POWER_LINK_TILE_W / 2) * 32;
+  const linkY = (POWER_LINK_TILE_Y + POWER_LINK_TILE_H / 2) * 32;
   return {
     worldBounds: { x: -2000, y: -2000, w: 4000, h: 4000 },
     walkables: [],
@@ -69,11 +82,11 @@ function surfaceLayout(): SceneLayout {
     spawn: { x: SURFACE_ENTRANCE_X, y: SURFACE_ENTRANCE_Y },
     interactables: [
       {
-        id: 'surface_stairs',
+        id: 'power_link',
         kind: 'stairs_down',
-        x: 200,
-        y: 0,
-        label: 'Descend — Floor 1',
+        x: linkX,
+        y: linkY,
+        label: 'Descend — Power Link',
       },
     ],
     // Surface uses the same 32-px grid as dungeons so base-building snaps
@@ -157,6 +170,13 @@ export class World {
   // attack; cycle++ when the horde ends.
   private hordeActive = false;
   private hordeEndsAt = 0;
+  // Deepest dungeon floor any crewmate has reached this cycle. Drives the
+  // surface Power Link's descent target and (Phase 3) the power capacity.
+  // Resets to 1 on cycle reset OR Power Link destruction.
+  private deepestFloorReached = 1;
+  // Powered defences (auto-turrets) require an alive Power Link. When the
+  // Link is destroyed mid-cycle this flips false; cycle reset rebuilds it.
+  private powerOnline = true;
   // Last clock broadcast time, throttled to WORLD_CLOCK_INTERVAL_MS.
   private lastClockBroadcastAt = 0;
 
@@ -170,11 +190,22 @@ export class World {
       onInteractable: (id, fromSceneId, kind) =>
         this.onInteractable(id, fromSceneId, kind),
       onPlayerRespawn: (id) => this.respawnPlayerToSurface(id),
+      onPowerLinkDestroyed: () => this.handlePowerLinkDestroyed(),
+      isPowerOnline: () => this.powerOnline,
     };
     // Surface always exists so cold servers spawn enemies immediately.
-    this.scenes.set(
+    const surface = new Scene(
       SURFACE_SCENE_ID,
-      new Scene(SURFACE_SCENE_ID, 'surface', this.bindings, surfaceLayout())
+      'surface',
+      this.bindings,
+      surfaceLayout()
+    );
+    this.scenes.set(SURFACE_SCENE_ID, surface);
+    surface.ensurePowerLink(
+      POWER_LINK_TILE_X,
+      POWER_LINK_TILE_Y,
+      POWER_LINK_TILE_W,
+      POWER_LINK_TILE_H
     );
   }
 
@@ -533,7 +564,21 @@ export class World {
     if (kind === 'stairs_down') {
       let nextFloor: number;
       if (fromSceneId === SURFACE_SCENE_ID) {
-        nextFloor = 1;
+        // Surface descent gates on a live Power Link AND uses the deepest
+        // floor any crewmate has reached this cycle as the target. So once
+        // the crew has pushed to floor 6, returning to the Link drops you
+        // back at floor 6 — no re-traversal needed.
+        const surface = this.scenes.get(SURFACE_SCENE_ID);
+        const link = surface?.findBuildingByKind('power_link');
+        if (!link || link.hp <= 0) {
+          // No descent possible without an alive Power Link.
+          this.sendDirect(conn.ws, {
+            type: 'error',
+            message: 'power_link_offline',
+          });
+          return;
+        }
+        nextFloor = this.deepestFloorReached;
       } else {
         const current = parseDungeonScene(fromSceneId);
         if (current === null) return;
@@ -543,6 +588,10 @@ export class World {
       const targetScene = this.requireScene(targetSceneId);
       const spawn = targetScene.layout?.spawn ?? { x: 0, y: 0 };
       this.transition(characterId, targetSceneId, spawn.x, spawn.y);
+      // Update the depth marker if this push extends the frontier.
+      if (nextFloor > this.deepestFloorReached) {
+        this.deepestFloorReached = nextFloor;
+      }
       return;
     }
   }
@@ -915,6 +964,37 @@ export class World {
     }
   }
 
+  // Power Link destroyed mid-cycle. Cascades a heavy reset: any players
+  // currently in a dungeon scene get evicted to the surface, every
+  // dungeon scene drops (procgen reseeds on the next descent), the
+  // deepest-floor counter resets to 1, and powered defences go silent.
+  // The Link itself rebuilds at the next perihelion (endHorde).
+  private handlePowerLinkDestroyed(): void {
+    if (!this.powerOnline) return; // already torn down
+    console.log(`[world ${this.serverId}] power link destroyed — dungeon reset`);
+    this.powerOnline = false;
+    this.deepestFloorReached = 1;
+
+    // Evict any dungeon-side players to the surface entrance.
+    const stragglers: string[] = [];
+    for (const [characterId, conn] of this.connections) {
+      if (conn.sceneId !== SURFACE_SCENE_ID) stragglers.push(characterId);
+    }
+    for (const characterId of stragglers) {
+      this.transition(
+        characterId,
+        SURFACE_SCENE_ID,
+        SURFACE_ENTRANCE_X,
+        SURFACE_ENTRANCE_Y
+      );
+    }
+    // Drop every dungeon scene so the next descent reseeds them fresh.
+    for (const sceneId of [...this.scenes.keys()]) {
+      if (sceneId === SURFACE_SCENE_ID) continue;
+      this.scenes.delete(sceneId);
+    }
+  }
+
   private startHorde(now: number): void {
     this.hordeActive = true;
     this.hordeEndsAt = now + COMBAT.HORDE_DURATION_MS;
@@ -970,6 +1050,21 @@ export class World {
       this.scenes.delete(sceneId);
     }
     surface?.wipeCorpsesAndLoot();
+
+    // Power Link rebuild + power restore. If the Link survived the horde,
+    // ensurePowerLink is a no-op; if it was destroyed mid-cycle (or by
+    // hordes themselves), it respawns at full HP and powered defences
+    // come back online.
+    if (surface) {
+      surface.ensurePowerLink(
+        POWER_LINK_TILE_X,
+        POWER_LINK_TILE_Y,
+        POWER_LINK_TILE_W,
+        POWER_LINK_TILE_H
+      );
+    }
+    this.powerOnline = true;
+    this.deepestFloorReached = 1;
 
     // Cycle reset: per-cycle blueprints wipe; persistent (legendary) ones
     // stay. Re-grant the alpha starter set so testing isn't dead-ended once

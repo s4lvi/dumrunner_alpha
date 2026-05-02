@@ -1025,6 +1025,32 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       body
         .circle(w / 2, h / 2, w * 0.15)
         .fill({ color: 0xfbbf24 });
+    } else if (b.kind === 'power_link') {
+      // Massive central pillar with a bright cyan-violet plasma core. Reads
+      // as both "this is the dungeon portal" and "this is the power source"
+      // — the most visually distinct building on the surface.
+      body.rect(0, 0, w, h).fill({ color: 0x0c1126 });
+      body.rect(0, 0, w, h).stroke({ color: 0x000000, width: 3 });
+      body
+        .circle(w / 2, h / 2, w * 0.42)
+        .fill({ color: 0x4338ca });
+      body
+        .circle(w / 2, h / 2, w * 0.28)
+        .fill({ color: 0x06b6d4 });
+      body
+        .circle(w / 2, h / 2, w * 0.14)
+        .fill({ color: 0xe0f2fe });
+      // Energy spokes radiating outward.
+      const cx = w / 2;
+      const cy = h / 2;
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const x1 = cx + Math.cos(a) * w * 0.42;
+        const y1 = cy + Math.sin(a) * h * 0.42;
+        const x2 = cx + Math.cos(a) * w * 0.5;
+        const y2 = cy + Math.sin(a) * h * 0.5;
+        body.moveTo(x1, y1).lineTo(x2, y2).stroke({ color: 0x67e8f9, width: 1.5 });
+      }
     } else if (b.kind === 'artifact_uplink') {
       // Tall pylon with a glowing pink core — sells the "alien tech" feel.
       body.rect(0, 0, w, h).fill({ color: 0x1a1325 });
