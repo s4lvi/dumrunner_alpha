@@ -110,6 +110,31 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     visual: { shape: 'triangle', color: 0xfb7185, size: 12 },
   },
 
+  // Armored: high HP, slow, the rifle bait. Pistol/SMG sponging vs.
+  // single-shot rifle clearing it in 5-6 hits.
+  armored: {
+    id: 'armored',
+    faction: 'sun_bleached',
+    maxHp: 320,
+    radius: 20,
+    moveSpeed: 60,
+    senseRadius: 360,
+    movement: { kind: 'chase' },
+    attacks: [
+      { kind: 'melee', range: 44, damagePerSec: 35 },
+    ],
+    fleeBelowHpRatio: null,
+    stunDurationOnHitMs: 60,
+    lootTable: [
+      { materialId: 'scrap',    chance: 1.0,  min: 2, max: 4 },
+      { materialId: 'alloy',    chance: 0.85, min: 1, max: 3 },
+      { materialId: 'circuit',  chance: 0.25, min: 1, max: 1 },
+      { materialId: 'artifact', chance: 0.18, min: 1, max: 1 },
+      { materialId: 'key',      chance: 0.08, min: 1, max: 1 },
+    ],
+    visual: { shape: 'square', color: 0x4b5563, size: 22 },
+  },
+
   brute_chaser: {
     id: 'brute_chaser',
     faction: 'sun_bleached',

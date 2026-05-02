@@ -38,7 +38,7 @@ import {
   consumePlaceable,
   weaponFamily,
 } from '@dumrunner/shared';
-import { COMBAT, WEAPON_STATS } from './combat.js';
+import { COMBAT, WEAPON_STATS, TURRET_VARIANTS } from './combat.js';
 import { TEMPLATES, SURFACE_SPAWNS } from './ai/templates.js';
 import {
   instantiateEnemy,
@@ -168,6 +168,9 @@ const CORPSE_PICKUP_RADIUS = COMBAT.LOOT_PICKUP_RADIUS;
 const BUILDING_STATS: Record<BuildingKind, { maxHp: number }> = {
   wall: { maxHp: 200 },
   turret: { maxHp: 120 },
+  turret_smg: { maxHp: 120 },
+  turret_shotgun: { maxHp: 140 },
+  turret_rifle: { maxHp: 120 },
   workbench: { maxHp: 150 },
   forge: { maxHp: 220 },
   electronics_bench: { maxHp: 130 },
@@ -188,6 +191,9 @@ const BUILDING_STATS: Record<BuildingKind, { maxHp: number }> = {
 const BUILDING_TARGET_PRIORITY: Partial<Record<BuildingKind, number>> = {
   power_link: 100,
   turret: 50,
+  turret_smg: 50,
+  turret_shotgun: 50,
+  turret_rifle: 50,
   workbench: 25,
   forge: 25,
   electronics_bench: 25,
@@ -746,15 +752,16 @@ export class Scene {
     // power slot under the depth-scaled capacity. Both conditions are
     // checked per-building via isPowered.
     for (const b of this.buildings.values()) {
-      if (b.kind !== 'turret') continue;
+      const variant = TURRET_VARIANTS[b.kind];
+      if (!variant) continue;
       if (!this.bindings.isPowered(b.id)) continue;
-      if (now - b.lastFireAt < COMBAT.TURRET_FIRE_INTERVAL_MS) continue;
+      if (now - b.lastFireAt < variant.fireIntervalMs) continue;
 
       const cx = (b.tileX + b.width / 2) * tileSize;
       const cy = (b.tileY + b.height / 2) * tileSize;
 
       let target: EnemyRuntime | null = null;
-      let bestDist: number = COMBAT.TURRET_RANGE;
+      let bestDist: number = variant.range;
       for (const e of this.enemies.values()) {
         if (!e.alive) continue;
         const dx = e.x - cx;
@@ -772,19 +779,30 @@ export class Scene {
       if (len < 0.001) continue;
 
       b.lastFireAt = now;
-      this.spawnProjectile({
-        ownerKind: 'player',
-        ownerId: b.id,
-        fromX: cx,
-        fromY: cy,
-        dirX: dx / len,
-        dirY: dy / len,
-        speed: COMBAT.TURRET_PROJECTILE_SPEED,
-        damage: COMBAT.TURRET_DAMAGE,
-        ttlMs: COMBAT.TURRET_PROJECTILE_TTL_MS,
-        radius: COMBAT.TURRET_PROJECTILE_RADIUS,
-        color: COMBAT.TURRET_PROJECTILE_COLOR,
-      });
+      const nx = dx / len;
+      const ny = dy / len;
+      // Pellet-aware spawning so the shotgun turret fans out the way
+      // the player's shotgun does.
+      const pellets = Math.max(1, variant.pelletCount);
+      for (let i = 0; i < pellets; i++) {
+        const t = pellets === 1 ? 0 : i / (pellets - 1) - 0.5;
+        const angle = t * variant.spreadRad;
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        this.spawnProjectile({
+          ownerKind: 'player',
+          ownerId: b.id,
+          fromX: cx,
+          fromY: cy,
+          dirX: nx * c - ny * s,
+          dirY: nx * s + ny * c,
+          speed: variant.projectileSpeed,
+          damage: variant.damage,
+          ttlMs: variant.projectileTtlMs,
+          radius: variant.projectileRadius,
+          color: variant.color,
+        });
+      }
     }
   }
 

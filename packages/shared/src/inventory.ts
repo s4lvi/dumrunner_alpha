@@ -674,6 +674,33 @@ export function addWeapon(inv: Inventory, weapon: WeaponItem): boolean {
   return true;
 }
 
+export function countWeapons(inv: Inventory, weaponId: WeaponKind): number {
+  let n = 0;
+  for (const s of inv) {
+    if (s.kind === 'weapon' && s.weapon.weaponId === weaponId) n++;
+  }
+  return n;
+}
+
+// Consume `count` weapons of the given id from inventory. Used by
+// "weapon-as-component" recipes (e.g. shotgun turret eats a shotgun).
+// Returns true on success, false if the player doesn't have enough.
+export function consumeWeapons(
+  inv: Inventory,
+  weaponId: WeaponKind,
+  count = 1
+): boolean {
+  if (countWeapons(inv, weaponId) < count) return false;
+  let remaining = count;
+  for (let i = 0; i < inv.length && remaining > 0; i++) {
+    const s = inv[i];
+    if (s.kind !== 'weapon' || s.weapon.weaponId !== weaponId) continue;
+    inv[i] = { kind: 'empty' };
+    remaining--;
+  }
+  return true;
+}
+
 // Adds count to an existing placeable stack of the same kind, or to a new
 // empty slot. Returns leftover that didn't fit (when inventory is full).
 export function addPlaceable(

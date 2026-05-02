@@ -2535,11 +2535,18 @@ function RecipeDetails({
   onCraft: (recipeId: string) => void;
 }) {
   const inputRows = recipe.inputs.map((input) => {
-    const id = input.kind === 'material' ? input.materialId : input.ammoId;
+    const id =
+      input.kind === 'material'
+        ? input.materialId
+        : input.kind === 'ammo'
+        ? input.ammoId
+        : input.weaponId;
     const have =
       input.kind === 'material'
         ? countMaterial(inventory, input.materialId)
-        : countAmmo(inventory, input.ammoId);
+        : input.kind === 'ammo'
+        ? countAmmo(inventory, input.ammoId)
+        : countWeaponsInInventory(inventory, input.weaponId);
     return { id, have, need: input.count, satisfied: have >= input.count };
   });
   const allSatisfied = inputRows.every((r) => r.satisfied);
@@ -2635,6 +2642,14 @@ function CraftPanel({
 }
 const EMPTY_STATION_SET: Set<BuildingKind> = new Set();
 
+function countWeaponsInInventory(inv: Inventory, weaponId: string): number {
+  let n = 0;
+  for (const s of inv) {
+    if (s.kind === 'weapon' && s.weapon.weaponId === weaponId) n++;
+  }
+  return n;
+}
+
 function formatRecipeOutput(out: Recipe['output']): string {
   if (out.kind === 'placeable') {
     return `${out.count}× ${STATION_LABEL[out.buildingKind] ?? out.buildingKind}`;
@@ -2652,6 +2667,9 @@ function formatRecipeOutput(out: Recipe['output']): string {
 const STATION_LABEL: Record<BuildingKind, string> = {
   wall: 'wall',
   turret: 'turret',
+  turret_smg: 'SMG turret',
+  turret_shotgun: 'shotgun turret',
+  turret_rifle: 'rifle turret',
   workbench: 'Workbench',
   forge: 'Forge',
   electronics_bench: 'Electronics Bench',
@@ -2676,11 +2694,18 @@ function CraftRow({
   // can show "3/5 scrap" per ingredient instead of the old single
   // collapsed line.
   const inputRows = recipe.inputs.map((input) => {
-    const id = input.kind === 'material' ? input.materialId : input.ammoId;
+    const id =
+      input.kind === 'material'
+        ? input.materialId
+        : input.kind === 'ammo'
+        ? input.ammoId
+        : input.weaponId;
     const have =
       input.kind === 'material'
         ? countMaterial(inventory, input.materialId)
-        : countAmmo(inventory, input.ammoId);
+        : input.kind === 'ammo'
+        ? countAmmo(inventory, input.ammoId)
+        : countWeaponsInInventory(inventory, input.weaponId);
     return {
       id,
       have,

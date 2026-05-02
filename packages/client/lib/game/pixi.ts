@@ -1099,14 +1099,34 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     container.position.set(px, py);
 
     const body = new Graphics();
-    if (b.kind === 'turret') {
-      // Turret: dark base plate with a steel-blue rotating-looking cap and
-      // a stubby barrel. Static art for now — could wire to lastFireAt later
-      // for muzzle flashes / barrel rotation.
+    if (
+      b.kind === 'turret' ||
+      b.kind === 'turret_smg' ||
+      b.kind === 'turret_shotgun' ||
+      b.kind === 'turret_rifle'
+    ) {
+      // Turret: dark base plate with a coloured cap that varies by family
+      // so the player can read the build at a glance.
+      const capColor =
+        b.kind === 'turret_smg'
+          ? 0xfde68a
+          : b.kind === 'turret_shotgun'
+          ? 0xff8a3d
+          : b.kind === 'turret_rifle'
+          ? 0x7dd3fc
+          : 0x3b82f6;
+      const ringColor =
+        b.kind === 'turret_smg'
+          ? 0xa16207
+          : b.kind === 'turret_shotgun'
+          ? 0x9a3412
+          : b.kind === 'turret_rifle'
+          ? 0x0e7490
+          : 0x1e3a8a;
       body.rect(0, 0, w, h).fill({ color: 0x27272a });
       body.rect(0, 0, w, h).stroke({ color: 0x09090b, width: 2 });
-      body.circle(w / 2, h / 2, w * 0.32).fill({ color: 0x3b82f6 });
-      body.circle(w / 2, h / 2, w * 0.32).stroke({ color: 0x1e3a8a, width: 1 });
+      body.circle(w / 2, h / 2, w * 0.32).fill({ color: capColor });
+      body.circle(w / 2, h / 2, w * 0.32).stroke({ color: ringColor, width: 1 });
       body
         .rect(w / 2 - 2, h / 2 - h * 0.4, 4, h * 0.4)
         .fill({ color: 0x71717a });

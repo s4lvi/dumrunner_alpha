@@ -222,9 +222,9 @@ type TemplateWeights = Record<string, number>;
 // template stays in the AI library for ad-hoc smoke tests.
 const DEPTH_WEIGHTS: { maxFloor: number; weights: TemplateWeights }[] = [
   { maxFloor: 2, weights: { swarmer: 30, chaser_melee: 50, shooter_drone: 20 } },
-  { maxFloor: 5, weights: { swarmer: 25, chaser_melee: 30, shooter_drone: 30, brute_chaser: 15 } },
-  { maxFloor: 10, weights: { swarmer: 15, chaser_melee: 25, shooter_drone: 30, brute_chaser: 30 } },
-  { maxFloor: Infinity, weights: { brute_chaser: 50, shooter_drone: 35, chaser_melee: 15 } },
+  { maxFloor: 5, weights: { swarmer: 25, chaser_melee: 25, shooter_drone: 25, brute_chaser: 15, armored: 10 } },
+  { maxFloor: 10, weights: { swarmer: 15, chaser_melee: 20, shooter_drone: 25, brute_chaser: 25, armored: 15 } },
+  { maxFloor: Infinity, weights: { brute_chaser: 35, shooter_drone: 25, armored: 25, chaser_melee: 15 } },
 ];
 
 function pickWeighted(rng: () => number, weights: TemplateWeights): string {

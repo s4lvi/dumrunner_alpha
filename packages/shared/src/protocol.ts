@@ -138,6 +138,9 @@ export type CraftJobState = {
 export type BuildingKind =
   | 'wall'
   | 'turret'
+  | 'turret_smg'
+  | 'turret_shotgun'
+  | 'turret_rifle'
   | 'workbench'
   | 'forge'
   | 'electronics_bench'
@@ -279,6 +282,9 @@ export const FireMsgSchema = z.object({
 const BuildingKindSchema = z.enum([
   'wall',
   'turret',
+  'turret_smg',
+  'turret_shotgun',
+  'turret_rifle',
   'workbench',
   'forge',
   'electronics_bench',

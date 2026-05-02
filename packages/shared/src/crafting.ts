@@ -20,7 +20,10 @@ import type { BuildingKind, WorkstationKind } from './protocol';
 
 export type RecipeInput =
   | { kind: 'material'; materialId: MaterialKind; count: number }
-  | { kind: 'ammo'; ammoId: AmmoKind; count: number };
+  | { kind: 'ammo'; ammoId: AmmoKind; count: number }
+  // "Weapon-as-component" — consumes a built weapon of the given family.
+  // Powers the per-family turret variants (shotgun turret eats a shotgun).
+  | { kind: 'weapon'; weaponId: WeaponKind; count: number };
 
 export type RecipeOutput =
   | { kind: 'placeable'; buildingKind: BuildingKind; count: number }
@@ -312,6 +315,51 @@ export const RECIPES: Record<string, Recipe> = {
     blueprintId: 'bp_turret',
     craftTimeMs: 60_000,
   },
+
+  // ---- Family-specific turrets (consume a built weapon as a build
+  // component; turret inherits the family's shape). ----
+  turret_smg: {
+    id: 'turret_smg',
+    name: 'SMG Turret',
+    inputs: [
+      { kind: 'weapon', weaponId: 'smg', count: 1 },
+      { kind: 'material', materialId: 'alloy', count: 4 },
+      { kind: 'material', materialId: 'circuit', count: 2 },
+      { kind: 'material', materialId: 'wire', count: 4 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'turret_smg', count: 1 },
+    workstation: 'electronics_bench',
+    blueprintId: 'bp_turret_smg',
+    craftTimeMs: 60_000,
+  },
+  turret_shotgun: {
+    id: 'turret_shotgun',
+    name: 'Shotgun Turret',
+    inputs: [
+      { kind: 'weapon', weaponId: 'shotgun', count: 1 },
+      { kind: 'material', materialId: 'alloy', count: 6 },
+      { kind: 'material', materialId: 'circuit', count: 2 },
+      { kind: 'material', materialId: 'wire', count: 4 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'turret_shotgun', count: 1 },
+    workstation: 'electronics_bench',
+    blueprintId: 'bp_turret_shotgun',
+    craftTimeMs: 60_000,
+  },
+  turret_rifle: {
+    id: 'turret_rifle',
+    name: 'Rifle Turret',
+    inputs: [
+      { kind: 'weapon', weaponId: 'rifle', count: 1 },
+      { kind: 'material', materialId: 'alloy', count: 6 },
+      { kind: 'material', materialId: 'circuit', count: 4 },
+      { kind: 'material', materialId: 'wire', count: 4 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'turret_rifle', count: 1 },
+    workstation: 'electronics_bench',
+    blueprintId: 'bp_turret_rifle',
+    craftTimeMs: 75_000,
+  },
 };
 
 export function listRecipes(): Recipe[] {
@@ -383,6 +431,33 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: 'Builds a self-targeting defence turret. Crafted at an Electronics Bench.',
     cost: 3,
     tier: 'common',
+  },
+  bp_turret_smg: {
+    id: 'bp_turret_smg',
+    recipeId: 'turret_smg',
+    displayName: 'SMG Turret',
+    description:
+      'High-RoF turret. Consumes a built SMG. Crafted at an Electronics Bench.',
+    cost: 6,
+    tier: 'uncommon',
+  },
+  bp_turret_shotgun: {
+    id: 'bp_turret_shotgun',
+    recipeId: 'turret_shotgun',
+    displayName: 'Shotgun Turret',
+    description:
+      'Close-range pellet sweeper. Consumes a built Shotgun. Crafted at an Electronics Bench.',
+    cost: 6,
+    tier: 'uncommon',
+  },
+  bp_turret_rifle: {
+    id: 'bp_turret_rifle',
+    recipeId: 'turret_rifle',
+    displayName: 'Rifle Turret',
+    description:
+      'Long-range single-shot turret. Consumes a built Rifle. Crafted at an Electronics Bench.',
+    cost: 8,
+    tier: 'rare',
   },
   bp_mod_foregrip: {
     id: 'bp_mod_foregrip',

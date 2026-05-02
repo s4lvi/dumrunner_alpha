@@ -1,6 +1,6 @@
 // Combat constants. Tuning lives here so balance changes are one-place.
 
-import type { AmmoKind, WeaponFamily } from '@dumrunner/shared';
+import type { AmmoKind, BuildingKind, WeaponFamily } from '@dumrunner/shared';
 
 // Per-family stat sheet for ranged weapons. SMG = high RoF, low dmg; shotgun
 // = burst pellets, short range; rifle = single high-dmg slug; pistol = the
@@ -65,6 +65,72 @@ export const WEAPON_STATS: Record<
     spreadRad: 0,
     color: 0x7dd3fc,
     ammoKind: 'rifle_rounds',
+  },
+};
+
+// Per-turret-kind firing profile. The base 'turret' is the pistol-tier
+// auto-turret (legacy stats); the family variants pull from the same
+// per-family stat sheet the player's gun uses, slightly slower and
+// lower-damage so a turret is never strictly better than the equivalent
+// player weapon. `range` is the targeting/projectile reach.
+export type TurretStats = {
+  range: number;
+  damage: number;
+  fireIntervalMs: number;
+  projectileSpeed: number;
+  projectileTtlMs: number;
+  projectileRadius: number;
+  pelletCount: number;
+  spreadRad: number;
+  color: number;
+};
+
+export const TURRET_VARIANTS: Partial<Record<BuildingKind, TurretStats>> = {
+  // Original auto-turret. Kept for backward compat with already-placed
+  // buildings.
+  turret: {
+    range: 380,
+    damage: 18,
+    fireIntervalMs: 750,
+    projectileSpeed: 700,
+    projectileTtlMs: 1500,
+    projectileRadius: 4,
+    pelletCount: 1,
+    spreadRad: 0,
+    color: 0x66ddff,
+  },
+  turret_smg: {
+    range: 360,
+    damage: 9,
+    fireIntervalMs: 130,
+    projectileSpeed: 1500,
+    projectileTtlMs: 700,
+    projectileRadius: 3,
+    pelletCount: 1,
+    spreadRad: 0.07,
+    color: 0xfde68a,
+  },
+  turret_shotgun: {
+    range: 240,
+    damage: 11,
+    fireIntervalMs: 1100,
+    projectileSpeed: 1500,
+    projectileTtlMs: 350,
+    projectileRadius: 4,
+    pelletCount: 6,
+    spreadRad: 0.35,
+    color: 0xff8a3d,
+  },
+  turret_rifle: {
+    range: 520,
+    damage: 50,
+    fireIntervalMs: 1100,
+    projectileSpeed: 2400,
+    projectileTtlMs: 1200,
+    projectileRadius: 4,
+    pelletCount: 1,
+    spreadRad: 0,
+    color: 0x7dd3fc,
   },
 };
 

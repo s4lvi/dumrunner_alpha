@@ -46,8 +46,10 @@ import {
   computeSuitStats,
   consumeAmmo,
   consumeMaterial,
+  consumeWeapons,
   countAmmo,
   countMaterial,
+  countWeapons,
   KEY_ARTIFACT_COST,
   RECIPES,
 } from '@dumrunner/shared';
@@ -847,8 +849,10 @@ export class World {
     for (const input of recipe.inputs) {
       if (input.kind === 'material') {
         if (countMaterial(conn.inventory, input.materialId) < input.count) return;
-      } else {
+      } else if (input.kind === 'ammo') {
         if (countAmmo(conn.inventory, input.ammoId) < input.count) return;
+      } else {
+        if (countWeapons(conn.inventory, input.weaponId) < input.count) return;
       }
     }
 
@@ -874,8 +878,10 @@ export class World {
     for (const input of recipe.inputs) {
       if (input.kind === 'material') {
         consumeMaterial(conn.inventory, input.materialId, input.count);
-      } else {
+      } else if (input.kind === 'ammo') {
         consumeAmmo(conn.inventory, input.ammoId, input.count);
+      } else {
+        consumeWeapons(conn.inventory, input.weaponId, input.count);
       }
     }
 
@@ -1512,7 +1518,13 @@ export class World {
         COMBAT.POWER_PER_DEPTH * this.deepestFloorReached
       : 0;
 
-    const consumers = surface?.findBuildingsByKind(['turret']) ?? [];
+    const consumers =
+      surface?.findBuildingsByKind([
+        'turret',
+        'turret_smg',
+        'turret_shotgun',
+        'turret_rifle',
+      ]) ?? [];
     this.powerDraw =
       consumers.length * COMBAT.POWER_DRAW_TURRET +
       this.activeCraftJobs.size * COMBAT.POWER_DRAW_CRAFT_JOB;
