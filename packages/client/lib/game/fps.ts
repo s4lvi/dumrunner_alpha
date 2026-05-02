@@ -168,6 +168,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   let equippedWeapon: 'pistol' | 'knife' | null = null;
   // Brief muzzle-flash window so the crosshair pulses on every fire frame.
   let lastFireFlashAt = 0;
+  // Damage feedback: full-screen red tint on self damage, per-enemy white
+  // flash on hit. Both are timestamps; renderer compares to performance.now().
+  let selfLastDamageAt = 0;
+  let selfLastHp = init.self.hp;
+  const enemyHitAt = new Map<string, number>();
   // Build mode: kind to place, or null when not building. Pending action is
   // resolved during the next render so a click reads the latest target tile.
   let buildKind: import('@dumrunner/shared').BuildingKind | null = null;
@@ -496,6 +501,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // ---------- HUD overlay ----------
   function drawHud(W: number, H: number) {
     hudLayer.clear();
+    const now = performance.now();
+
+    // Damage tint: short red wash across the whole screen on self-damage,
+    // fades out over 250ms. Drawn UNDER the rest of the HUD so the
+    // crosshair / view model stay visible.
+    const dmgT = Math.max(0, 1 - (now - selfLastDamageAt) / 250);
+    if (dmgT > 0) {
+      hudLayer.rect(0, 0, W, H).fill({ color: 0xb91c1c, alpha: 0.35 * dmgT });
+    }
 
     // Show a "click to look" hint while pointer lock isn't held — easy to
     // miss otherwise, since FPS controls only kick in after the click.
@@ -504,10 +518,13 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       hudLayer.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.35 });
     }
 
+    drawWeaponViewModel(W, H, now);
+    drawSelfStatusBars(W, H);
+
     // Crosshair: white in combat, green in build mode, red flash on fire.
     const cx = Math.round(W / 2);
     const cy2 = Math.round(H / 2);
-    const flashing = performance.now() - lastFireFlashAt < 80;
+    const flashing = now - lastFireFlashAt < 80;
     const color = flashing
       ? 0xef4444
       : buildKind !== null
@@ -522,6 +539,114 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       .stroke({ color, width: 2, alpha: 0.9 });
     // Center dot.
     hudLayer.circle(cx, cy2, 1.5).fill({ color, alpha: 0.9 });
+  }
+
+  // Bottom-right view model: a small placeholder shape so the player has
+  // a sense of what they're holding. Pulses brighter on each fire frame
+  // to fake a muzzle flash. Real art lives behind asset_gen later.
+  function drawWeaponViewModel(W: number, H: number, now: number) {
+    if (equippedWeapon === null) return;
+    const flashing = now - lastFireFlashAt < 80;
+    const baseX = W - 140;
+    const baseY = H - 100;
+
+    if (equippedWeapon === 'pistol') {
+      // Boxy pistol silhouette: grip + barrel.
+      hudLayer
+        .rect(baseX, baseY, 40, 60)
+        .fill({ color: 0x27272a })
+        .rect(baseX, baseY, 40, 60)
+        .stroke({ color: 0x09090b, width: 2 });
+      hudLayer
+        .rect(baseX + 20, baseY - 20, 60, 24)
+        .fill({ color: 0x3f3f46 })
+        .rect(baseX + 20, baseY - 20, 60, 24)
+        .stroke({ color: 0x09090b, width: 2 });
+      if (flashing) {
+        // Muzzle flash at the end of the barrel.
+        hudLayer
+          .circle(baseX + 84, baseY - 8, 14)
+          .fill({ color: 0xfacc15, alpha: 0.85 })
+          .circle(baseX + 84, baseY - 8, 6)
+          .fill({ color: 0xffffff, alpha: 0.95 });
+      }
+    } else if (equippedWeapon === 'knife') {
+      // Diagonal blade.
+      hudLayer
+        .moveTo(baseX, baseY + 50)
+        .lineTo(baseX + 70, baseY - 10)
+        .lineTo(baseX + 80, baseY)
+        .lineTo(baseX + 10, baseY + 60)
+        .closePath()
+        .fill({ color: 0xcbd5e1 })
+        .stroke({ color: 0x09090b, width: 2 });
+      // Handle.
+      hudLayer
+        .rect(baseX - 6, baseY + 50, 26, 14)
+        .fill({ color: 0x57534e })
+        .stroke({ color: 0x09090b, width: 2 });
+    }
+  }
+
+  // Three thin bars in the bottom-left: HP (red), Shield (cyan), Stamina
+  // (yellow). Drawn here so the FPS view doesn't need to depend on the
+  // React HUD overlay being mounted to read survivability at a glance.
+  function drawSelfStatusBars(W: number, H: number) {
+    void W; // bars are anchored to the left edge
+    const self = players.get(init.self.characterId);
+    if (!self) return;
+    const x0 = 16;
+    const baseY = H - 70;
+    const w = 200;
+    const h = 8;
+    const gap = 4;
+    drawBar(
+      x0,
+      baseY,
+      w,
+      h,
+      self.hp / Math.max(1, self.maxHp),
+      0x991b1b,
+      0xef4444
+    );
+    if (self.maxShield > 0) {
+      drawBar(
+        x0,
+        baseY + (h + gap),
+        w,
+        h,
+        self.shield / Math.max(1, self.maxShield),
+        0x0e7490,
+        0x22d3ee
+      );
+    }
+    drawBar(
+      x0,
+      baseY + (h + gap) * 2,
+      w,
+      h,
+      self.stamina / Math.max(1, self.maxStamina),
+      0xa16207,
+      0xfacc15
+    );
+  }
+
+  function drawBar(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    fillRatio: number,
+    bg: number,
+    fg: number
+  ) {
+    const t = Math.max(0, Math.min(1, fillRatio));
+    hudLayer
+      .rect(x, y, w, h)
+      .fill({ color: 0x000000, alpha: 0.6 })
+      .rect(x, y, w, h)
+      .stroke({ color: bg, width: 1, alpha: 0.9 });
+    if (t > 0) hudLayer.rect(x + 1, y + 1, (w - 2) * t, h - 2).fill({ color: fg });
   }
 
   // ---------- sprites (Phase 2) ----------
@@ -559,9 +684,18 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       if (!p.alive) continue;
       pushSprite(p.x, p.y, PLAYER_OTHER_COLOR, PLAYER_SIZE * 2);
     }
+    const flashWindow = 90;
     for (const e of enemies.values()) {
       const v = ENEMY_VISUALS[e.kind] ?? FALLBACK_ENEMY_VISUAL;
-      pushSprite(e.x, e.y, v.color, v.size * 2);
+      // White hit-flash for ~90ms on damage. Sprite is the same shape; just
+      // tinted toward white.
+      const hitAt = enemyHitAt.get(e.id) ?? 0;
+      const hitT = Math.max(0, 1 - (performance.now() - hitAt) / flashWindow);
+      const color =
+        hitT > 0
+          ? blendColor(v.color, 0xffffff, hitT * 0.85)
+          : v.color;
+      pushSprite(e.x, e.y, color, v.size * 2);
     }
     for (const c of corpses.values()) {
       pushSprite(c.x, c.y, CORPSE_COLOR, CORPSE_SIZE);
@@ -819,6 +953,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     setPlayerHp(characterId, hp, maxHp, shield, maxShield) {
       const p = players.get(characterId);
       if (!p) return;
+      // Damage flash for self only.
+      if (characterId === init.self.characterId && hp < selfLastHp) {
+        selfLastDamageAt = performance.now();
+      }
+      if (characterId === init.self.characterId) selfLastHp = hp;
       p.hp = hp;
       p.maxHp = maxHp;
       if (shield !== undefined) p.shield = shield;
@@ -846,6 +985,9 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       if (characterId === init.self.characterId) {
         selfX = x;
         selfY = y;
+        // Respawn restores HP to maxHp; resync the damage-flash baseline
+        // so an incoming setPlayerHp doesn't fire spuriously.
+        selfLastHp = hp;
       }
     },
     showWeaponSwung() {
@@ -863,13 +1005,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     setEnemyHp(id, hp, maxHp) {
       const e = enemies.get(id);
-      if (e) {
-        e.hp = hp;
-        e.maxHp = maxHp;
-      }
+      if (!e) return;
+      // Hit flash if HP went down. Server can also send full updates, so
+      // gate on a real decrease.
+      if (hp < e.hp) enemyHitAt.set(id, performance.now());
+      e.hp = hp;
+      e.maxHp = maxHp;
     },
     removeEnemy(id) {
       enemies.delete(id);
+      enemyHitAt.delete(id);
     },
     spawnProjectile(p) {
       projectiles.set(p.id, p);
