@@ -458,6 +458,14 @@ export const TierUpWeaponMsgSchema = z.object({
   weaponInventoryIdx: slotIndex,
 });
 
+// Trigger a single consumable (e.g. medkit) from the given inventory
+// slot. Server validates the slot is a consumable + has a positive
+// count, applies the effect, and decrements / clears the slot.
+export const UseConsumableMsgSchema = z.object({
+  type: z.literal('use_consumable'),
+  slot: slotIndex,
+});
+
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMsgSchema,
   InputMsgSchema,
@@ -483,6 +491,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   AttachSuitAffixMsgSchema,
   DetachSuitAffixMsgSchema,
   TierUpWeaponMsgSchema,
+  UseConsumableMsgSchema,
 ]);
 
 

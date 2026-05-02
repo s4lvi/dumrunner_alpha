@@ -15,7 +15,12 @@
 //                   perihelion; legendary blueprints persist on the
 //                   character (handled at storage layer, not here).
 
-import type { AmmoKind, MaterialKind, WeaponKind } from './inventory';
+import type {
+  AmmoKind,
+  ConsumableKind,
+  MaterialKind,
+  WeaponKind,
+} from './inventory';
 import type { BuildingKind, WorkstationKind } from './protocol';
 
 export type RecipeInput =
@@ -29,7 +34,8 @@ export type RecipeOutput =
   | { kind: 'placeable'; buildingKind: BuildingKind; count: number }
   | { kind: 'ammo'; ammoId: AmmoKind; count: number }
   | { kind: 'weapon'; weaponId: WeaponKind }
-  | { kind: 'attachment'; defId: string; count: number };
+  | { kind: 'attachment'; defId: string; count: number }
+  | { kind: 'consumable'; consumableId: ConsumableKind; count: number };
 
 export type Recipe = {
   id: string;
@@ -116,6 +122,18 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'workbench',
     blueprintId: null,
     craftTimeMs: 45_000,
+  },
+  medkit: {
+    id: 'medkit',
+    name: 'Medkit (1)',
+    inputs: [
+      { kind: 'material', materialId: 'biotic', count: 2 },
+      { kind: 'material', materialId: 'wire', count: 1 },
+    ],
+    output: { kind: 'consumable', consumableId: 'medkit', count: 1 },
+    workstation: 'workbench',
+    blueprintId: null,
+    craftTimeMs: 8_000,
   },
   pistol_basic_ammo: {
     id: 'pistol_basic_ammo',

@@ -60,6 +60,31 @@ export type AmmoKind =
   | 'smg_basic'
   | 'shotgun_shells'
   | 'rifle_rounds';
+
+// Consumables — single-use items the player triggers from a hotbar
+// slot to apply an effect (heal, buff, etc). New entries: add to the
+// union AND to CONSUMABLES below.
+export type ConsumableKind = 'medkit';
+
+export type ConsumableDef = {
+  id: ConsumableKind;
+  name: string;
+  description: string;
+  // Color tint for the inventory icon.
+  color: number;
+  // Hp restored when used. Future variants will add other effects.
+  healHp: number;
+};
+
+export const CONSUMABLES: Record<ConsumableKind, ConsumableDef> = {
+  medkit: {
+    id: 'medkit',
+    name: 'Medkit',
+    description: 'Restores 60 HP. Use from hotbar.',
+    color: 0xef4444,
+    healHp: 60,
+  },
+};
 export type WeaponKind = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'knife';
 
 // Family groups weapons that share ammo, mod compatibility, and turret
@@ -145,6 +170,7 @@ export type InventorySlot =
   | { kind: 'ammo'; ammoId: AmmoKind; count: number }
   | { kind: 'weapon'; weapon: WeaponItem }
   | { kind: 'attachment'; defId: string; count: number }
+  | { kind: 'consumable'; consumableId: ConsumableKind; count: number }
   | { kind: 'placeable'; buildingKind: BuildingKind; count: number };
 
 export type Inventory = InventorySlot[];
@@ -844,6 +870,15 @@ export function swapSlots(inv: Inventory, from: number, to: number): boolean {
     inv[from] = { ...EMPTY };
     return true;
   }
+  if (
+    a.kind === 'consumable' &&
+    b.kind === 'consumable' &&
+    a.consumableId === b.consumableId
+  ) {
+    b.count += a.count;
+    inv[from] = { ...EMPTY };
+    return true;
+  }
   // Plain swap.
   inv[from] = b;
   inv[to] = a;
@@ -861,7 +896,8 @@ export function discardSlot(inv: Inventory, slot: number, all: boolean): boolean
     (s.kind === 'material' ||
       s.kind === 'ammo' ||
       s.kind === 'placeable' ||
-      s.kind === 'attachment') &&
+      s.kind === 'attachment' ||
+      s.kind === 'consumable') &&
     s.count > 1
   ) {
     s.count -= 1;
@@ -869,6 +905,49 @@ export function discardSlot(inv: Inventory, slot: number, all: boolean): boolean
   }
   inv[slot] = { ...EMPTY };
   return true;
+}
+
+export function findConsumableSlot(
+  inv: Inventory,
+  consumableId: ConsumableKind
+): number {
+  for (let i = 0; i < inv.length; i++) {
+    const s = inv[i];
+    if (s.kind === 'consumable' && s.consumableId === consumableId) return i;
+  }
+  return -1;
+}
+
+export function addConsumable(
+  inv: Inventory,
+  consumableId: ConsumableKind,
+  count = 1
+): boolean {
+  if (count <= 0) return true;
+  const existing = findConsumableSlot(inv, consumableId);
+  if (existing >= 0) {
+    const s = inv[existing];
+    if (s.kind === 'consumable') {
+      s.count += count;
+      return true;
+    }
+  }
+  const empty = findEmptySlot(inv);
+  if (empty < 0) return false;
+  inv[empty] = { kind: 'consumable', consumableId, count };
+  return true;
+}
+
+export function consumeConsumable(
+  inv: Inventory,
+  slotIdx: number
+): ConsumableKind | null {
+  const s = inv[slotIdx];
+  if (!s || s.kind !== 'consumable' || s.count <= 0) return null;
+  const id = s.consumableId;
+  s.count -= 1;
+  if (s.count <= 0) inv[slotIdx] = { kind: 'empty' };
+  return id;
 }
 
 export function findAttachmentSlot(inv: Inventory, defId: string): number {
@@ -929,12 +1008,14 @@ export function sortBag(inv: Inventory): void {
     material: Map<string, number>;
     placeable: Map<string, number>;
     attachment: Map<string, number>;
+    consumable: Map<string, number>;
   };
   const stacks: Stack = {
     ammo: new Map(),
     material: new Map(),
     placeable: new Map(),
     attachment: new Map(),
+    consumable: new Map(),
   };
   const others: InventorySlot[] = [];
   for (const s of tail) {
@@ -956,6 +1037,11 @@ export function sortBag(inv: Inventory): void {
         s.defId,
         (stacks.attachment.get(s.defId) ?? 0) + s.count
       );
+    } else if (s.kind === 'consumable') {
+      stacks.consumable.set(
+        s.consumableId,
+        (stacks.consumable.get(s.consumableId) ?? 0) + s.count
+      );
     } else {
       others.push(s);
     }
@@ -973,8 +1059,10 @@ export function sortBag(inv: Inventory): void {
         return 3;
       case 'attachment':
         return 4;
-      case 'part':
+      case 'consumable':
         return 5;
+      case 'part':
+        return 6;
       default:
         return 99;
     }
@@ -999,6 +1087,14 @@ export function sortBag(inv: Inventory): void {
   // Then attachments.
   for (const [defId, count] of stacks.attachment) {
     rebuilt.push({ kind: 'attachment', defId, count });
+  }
+  // Then consumables.
+  for (const [id, count] of stacks.consumable) {
+    rebuilt.push({
+      kind: 'consumable',
+      consumableId: id as ConsumableKind,
+      count,
+    });
   }
   // Pad to original tail length.
   while (rebuilt.length < tail.length) rebuilt.push({ ...EMPTY });

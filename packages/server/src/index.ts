@@ -282,6 +282,11 @@ wss.on('connection', (ws: WebSocket) => {
         world?.handleTierUpWeapon(player.characterId, msg.weaponInventoryIdx);
         break;
       }
+      case 'use_consumable': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handleUseConsumable(player.characterId, msg.slot);
+        break;
+      }
       case 'auth':
         sendError(ws, 'already_authed');
         break;

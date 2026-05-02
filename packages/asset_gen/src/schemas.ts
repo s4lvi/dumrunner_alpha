@@ -169,6 +169,15 @@ export type VerificationResult = {
   verdict: 'pass' | 'retry' | 'reject';
   summary: string;
   reasons: string[];
+  metrics?: Record<string, number>;
+};
+
+export type AssetFamilyMetadata = {
+  familyId: string;
+  baseAssetId?: string;
+  variantType: 'base' | 'animation' | 'icon' | 'projectile' | 'building';
+  animationAction?: z.infer<typeof AnimationActionSchema>;
+  sourceModel: string;
 };
 
 export type AnimationFrameMetadata = {
@@ -179,6 +188,12 @@ export type AnimationFrameMetadata = {
   h: number;
   anchor: { x: number; y: number };
   opaqueBounds: { x: number; y: number; w: number; h: number };
+  similarity?: {
+    silhouetteIoU: number;
+    paletteDistance: number;
+    centerDriftPx: number;
+    areaRatio: number;
+  };
 };
 
 export type AnimationMetadata = {
@@ -198,6 +213,7 @@ export type AssetRecord = {
   request: AssetGenerateRequest;
   urls: { png: string; webp?: string };
   metadata: AssetMetadata;
+  family: AssetFamilyMetadata;
   animation?: AnimationMetadata;
   verification: VerificationResult;
   createdAt: string;

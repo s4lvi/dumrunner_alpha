@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   countAmmo,
   countMaterial,
@@ -10,6 +10,7 @@ import {
   AFFIX_DEFS,
   computeSuitStats,
   ATTACHMENT_DEFS,
+  CONSUMABLES,
   HOTBAR_SIZE,
   KEY_ARTIFACT_COST,
   listBlueprints,
@@ -195,6 +196,10 @@ export function Game({ serverId }: { serverId: string }) {
   // Holds the live ws so number-key handlers can send select_hotbar without
   // closing over render-time scope.
   const wsForHotbar = useRef<WebSocket | null>(null);
+  // Inventory + hotbar refs for keypress handlers (which are bound once
+  // and need the latest values at fire time).
+  const inventoryRef = useRef<Inventory>(emptyInventory());
+  const hotbarSelectionRef = useRef<number>(0);
 
   function sendOnLiveWs(msg: ClientMessage) {
     const ws = wsForHotbar.current;
@@ -724,6 +729,12 @@ export function Game({ serverId }: { serverId: string }) {
   useEffect(() => {
     showInventoryRef.current = showInventory;
   }, [showInventory]);
+  useEffect(() => {
+    inventoryRef.current = inventory;
+  }, [inventory]);
+  useEffect(() => {
+    hotbarSelectionRef.current = hotbarSelection;
+  }, [hotbarSelection]);
 
   // Toast auto-dismiss after a few seconds.
   useEffect(() => {
@@ -864,7 +875,8 @@ export function Game({ serverId }: { serverId: string }) {
         if (
           nearestKind === 'workbench' ||
           nearestKind === 'forge' ||
-          nearestKind === 'electronics_bench'
+          nearestKind === 'electronics_bench' ||
+          nearestKind === 'weapon_bench'
         ) {
           setShowTradeModal(false);
           setStationModalKind(nearestKind);
@@ -891,6 +903,17 @@ export function Game({ serverId }: { serverId: string }) {
       if (e.key === 'v' || e.key === 'V') {
         e.preventDefault();
         setUseFps((v) => !v);
+        return;
+      }
+      // F triggers a consumable from the currently selected hotbar slot
+      // (e.g. medkit). No-op if the slot isn't a consumable.
+      if (e.key === 'f' || e.key === 'F') {
+        const inv = inventoryRef.current;
+        const sel = hotbarSelectionRef.current;
+        const slot = inv[sel];
+        if (slot && slot.kind === 'consumable' && slot.count > 0) {
+          sendOnLiveWs({ type: 'use_consumable', slot: sel });
+        }
         return;
       }
       // Hotbar selection: 1-9 maps to slots 0-8.
@@ -1088,6 +1111,10 @@ export function Game({ serverId }: { serverId: string }) {
             slot={inventory[slotMenu.slot]}
             x={slotMenu.x}
             y={slotMenu.y}
+            onUse={() => {
+              sendOnLiveWs({ type: 'use_consumable', slot: slotMenu.slot });
+              setSlotMenu(null);
+            }}
             onDiscardOne={() => {
               sendOnLiveWs({
                 type: 'inventory_discard',
@@ -1687,7 +1714,7 @@ function TradeBlueprintsList({
 }) {
   const blueprints = listBlueprints();
   return (
-    <ul className="divide-y divide-[color:var(--panel-border)]">
+    <ul className="divide-y divide-[color:var(--panel-border)] overflow-y-auto max-h-[60vh]">
       {blueprints.map((bp) => {
         const owned = knownBlueprints.has(bp.id);
         const canAfford = artifacts >= bp.cost;
@@ -1929,10 +1956,19 @@ function WorkstationModal({
     const t = setInterval(() => forceRender((x) => x + 1), 250);
     return () => clearInterval(t);
   }, [jobsAtStation.length]);
-  const recipes = listRecipes().filter(
-    (r) =>
-      r.workstation === kind &&
-      (r.blueprintId === null || knownBlueprints.has(r.blueprintId))
+  // useMemo so the recipes array reference is stable while kind +
+  // knownBlueprints are unchanged. Otherwise the effect below sees
+  // a fresh reference every render and triggers spurious work that
+  // — combined with the 250ms forceRender interval — has been known
+  // to trip React update warnings.
+  const recipes = useMemo(
+    () =>
+      listRecipes().filter(
+        (r) =>
+          r.workstation === kind &&
+          (r.blueprintId === null || knownBlueprints.has(r.blueprintId))
+      ),
+    [kind, knownBlueprints]
   );
   const inRange = nearWorkstations.has(kind);
   const [selectedId, setSelectedId] = useState<string | null>(
@@ -2215,19 +2251,29 @@ function WeaponBenchPanel({
   // Pull every weapon currently in the player's inventory plus its slot
   // index — the server expects the index, not the weapon id, for
   // attach/detach.
-  const weapons: { idx: number; weapon: WeaponItem }[] = [];
-  for (let i = 0; i < inventory.length; i++) {
-    const s = inventory[i];
-    if (s.kind === 'weapon' && s.weapon.weaponId !== 'knife') {
-      weapons.push({ idx: i, weapon: s.weapon });
+  // useMemo so the array reference only changes when the inventory
+  // actually changes — without it, every render creates a new array
+  // and React's effect dependency check fires every tick.
+  const weapons = useMemo(() => {
+    const out: { idx: number; weapon: WeaponItem }[] = [];
+    for (let i = 0; i < inventory.length; i++) {
+      const s = inventory[i];
+      if (s.kind === 'weapon' && s.weapon.weaponId !== 'knife') {
+        out.push({ idx: i, weapon: s.weapon });
+      }
     }
-  }
+    return out;
+  }, [inventory]);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(
     weapons[0]?.idx ?? null
   );
   useEffect(() => {
-    if (selectedIdx === null && weapons[0]) setSelectedIdx(weapons[0].idx);
-    if (selectedIdx !== null && !weapons.find((w) => w.idx === selectedIdx)) {
+    if (selectedIdx === null && weapons[0]) {
+      setSelectedIdx(weapons[0].idx);
+    } else if (
+      selectedIdx !== null &&
+      !weapons.find((w) => w.idx === selectedIdx)
+    ) {
       setSelectedIdx(weapons[0]?.idx ?? null);
     }
   }, [weapons, selectedIdx]);
@@ -2490,6 +2536,10 @@ function outputSlotLabel(slot: InventorySlot): string {
     const def = ATTACHMENT_DEFS[slot.defId];
     return `${slot.count}× ${def?.displayName ?? slot.defId}`;
   }
+  if (slot.kind === 'consumable') {
+    const def = CONSUMABLES[slot.consumableId];
+    return `${slot.count}× ${def?.name ?? slot.consumableId}`;
+  }
   if (slot.kind === 'part') return `${slot.part.tier} ${slot.part.slot}`;
   return '?';
 }
@@ -2660,6 +2710,10 @@ function formatRecipeOutput(out: Recipe['output']): string {
   if (out.kind === 'attachment') {
     const def = ATTACHMENT_DEFS[out.defId];
     return `${out.count}× ${def?.displayName ?? out.defId}`;
+  }
+  if (out.kind === 'consumable') {
+    const def = CONSUMABLES[out.consumableId];
+    return `${out.count}× ${def?.name ?? out.consumableId}`;
   }
   return out.weaponId.replace(/_/g, ' ');
 }
@@ -3060,6 +3114,12 @@ function slotTooltip(slot: InventorySlot): string | undefined {
   if (slot.kind === 'placeable') {
     return `${slot.buildingKind.replace(/_/g, ' ')} ×${slot.count}`;
   }
+  if (slot.kind === 'consumable') {
+    const def = CONSUMABLES[slot.consumableId];
+    return `${def?.name ?? slot.consumableId} ×${slot.count}\n${
+      def?.description ?? ''
+    }`;
+  }
   if (slot.kind === 'attachment') {
     const def = ATTACHMENT_DEFS[slot.defId];
     return `${def?.displayName ?? slot.defId} ×${slot.count}\n${def?.description ?? ''}`;
@@ -3178,6 +3238,7 @@ function SlotContextMenu({
   slot,
   x,
   y,
+  onUse,
   onDiscardOne,
   onDiscardAll,
   onClose,
@@ -3185,12 +3246,18 @@ function SlotContextMenu({
   slot: InventorySlot;
   x: number;
   y: number;
+  onUse: () => void;
   onDiscardOne: () => void;
   onDiscardAll: () => void;
   onClose: () => void;
 }) {
-  const stackable = slot.kind === 'material' || slot.kind === 'ammo';
+  const stackable =
+    slot.kind === 'material' ||
+    slot.kind === 'ammo' ||
+    slot.kind === 'consumable' ||
+    slot.kind === 'attachment';
   const count = stackable ? slot.count : 1;
+  const isConsumable = slot.kind === 'consumable';
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
@@ -3198,6 +3265,14 @@ function SlotContextMenu({
         className="fixed z-50 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded shadow-lg text-xs min-w-[140px]"
         style={{ left: x, top: y }}
       >
+        {isConsumable && (
+          <button
+            className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)] text-emerald-400"
+            onClick={onUse}
+          >
+            Use
+          </button>
+        )}
         {stackable && count > 1 && (
           <button
             className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)]"
@@ -3274,6 +3349,21 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
             borderColor: `#${tint.toString(16).padStart(6, '0')}`,
           }}
         />
+        <span className="text-zinc-300 text-[9px]">×{slot.count}</span>
+      </div>
+    );
+  }
+  if (slot.kind === 'consumable') {
+    const def = CONSUMABLES[slot.consumableId];
+    const c = `#${(def?.color ?? 0xef4444).toString(16).padStart(6, '0')}`;
+    return (
+      <div className="flex flex-col items-center leading-tight gap-0.5">
+        <div
+          className="w-6 h-6 rounded-sm border flex items-center justify-center font-bold text-[10px]"
+          style={{ background: `${c}33`, borderColor: c, color: c }}
+        >
+          +
+        </div>
         <span className="text-zinc-300 text-[9px]">×{slot.count}</span>
       </div>
     );

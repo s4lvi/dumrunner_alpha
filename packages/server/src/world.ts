@@ -33,7 +33,10 @@ import {
   addMaterial,
   addPlaceable,
   addWeapon,
+  addConsumable,
+  consumeConsumable,
   ATTACHMENT_DEFS,
+  CONSUMABLES,
   consumeAttachment,
   makeWeapon,
   weaponFamily as weaponFamilyOf,
@@ -923,8 +926,10 @@ export class World {
       addAmmo(conn.inventory, out.ammoId, out.count);
     } else if (out.kind === 'weapon') {
       addWeapon(conn.inventory, makeWeapon(out.weaponId));
-    } else {
+    } else if (out.kind === 'attachment') {
       addAttachment(conn.inventory, out.defId, out.count);
+    } else {
+      addConsumable(conn.inventory, out.consumableId, out.count);
     }
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
@@ -963,7 +968,13 @@ export class World {
           ? { kind: 'ammo', ammoId: out.ammoId, count: out.count }
           : out.kind === 'weapon'
           ? { kind: 'weapon', weapon: makeWeapon(out.weaponId) }
-          : { kind: 'attachment', defId: out.defId, count: out.count };
+          : out.kind === 'attachment'
+          ? { kind: 'attachment', defId: out.defId, count: out.count }
+          : {
+              kind: 'consumable',
+              consumableId: out.consumableId,
+              count: out.count,
+            };
 
       const surface = this.scenes.get(SURFACE_SCENE_ID);
       const deposited = surface?.depositToStationOutput(
@@ -980,8 +991,10 @@ export class World {
           addAmmo(conn.inventory, out.ammoId, out.count);
         } else if (out.kind === 'weapon') {
           addWeapon(conn.inventory, makeWeapon(out.weaponId));
-        } else {
+        } else if (out.kind === 'attachment') {
           addAttachment(conn.inventory, out.defId, out.count);
+        } else {
+          addConsumable(conn.inventory, out.consumableId, out.count);
         }
         conn.inventoryDirty = true;
         this.sendDirect(conn.ws, {
@@ -1296,6 +1309,33 @@ export class World {
       consumeMaterial(conn.inventory, c.materialId, c.count);
     }
     slot.weapon.tier = (slot.weapon.tier + 1) as WeaponTier;
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Use a consumable from the given inventory slot. Currently the
+  // medkit is the only kind — applies its healHp to the player's
+  // SceneConnection.hp (capped at maxHp). Server broadcasts the new
+  // hp + inventory_changed so the client mirrors the state.
+  handleUseConsumable(characterId: string, slot: number): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (slot < 0 || slot >= conn.inventory.length) return;
+    const s = conn.inventory[slot];
+    if (s.kind !== 'consumable' || s.count <= 0) return;
+    const def = CONSUMABLES[s.consumableId];
+    if (!def) return;
+    // No healing if already full hp — let the player keep the medkit.
+    if (def.healHp > 0 && conn.hp >= conn.maxHp) return;
+    const id = consumeConsumable(conn.inventory, slot);
+    if (!id) return;
+    if (def.healHp > 0) {
+      conn.hp = Math.min(conn.maxHp, conn.hp + def.healHp);
+      conn.dirty = true;
+    }
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
