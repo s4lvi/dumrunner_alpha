@@ -1722,14 +1722,19 @@ function StatLine({
   max: number;
   base: number;
 }) {
-  const bonus = max - base;
+  // Round everything for display. HP / Shield / Stamina maxes are
+  // conceptually integers; affix sums are float and would otherwise
+  // bleed 15 decimals.
+  const rMax = Math.round(max);
+  const rCurrent = Math.round(current);
+  const bonus = rMax - Math.round(base);
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-zinc-400">{label}</span>
       <span className="tabular-nums text-zinc-200">
-        {Math.round(current)}/{max}
+        {rCurrent}/{rMax}
         {bonus > 0 && (
-          <span className="text-emerald-400 ml-1">+{Math.round(bonus)}</span>
+          <span className="text-emerald-400 ml-1">+{bonus}</span>
         )}
       </span>
     </div>

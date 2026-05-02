@@ -349,9 +349,14 @@ export class World {
     // gear they spawned in. Skips the broadcast (no scene members yet);
     // the welcome message below carries the freshly-computed values.
     const stats = computeSuitStats(conn.equipment);
-    conn.maxHp = COMBAT.PLAYER_MAX_HP + stats.hpBonus;
-    conn.maxShield = COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus;
-    conn.maxStamina = COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus;
+    // Round to integers so the HUD doesn't render 15-digit floats from
+    // affix rolls. HP/shield/stamina maxes are always whole numbers in
+    // every UI surface.
+    conn.maxHp = Math.round(COMBAT.PLAYER_MAX_HP + stats.hpBonus);
+    conn.maxShield = Math.round(
+      COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus
+    );
+    conn.maxStamina = Math.round(COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus);
     conn.suitSpeedMult = stats.moveSpeedMult;
     conn.suitStaminaRegenBonus = stats.staminaRegenBonus;
     if (conn.hp > conn.maxHp) conn.hp = conn.maxHp;
@@ -834,9 +839,14 @@ export class World {
   // client HUD reflects the new caps.
   private recomputePlayerStats(conn: Connection): void {
     const stats = computeSuitStats(conn.equipment);
-    conn.maxHp = COMBAT.PLAYER_MAX_HP + stats.hpBonus;
-    conn.maxShield = COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus;
-    conn.maxStamina = COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus;
+    // Round to integers so the HUD doesn't render 15-digit floats from
+    // affix rolls. HP/shield/stamina maxes are always whole numbers in
+    // every UI surface.
+    conn.maxHp = Math.round(COMBAT.PLAYER_MAX_HP + stats.hpBonus);
+    conn.maxShield = Math.round(
+      COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus
+    );
+    conn.maxStamina = Math.round(COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus);
     conn.suitSpeedMult = stats.moveSpeedMult;
     conn.suitStaminaRegenBonus = stats.staminaRegenBonus;
     // Clamp current values to the new caps. Unequipping a chassis doesn't
