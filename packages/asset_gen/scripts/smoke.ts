@@ -100,7 +100,15 @@ function animationRequest(baseAssetId: string): AssetGenerateRequest {
 }
 
 type GenerateResponse =
-  | { status: 'approved'; assetId: string; urls?: unknown; metadata?: unknown; verification?: unknown }
+  | {
+      status: 'approved';
+      assetId: string;
+      urls?: unknown;
+      metadata?: unknown;
+      family?: unknown;
+      animation?: unknown;
+      verification?: unknown;
+    }
   | { status: string; jobId: string; assetId: null; pollUrl: string };
 
 type JobResponse = {
@@ -169,6 +177,8 @@ function summarize(asset: GenerateResponse): unknown {
     status: asset.status,
     assetId: asset.assetId,
     urls: asset.urls,
+    family: asset.family,
+    animation: asset.animation,
     metadata: asset.metadata,
     verification: asset.verification,
   };

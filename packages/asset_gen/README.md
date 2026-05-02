@@ -77,12 +77,29 @@ Generate one 2-frame enemy idle spritesheet:
   npm --workspace @dumrunner/asset_gen run smoke -- --animation
 ```
 
+Generate specific reference-guided animation cycles:
+
+```bash
+./node_modules/.bin/dotenv -e .env.local -- \
+  npm --workspace @dumrunner/asset_gen run smoke -- --animation --action walk --frames 4
+```
+
+```bash
+./node_modules/.bin/dotenv -e .env.local -- \
+  npm --workspace @dumrunner/asset_gen run smoke -- --animation --action attack --frames 3
+```
+
 ## Current Limits
 
 - `sharp` now produces exact-size PNG outputs and alpha-aware metadata.
 - `enemy_animation` jobs produce horizontal PNG spritesheets with frame
   metadata. This is intended for short 2-4 frame cycles, not rich full-motion
   animation.
+- Approved assets carry `family` metadata so base sprites and generated cycles
+  can be grouped by identity source, variant type, action, and source model.
+- Animation verification now measures alpha-mask overlap, palette drift,
+  center drift, and visible-area ratio across the whole frame set. A failed
+  cycle gets one corrective regeneration pass with a targeted prompt.
 - The service still depends on the image model producing a useful transparent
   source image. It does not yet run semantic background matting for opaque
   images.

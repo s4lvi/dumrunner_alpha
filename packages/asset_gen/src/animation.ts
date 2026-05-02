@@ -12,6 +12,24 @@ export type AnimationFrameInput = {
   metadata: AssetMetadata;
 };
 
+type FrameAnalysis = {
+  name: string;
+  width: number;
+  height: number;
+  mask: Uint8Array;
+  visiblePixels: number;
+  centerX: number;
+  centerY: number;
+  averageRgb: { r: number; g: number; b: number };
+};
+
+type FrameSimilarity = {
+  silhouetteIoU: number;
+  paletteDistance: number;
+  centerDriftPx: number;
+  areaRatio: number;
+};
+
 export type AnimationSheet = {
   bytes: Buffer;
   metadata: AssetMetadata;
@@ -48,7 +66,9 @@ export async function assembleAnimationSheet(
     .png()
     .toBuffer();
 
-  const verification = verifyAnimationFrames(request, frames);
+  const analyses = await Promise.all(frames.map(analyzeFrame));
+  const similarities = computeSimilarities(analyses);
+  const verification = verifyAnimationFrames(request, frames, similarities);
   const bounds = unionBounds(frames.map((frame, index) => ({
     ...frame.metadata.opaqueBounds,
     x: frame.metadata.opaqueBounds.x + index * frameWidth,
@@ -80,6 +100,7 @@ export async function assembleAnimationSheet(
         h: frameHeight,
         anchor: frame.metadata.anchor,
         opaqueBounds: frame.metadata.opaqueBounds,
+        similarity: similarities[index],
       })),
     },
     verification,
@@ -88,17 +109,20 @@ export async function assembleAnimationSheet(
 
 function verifyAnimationFrames(
   request: AssetGenerateRequest,
-  frames: AnimationFrameInput[]
+  frames: AnimationFrameInput[],
+  similarities: FrameSimilarity[]
 ): VerificationResult {
   const reasons: string[] = [];
   const maxDrift = request.animation?.maxFrameDriftPx ?? 3;
+  const thresholds = thresholdsFor(request.animation?.action ?? 'idle');
   const first = frames[0]?.metadata.opaqueBounds;
   if (!first) {
     reasons.push('animation has no frames');
   }
 
-  for (const frame of frames) {
+  for (const [index, frame] of frames.entries()) {
     const bounds = frame.metadata.opaqueBounds;
+    const similarity = similarities[index];
     if (frame.metadata.width !== request.size || frame.metadata.height !== request.size) {
       reasons.push(`${frame.name} is not ${request.size}x${request.size}`);
     }
@@ -111,7 +135,21 @@ function verifyAnimationFrames(
     if (first && drift(first, bounds) > maxDrift) {
       reasons.push(`${frame.name} drifts more than ${maxDrift}px from frame 0`);
     }
+    if (similarity && similarity.silhouetteIoU < thresholds.minSilhouetteIoU) {
+      reasons.push(`${frame.name} silhouette IoU ${fmt(similarity.silhouetteIoU)} below ${thresholds.minSilhouetteIoU}`);
+    }
+    if (similarity && similarity.paletteDistance > thresholds.maxPaletteDistance) {
+      reasons.push(`${frame.name} palette distance ${fmt(similarity.paletteDistance)} above ${thresholds.maxPaletteDistance}`);
+    }
+    if (similarity && similarity.areaRatio < thresholds.minAreaRatio) {
+      reasons.push(`${frame.name} visible area ratio ${fmt(similarity.areaRatio)} below ${thresholds.minAreaRatio}`);
+    }
   }
+
+  const minIou = Math.min(...similarities.map((entry) => entry.silhouetteIoU));
+  const maxPaletteDistance = Math.max(...similarities.map((entry) => entry.paletteDistance));
+  const maxCenterDrift = Math.max(...similarities.map((entry) => entry.centerDriftPx));
+  const minAreaRatio = Math.min(...similarities.map((entry) => entry.areaRatio));
 
   if (reasons.length > 0) {
     return {
@@ -119,15 +157,137 @@ function verifyAnimationFrames(
       verdict: 'retry',
       summary: 'Animation sheet failed mechanical frame consistency checks.',
       reasons,
+      metrics: {
+        minSilhouetteIoU: finiteMetric(minIou),
+        maxPaletteDistance: finiteMetric(maxPaletteDistance),
+        maxCenterDriftPx: finiteMetric(maxCenterDrift),
+        minAreaRatio: finiteMetric(minAreaRatio),
+      },
     };
   }
 
   return {
-    score: 0.8,
+    score: Math.min(0.92, 0.72 + minIou * 0.2),
     verdict: 'pass',
     summary: `Generated ${request.animation?.action ?? 'animation'} cycle passed baseline frame checks.`,
     reasons: [],
+    metrics: {
+      minSilhouetteIoU: finiteMetric(minIou),
+      maxPaletteDistance: finiteMetric(maxPaletteDistance),
+      maxCenterDriftPx: finiteMetric(maxCenterDrift),
+      minAreaRatio: finiteMetric(minAreaRatio),
+    },
   };
+}
+
+async function analyzeFrame(frame: AnimationFrameInput): Promise<FrameAnalysis> {
+  const image = sharp(frame.bytes).ensureAlpha();
+  const metadata = await image.metadata();
+  const width = metadata.width ?? 1;
+  const height = metadata.height ?? 1;
+  const raw = await image.raw().toBuffer();
+  const mask = new Uint8Array(width * height);
+  let visiblePixels = 0;
+  let sumX = 0;
+  let sumY = 0;
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const rawOffset = (y * width + x) * 4;
+      const alpha = raw[rawOffset + 3];
+      if (alpha <= 20) continue;
+      const maskOffset = y * width + x;
+      mask[maskOffset] = 1;
+      visiblePixels++;
+      sumX += x;
+      sumY += y;
+      sumR += raw[rawOffset];
+      sumG += raw[rawOffset + 1];
+      sumB += raw[rawOffset + 2];
+    }
+  }
+
+  return {
+    name: frame.name,
+    width,
+    height,
+    mask,
+    visiblePixels,
+    centerX: visiblePixels > 0 ? sumX / visiblePixels : width / 2,
+    centerY: visiblePixels > 0 ? sumY / visiblePixels : height / 2,
+    averageRgb: {
+      r: visiblePixels > 0 ? sumR / visiblePixels : 0,
+      g: visiblePixels > 0 ? sumG / visiblePixels : 0,
+      b: visiblePixels > 0 ? sumB / visiblePixels : 0,
+    },
+  };
+}
+
+function computeSimilarities(analyses: FrameAnalysis[]): FrameSimilarity[] {
+  const base = analyses[0];
+  if (!base) return [];
+  return analyses.map((analysis) => {
+    const unionLength = Math.min(base.mask.length, analysis.mask.length);
+    let intersection = 0;
+    let union = 0;
+    for (let i = 0; i < unionLength; i++) {
+      const a = base.mask[i] === 1;
+      const b = analysis.mask[i] === 1;
+      if (a && b) intersection++;
+      if (a || b) union++;
+    }
+    return {
+      silhouetteIoU: union > 0 ? intersection / union : 0,
+      paletteDistance: colorDistance(base.averageRgb, analysis.averageRgb),
+      centerDriftPx: Math.max(
+        Math.abs(base.centerX - analysis.centerX),
+        Math.abs(base.centerY - analysis.centerY)
+      ),
+      areaRatio: base.visiblePixels > 0
+        ? Math.min(base.visiblePixels, analysis.visiblePixels) / Math.max(base.visiblePixels, analysis.visiblePixels)
+        : 0,
+    };
+  });
+}
+
+function colorDistance(
+  a: FrameAnalysis['averageRgb'],
+  b: FrameAnalysis['averageRgb']
+): number {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return Math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+function thresholdsFor(action: string): {
+  minSilhouetteIoU: number;
+  maxPaletteDistance: number;
+  minAreaRatio: number;
+} {
+  switch (action) {
+    case 'idle':
+      return { minSilhouetteIoU: 0.38, maxPaletteDistance: 55, minAreaRatio: 0.75 };
+    case 'walk':
+      return { minSilhouetteIoU: 0.24, maxPaletteDistance: 70, minAreaRatio: 0.62 };
+    case 'attack':
+      return { minSilhouetteIoU: 0.18, maxPaletteDistance: 80, minAreaRatio: 0.5 };
+    case 'death':
+      return { minSilhouetteIoU: 0.12, maxPaletteDistance: 90, minAreaRatio: 0.35 };
+    default:
+      return { minSilhouetteIoU: 0.22, maxPaletteDistance: 75, minAreaRatio: 0.55 };
+  }
+}
+
+function finiteMetric(value: number): number {
+  return Number.isFinite(value) ? Number(value.toFixed(3)) : 0;
+}
+
+function fmt(value: number): string {
+  return finiteMetric(value).toString();
 }
 
 function drift(

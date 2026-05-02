@@ -351,6 +351,9 @@ export function partStatPreview(part: CarriedPart): Partial<SuitStats> {
 
 export type AffixDef = {
   id: string;
+  // Flavored display name ("Adrenal Surge"), shown above the technical
+  // effect line in tooltips. Makes random rolls feel like loot, not stats.
+  name: string;
   label: (value: number) => string;
   apply: (stats: SuitStats, value: number) => void;
   // Roll range. Real value = rand in [minRoll, maxRoll] × tier multiplier.
@@ -364,6 +367,7 @@ const SUIT_SLOTS_ALL: PartSlot[] = [...SUIT_SLOT_KINDS];
 export const AFFIX_DEFS: Record<string, AffixDef> = {
   add_hp: {
     id: 'add_hp',
+    name: 'Adrenal Surge',
     label: (v) => `+${Math.round(v)} max HP`,
     apply: (s, v) => {
       s.hpBonus += v;
@@ -374,6 +378,7 @@ export const AFFIX_DEFS: Record<string, AffixDef> = {
   },
   add_shield: {
     id: 'add_shield',
+    name: 'Pulsewall Aegis',
     label: (v) => `+${Math.round(v)} max shield`,
     apply: (s, v) => {
       s.shieldBonus += v;
@@ -384,6 +389,7 @@ export const AFFIX_DEFS: Record<string, AffixDef> = {
   },
   add_stamina_max: {
     id: 'add_stamina_max',
+    name: 'Lung Augment',
     label: (v) => `+${Math.round(v)} max stamina`,
     apply: (s, v) => {
       s.staminaMaxBonus += v;
@@ -394,6 +400,7 @@ export const AFFIX_DEFS: Record<string, AffixDef> = {
   },
   add_stamina_regen: {
     id: 'add_stamina_regen',
+    name: 'Aerobic Conditioning',
     label: (v) => `+${v.toFixed(1)} stamina/s`,
     apply: (s, v) => {
       s.staminaRegenBonus += v;
@@ -404,6 +411,7 @@ export const AFFIX_DEFS: Record<string, AffixDef> = {
   },
   add_move_speed: {
     id: 'add_move_speed',
+    name: 'Lightfoot',
     label: (v) => `+${Math.round(v * 100)}% move speed`,
     apply: (s, v) => {
       s.moveSpeedMult += v;
@@ -566,6 +574,151 @@ export function computeWeaponEffect(weapon: WeaponItem): Required<WeaponEffect> 
     out.projectileSpeedAdd += def.effect.projectileSpeedAdd ?? 0;
   }
   return out;
+}
+
+// ---------- creative-name pools ----------
+// Display names for dropped CarriedParts. The slot + tier and (for
+// weapon parts) weapon class pick a pool; the part's id-hash picks
+// a deterministic entry so the same part always reads as the same
+// "thing" without needing an extra wire field.
+
+const SUIT_PART_NAMES: Record<SuitSlotKind, string[]> = {
+  chassis: [
+    'Carapace Frame',
+    'Battle Harness',
+    'Skirmisher Rig',
+    'Praetor Shell',
+    'Exo-Skeleton',
+    'Bulwark Chassis',
+  ],
+  plating: [
+    'Aegis Plating',
+    'Hardweave Vest',
+    'Cataphract Plate',
+    'Sentinel Mail',
+    'Bulwark Mesh',
+    'Stormsteel Lamellar',
+  ],
+  life_support: [
+    'Pneumatic Rig',
+    'Pulmoflex Unit',
+    'Suspirator Pack',
+    'Vital Loop',
+    'Cyclic Bellows',
+    'Aerogel Lung',
+  ],
+  utility_mod: [
+    'Servo Pack',
+    'Kinetic Weave',
+    'Velocity Mesh',
+    'Sprintwire Module',
+    'Reflex Loom',
+    'Gait Optimiser',
+  ],
+  cargo_grid: [
+    'Cargo Lattice',
+    'Loadout Grid',
+    'Quartermaster Mesh',
+    'Stowage Webbing',
+    'Field Pack',
+  ],
+};
+
+const WEAPON_PART_BASE_NAMES: Record<
+  'barrel' | 'frame' | 'grip' | 'magazine' | 'weapon_mod',
+  string[]
+> = {
+  barrel: [
+    'Smoothbore',
+    'Helical Bore',
+    'Gauss Tube',
+    'Coilstave',
+    'Tracker Barrel',
+    'Recoilless Bore',
+  ],
+  frame: [
+    'Skeletal Frame',
+    'Reinforced Chassis',
+    'Field-Tempered Frame',
+    'Voidsteel Spine',
+    'Resonant Frame',
+  ],
+  grip: [
+    'Thermogel Grip',
+    'Ratchet Grip',
+    'Servo Grip',
+    'Stabilizer Grip',
+    'Recoil-Dampened Grip',
+  ],
+  magazine: [
+    'Hopper Mag',
+    'Drum Mag',
+    'Recursive Mag',
+    'Linkfeed',
+    'Cyclone Mag',
+  ],
+  weapon_mod: [
+    'Stabilizer',
+    'Targeting Auspex',
+    'Recoil Damper',
+    'Auxiliary Module',
+    'Aim Assistor',
+  ],
+};
+
+const WEAPON_CLASS_PREFIX: Record<string, string> = {
+  pistol: 'Sidearm',
+  smg: 'Burstfire',
+  rifle: 'Marksman',
+  shotgun: 'Sweeper',
+  sniper: 'Longeye',
+  heavy: 'Heavy',
+  energy: 'Phase',
+};
+
+const TIER_LABEL: Record<PartTier, string> = {
+  Mk1: 'Mk1',
+  Mk2: 'Mk2',
+  Mk3: 'Mk3',
+  Mk4: 'Mk4',
+  Alien: 'Xenotech',
+};
+
+// Stable string-hash used to pick a name from a pool deterministically
+// from a part id. Same part always reads as the same item.
+function hashId(id: string): number {
+  let h = 5381;
+  for (let i = 0; i < id.length; i++) {
+    h = ((h << 5) + h + id.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+export function partDisplayName(part: CarriedPart): string {
+  const tier = TIER_LABEL[part.tier] ?? part.tier;
+  if (isSuitPart(part.slot)) {
+    const pool = SUIT_PART_NAMES[part.slot as SuitSlotKind];
+    const base = pool[hashId(part.id) % pool.length] ?? part.slot;
+    return `${tier} ${base}`;
+  }
+  const isWeaponPart =
+    part.slot === 'barrel' ||
+    part.slot === 'frame' ||
+    part.slot === 'grip' ||
+    part.slot === 'magazine' ||
+    part.slot === 'weapon_mod';
+  if (isWeaponPart) {
+    const pool =
+      WEAPON_PART_BASE_NAMES[
+        part.slot as 'barrel' | 'frame' | 'grip' | 'magazine' | 'weapon_mod'
+      ];
+    const base = pool[hashId(part.id) % pool.length] ?? part.slot;
+    const cls = part.weaponClass
+      ? WEAPON_CLASS_PREFIX[part.weaponClass] ?? part.weaponClass
+      : '';
+    return cls ? `${tier} ${cls} ${base}` : `${tier} ${base}`;
+  }
+  return `${tier} ${part.slot}`;
 }
 
 export function affixIdsForSlot(slot: PartSlot): string[] {

@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AssetGenConfig } from './config.js';
+import { assetFamilyFor } from './family.js';
 import type { AssetJob, AssetRecord } from './schemas.js';
 
 export interface AssetStore {
@@ -110,8 +111,9 @@ export class LocalAssetStore implements AssetStore {
 
     const snapshot = JSON.parse(raw) as Partial<StoreSnapshot>;
     for (const asset of snapshot.assets ?? []) {
-      this.assetsById.set(asset.assetId, asset);
-      this.assetIdsByCacheKey.set(asset.cacheKey, asset.assetId);
+      const normalized = this.normalizeAsset(asset);
+      this.assetsById.set(normalized.assetId, normalized);
+      this.assetIdsByCacheKey.set(normalized.cacheKey, normalized.assetId);
     }
     for (const job of snapshot.jobs ?? []) {
       this.jobs.set(job.jobId, job);
@@ -128,5 +130,13 @@ export class LocalAssetStore implements AssetStore {
     const tmpPath = `${this.indexPath}.tmp`;
     await writeFile(tmpPath, `${JSON.stringify(snapshot, null, 2)}\n`);
     await rename(tmpPath, this.indexPath);
+  }
+
+  private normalizeAsset(asset: AssetRecord): AssetRecord {
+    if (asset.family) return asset;
+    return {
+      ...asset,
+      family: assetFamilyFor(asset.request, 'unknown'),
+    };
   }
 }

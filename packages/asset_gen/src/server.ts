@@ -28,6 +28,7 @@ const service = new AssetGenerationService({
   imageSize: config.imageSize,
   imageQuality: config.imageQuality,
   supportsTransparentBackground: supportsTransparentBackground(config.imageModel),
+  sourceModel: config.openaiApiKey ? config.imageModel : 'placeholder',
 });
 
 const server = createServer(async (req, res) => {

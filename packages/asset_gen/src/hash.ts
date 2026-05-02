@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { AssetGenerateRequest } from './schemas.js';
+import { ASSET_API_VERSION, type AssetGenerateRequest } from './schemas.js';
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
@@ -19,7 +19,10 @@ function stableJson(value: Json): string {
 }
 
 export function makeCacheKey(request: AssetGenerateRequest): string {
-  const normalized = stableJson(request as unknown as Json);
+  const normalized = stableJson({
+    apiVersion: ASSET_API_VERSION,
+    request: request as unknown as Json,
+  });
   return createHash('sha256').update(normalized).digest('hex');
 }
 

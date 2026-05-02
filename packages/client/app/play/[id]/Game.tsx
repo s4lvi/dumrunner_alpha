@@ -12,6 +12,7 @@ import {
   ATTACHMENT_DEFS,
   CONSUMABLES,
   HOTBAR_SIZE,
+  partDisplayName,
   KEY_ARTIFACT_COST,
   listBlueprints,
   listRecipes,
@@ -2540,7 +2541,7 @@ function outputSlotLabel(slot: InventorySlot): string {
     const def = CONSUMABLES[slot.consumableId];
     return `${slot.count}× ${def?.name ?? slot.consumableId}`;
   }
-  if (slot.kind === 'part') return `${slot.part.tier} ${slot.part.slot}`;
+  if (slot.kind === 'part') return partDisplayName(slot.part);
   return '?';
 }
 
@@ -3126,7 +3127,7 @@ function slotTooltip(slot: InventorySlot): string | undefined {
   }
   if (slot.kind === 'part') {
     const part = slot.part;
-    const tag = `${part.tier} ${SLOT_LABELS[part.slot] ?? part.slot}`;
+    const tag = `${partDisplayName(part)}  (${SLOT_LABELS[part.slot] ?? part.slot})`;
     const lines: string[] = [tag];
     // Primary stat — the part's slot contribution at its tier, no affixes.
     const primary = partPrimaryStat(part);
@@ -3139,12 +3140,12 @@ function slotTooltip(slot: InventorySlot): string | undefined {
       lines.push(`+${primary.staminaRegenBonus.toFixed(1)} stamina/s`);
     if (primary.moveSpeedMult)
       lines.push(`+${Math.round(primary.moveSpeedMult * 100)}% speed`);
-    // Each rolled affix gets its own line via AFFIX_DEFS.label(value).
+    // Each rolled affix gets its own line: flavored name + technical label.
     if (part.affixes && part.affixes.length > 0) {
       lines.push('— Affixes —');
       for (const a of part.affixes) {
         const def = AFFIX_DEFS[a.id];
-        if (def) lines.push(def.label(a.value));
+        if (def) lines.push(`${def.name}: ${def.label(a.value)}`);
       }
     }
     return lines.join('\n');
@@ -3369,6 +3370,10 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
     );
   }
   if (slot.kind === 'part') {
+    // partDisplayName returns "{tier} {creative name}". Strip the tier
+    // since we render it separately as a colour-coded badge above.
+    const full = partDisplayName(slot.part);
+    const compactName = full.replace(/^\S+\s+/, '');
     return (
       <div className="flex flex-col items-center leading-tight gap-0.5">
         <ItemIcon kind="part" tierColor={TIER_HEX[slot.part.tier]} />
@@ -3378,8 +3383,8 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
         >
           {slot.part.tier}
         </span>
-        <span className="text-zinc-400 text-[8px] capitalize">
-          {SLOT_LABELS[slot.part.slot] ?? slot.part.slot}
+        <span className="text-zinc-400 text-[8px] text-center leading-[1.05] max-w-[68px] truncate">
+          {compactName}
         </span>
       </div>
     );

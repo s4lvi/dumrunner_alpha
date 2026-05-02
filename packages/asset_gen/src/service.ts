@@ -1,5 +1,6 @@
 import { assembleAnimationSheet, type AnimationFrameInput } from './animation.js';
 import { cleanImage } from './cleanup.js';
+import { assetFamilyFor } from './family.js';
 import { makeCacheKey, newId } from './hash.js';
 import { compileAnimationFramePrompt, compileAssetPrompt } from './prompt.js';
 import type { ImageGenerator } from './providers/types.js';
@@ -37,6 +38,7 @@ export class AssetGenerationService {
       imageSize: string;
       imageQuality: 'low' | 'medium' | 'high' | 'auto';
       supportsTransparentBackground: boolean;
+      sourceModel: string;
     }
   ) {}
 
@@ -156,6 +158,7 @@ export class AssetGenerationService {
         request: job.request,
         urls: { png: '' },
         metadata: cleaned.metadata,
+        family: assetFamilyFor(job.request, this.deps.sourceModel),
         verification,
         createdAt: now,
       };
@@ -196,55 +199,26 @@ export class AssetGenerationService {
       const baseAsset = job.request.animation.baseAssetId
         ? await this.deps.store.getAssetPngBytes(job.request.animation.baseAssetId)
         : null;
-      const frames: AnimationFrameInput[] = [];
-      for (let frameIndex = 0; frameIndex < job.request.animation.frameCount; frameIndex++) {
-        await this.updateJob(job, { status: 'generating' });
-        const prompt = compileAnimationFramePrompt(job.request, frameIndex);
-        const generated = baseAsset
-          ? await this.deps.imageGenerator.edit({
-              prompt,
-              size: this.deps.imageSize,
-              quality: this.deps.imageQuality,
-              background: this.imageBackground(job.request),
-              inputFidelity: 'high',
-              referenceImages: [{
-                filename: `${job.request.animation.baseAssetId}.png`,
-                mimeType: 'image/png',
-                bytes: baseAsset,
-              }],
-            })
-          : await this.deps.imageGenerator.generate({
-              prompt,
-              size: this.deps.imageSize,
-              quality: this.deps.imageQuality,
-              background: this.imageBackground(job.request),
-            });
-
-        await this.updateJob(job, { status: 'cleaning' });
-        const cleaned = await cleanImage(job.request, generated);
-
-        await this.updateJob(job, { status: 'verifying' });
-        const verification = await this.deps.verifier.verify({
-          request: job.request,
-          metadata: cleaned.metadata,
-          pngBytes: cleaned.bytes,
-        });
-        if (verification.verdict !== 'pass') {
-          await this.updateJob(job, {
-            status: 'rejected',
-            error: `${frameName(job.request.animation.action, frameIndex)}: ${verification.reasons.join('; ') || verification.summary}`,
-          });
+      let correction: string | undefined;
+      let sheet = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const frames = await this.generateAnimationFrames(job, baseAsset, correction);
+        if ('error' in frames) {
+          correction = correctionForReasons([frames.error]);
+          if (attempt === 0) continue;
+          await this.updateJob(job, { status: 'rejected', error: frames.error });
           return;
         }
 
-        frames.push({
-          name: frameName(job.request.animation.action, frameIndex),
-          bytes: cleaned.bytes,
-          metadata: cleaned.metadata,
-        });
+        sheet = await assembleAnimationSheet(job.request, frames.frames);
+        if (sheet.verification.verdict === 'pass') break;
+        correction = correctionForReasons(sheet.verification.reasons);
       }
 
-      const sheet = await assembleAnimationSheet(job.request, frames);
+      if (!sheet) {
+        await this.updateJob(job, { status: 'failed', error: 'animation sheet generation produced no output' });
+        return;
+      }
       if (sheet.verification.verdict !== 'pass') {
         await this.updateJob(job, {
           status: 'rejected',
@@ -260,6 +234,7 @@ export class AssetGenerationService {
         request: job.request,
         urls: { png: '' },
         metadata: sheet.metadata,
+        family: assetFamilyFor(job.request, this.deps.sourceModel),
         animation: sheet.animation,
         verification: sheet.verification,
         createdAt: now,
@@ -278,6 +253,60 @@ export class AssetGenerationService {
     }
   }
 
+  private async generateAnimationFrames(
+    job: AssetJob,
+    baseAsset: Buffer | null,
+    correction: string | undefined
+  ): Promise<{ frames: AnimationFrameInput[] } | { error: string }> {
+    if (!job.request.animation) return { error: 'animation request missing animation spec' };
+    const frames: AnimationFrameInput[] = [];
+    for (let frameIndex = 0; frameIndex < job.request.animation.frameCount; frameIndex++) {
+      await this.updateJob(job, { status: 'generating' });
+      const prompt = compileAnimationFramePrompt(job.request, frameIndex, correction);
+      const generated = baseAsset
+        ? await this.deps.imageGenerator.edit({
+            prompt,
+            size: this.deps.imageSize,
+            quality: this.deps.imageQuality,
+            background: this.imageBackground(job.request),
+            inputFidelity: 'high',
+            referenceImages: [{
+              filename: `${job.request.animation.baseAssetId}.png`,
+              mimeType: 'image/png',
+              bytes: baseAsset,
+            }],
+          })
+        : await this.deps.imageGenerator.generate({
+            prompt,
+            size: this.deps.imageSize,
+            quality: this.deps.imageQuality,
+            background: this.imageBackground(job.request),
+          });
+
+      await this.updateJob(job, { status: 'cleaning' });
+      const cleaned = await cleanImage(job.request, generated);
+
+      await this.updateJob(job, { status: 'verifying' });
+      const verification = await this.deps.verifier.verify({
+        request: job.request,
+        metadata: cleaned.metadata,
+        pngBytes: cleaned.bytes,
+      });
+      if (verification.verdict !== 'pass') {
+        return {
+          error: `${frameName(job.request.animation.action, frameIndex)}: ${verification.reasons.join('; ') || verification.summary}`,
+        };
+      }
+
+      frames.push({
+        name: frameName(job.request.animation.action, frameIndex),
+        bytes: cleaned.bytes,
+        metadata: cleaned.metadata,
+      });
+    }
+    return { frames };
+  }
+
   private imageBackground(request: AssetGenerateRequest): 'transparent' | 'opaque' | 'auto' {
     if (!request.style.transparentBackground) return 'auto';
     return this.deps.supportsTransparentBackground ? 'transparent' : 'auto';
@@ -294,4 +323,28 @@ export class AssetGenerationService {
 
 function frameName(action: string, frameIndex: number): string {
   return `${action}_${frameIndex}`;
+}
+
+function correctionForReasons(reasons: string[]): string {
+  const joined = reasons.join('; ').toLowerCase();
+  const corrections = new Set<string>();
+  if (joined.includes('silhouette iou')) {
+    corrections.add('reduce pose amplitude and preserve the reference silhouette more closely');
+  }
+  if (joined.includes('palette distance')) {
+    corrections.add('match the reference palette exactly and avoid new accent colors');
+  }
+  if (joined.includes('visible area ratio')) {
+    corrections.add('keep the sprite at the same scale and do not add or remove bulk');
+  }
+  if (joined.includes('drift')) {
+    corrections.add('keep the body center and feet/anchor position fixed');
+  }
+  if (joined.includes('transparent')) {
+    corrections.add('keep the sprite isolated on transparent background');
+  }
+  if (corrections.size === 0) {
+    corrections.add('make a subtler motion variant while preserving identity, scale, palette, and camera angle');
+  }
+  return [...corrections].join('; ');
 }

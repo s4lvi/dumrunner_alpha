@@ -73,10 +73,10 @@ export function rollDropsForKill(killTierBias: number): CarriedPart[] {
     weights.Mk4 += 2;
   }
 
-  // ~25% chance of a part drop per kill. Lower than the original 80%
-  // so loot feels meaningful instead of every kill raining gear.
-  // Material drops in the per-template lootTable are unaffected.
-  const dropCount = Math.random() < 0.25 ? 1 : 0;
+  // ~5% chance of a part drop per kill. Gear drops are the rare prize;
+  // material drops in the per-template lootTable carry the moment-to-
+  // moment loot feedback.
+  const dropCount = Math.random() < 0.05 ? 1 : 0;
   const drops: CarriedPart[] = [];
   for (let i = 0; i < dropCount; i++) {
     const slot = rollSlot();

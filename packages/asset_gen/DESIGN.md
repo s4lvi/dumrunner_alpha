@@ -37,7 +37,8 @@ The first implementation pass now exists under `packages/asset_gen/src`:
 - `scripts/prewarm.ts` builds the current alpha request catalog and can submit
   it to `/v1/assets/prewarm`.
 - `enemy_animation` requests generate short horizontal spritesheets with
-  per-frame metadata and mechanical frame drift checks.
+  per-frame metadata, asset-family metadata, frame-set similarity checks, and
+  one corrective retry pass.
 
 This version is intentionally an API/queue skeleton. It can call the image API,
 but approved production output still depends on adding semantic background
@@ -245,6 +246,14 @@ type AnimationSpec = {
   directionMode: 'omnidirectional' | 'four_way';
   fps: number;
   maxFrameDriftPx: number;
+};
+
+type AssetFamilyMetadata = {
+  familyId: string;
+  baseAssetId?: string;
+  variantType: 'base' | 'animation' | 'icon' | 'projectile' | 'building';
+  animationAction?: 'idle' | 'walk' | 'attack' | 'death';
+  sourceModel: string;
 };
 
 type EnemyAssetContext = {
@@ -478,6 +487,10 @@ For `enemy_animation`:
 - Assemble a horizontal spritesheet: `frameWidth = size`, `sheetWidth = size * frameCount`.
 - Keep the same anchor for every frame.
 - Reject cycles whose frame centers drift farther than `maxFrameDriftPx`.
+- Reject or retry cycles whose alpha-mask overlap, palette distance, or visible
+  area ratio imply the frames no longer belong to the same asset family.
+- On first mechanical failure, regenerate the whole cycle once with a targeted
+  corrective prompt derived from the failed metric.
 - Treat hit flash, recoil, bob, and simple squash as procedural renderer
   effects instead of generated animation frames.
 

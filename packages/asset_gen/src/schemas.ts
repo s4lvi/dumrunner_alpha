@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ASSET_API_VERSION = 1;
+export const ASSET_API_VERSION = 2;
 
 export const AssetKindSchema = z.enum([
   'enemy',

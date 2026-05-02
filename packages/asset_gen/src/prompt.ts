@@ -48,7 +48,8 @@ export function compileAssetPrompt(request: AssetGenerateRequest): string {
 
 export function compileAnimationFramePrompt(
   request: AssetGenerateRequest,
-  frameIndex: number
+  frameIndex: number,
+  correction?: string
 ): string {
   if (!request.animation) {
     return compileAssetPrompt(request);
@@ -69,8 +70,9 @@ export function compileAnimationFramePrompt(
     `Pose direction: ${frameDirection}.`,
     'Keep the exact same character identity, palette, scale, camera angle, and silhouette family across all frames.',
     'Change only the pose enough to imply motion; avoid changing species, armor design, colors, or facing angle.',
+    correction ? `Correction from failed validation: ${correction}.` : '',
     'Single isolated frame only, not a sprite sheet, not multiple poses in one image.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function actionCopy(action: string, frameIndex: number, frameCount: number): string {
