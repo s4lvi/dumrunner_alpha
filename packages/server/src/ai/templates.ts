@@ -44,8 +44,9 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     fleeBelowHpRatio: null,
     stunDurationOnHitMs: 200,
     lootTable: [
-      { materialId: 'scrap',  chance: 1.0,  min: 1, max: 3 },
-      { materialId: 'biotic', chance: 0.15, min: 1, max: 1 },
+      { materialId: 'scrap',    chance: 1.0,  min: 1, max: 3 },
+      { materialId: 'biotic',   chance: 0.15, min: 1, max: 1 },
+      { materialId: 'artifact', chance: 0.08, min: 1, max: 1 },
     ],
     visual: { shape: 'triangle', color: 0xa855f7, size: 16 },
   },
@@ -74,9 +75,10 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     stunDurationOnHitMs: 250,
     // Drones are mechanical — circuits + wiring, no biotic.
     lootTable: [
-      { materialId: 'scrap',   chance: 0.8, min: 1, max: 2 },
-      { materialId: 'wire',    chance: 0.6, min: 1, max: 2 },
-      { materialId: 'circuit', chance: 0.25, min: 1, max: 1 },
+      { materialId: 'scrap',    chance: 0.8,  min: 1, max: 2 },
+      { materialId: 'wire',     chance: 0.6,  min: 1, max: 2 },
+      { materialId: 'circuit',  chance: 0.25, min: 1, max: 1 },
+      { materialId: 'artifact', chance: 0.10, min: 1, max: 1 },
     ],
     visual: { shape: 'circle', color: 0x60a5fa, size: 14 },
   },
@@ -96,11 +98,13 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     // Heavy armour shrugs off most stuns.
     stunDurationOnHitMs: 80,
     // Brutes drop heavy materials — alloy plate from their carapace, with a
-    // small chance of a resonant crystal.
+    // small chance of a resonant crystal. Best source of artifacts in the
+    // alpha (boss-tier enemies will replace this once they ship).
     lootTable: [
-      { materialId: 'scrap',   chance: 1.0,  min: 2, max: 4 },
-      { materialId: 'alloy',   chance: 0.7,  min: 1, max: 2 },
-      { materialId: 'crystal', chance: 0.08, min: 1, max: 1 },
+      { materialId: 'scrap',    chance: 1.0,  min: 2, max: 4 },
+      { materialId: 'alloy',    chance: 0.7,  min: 1, max: 2 },
+      { materialId: 'crystal',  chance: 0.08, min: 1, max: 1 },
+      { materialId: 'artifact', chance: 0.25, min: 1, max: 1 },
     ],
     visual: { shape: 'square', color: 0xb45309, size: 26 },
   },

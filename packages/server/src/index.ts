@@ -202,6 +202,11 @@ wss.on('connection', (ws: WebSocket) => {
         world?.handleCraftRequest(player.characterId, msg.recipeId);
         break;
       }
+      case 'purchase_blueprint': {
+        const world = serverId ? registry.get(serverId) : undefined;
+        world?.handlePurchaseBlueprint(player.characterId, msg.blueprintId);
+        break;
+      }
       case 'auth':
         sendError(ws, 'already_authed');
         break;

@@ -120,6 +120,7 @@ const MATERIAL_TINT: Record<string, number> = {
   circuit: 0x10b981,
   biotic: 0xa855f7,
   crystal: 0x06b6d4,
+  artifact: 0xf472b6,
 };
 
 // Client-side visual lookup keyed by EnemyKind (the server template id).
@@ -1024,6 +1025,24 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       body
         .circle(w / 2, h / 2, w * 0.15)
         .fill({ color: 0xfbbf24 });
+    } else if (b.kind === 'artifact_uplink') {
+      // Tall pylon with a glowing pink core — sells the "alien tech" feel.
+      body.rect(0, 0, w, h).fill({ color: 0x1a1325 });
+      body.rect(0, 0, w, h).stroke({ color: 0x09090b, width: 2 });
+      body
+        .circle(w / 2, h / 2, w * 0.32)
+        .fill({ color: 0xf472b6 })
+        .stroke({ color: 0x86195e, width: 2 });
+      body
+        .circle(w / 2, h / 2, w * 0.16)
+        .fill({ color: 0xfbcfe8 });
+      // Antenna stripes top and bottom.
+      body
+        .rect(w * 0.4, 0, w * 0.2, h * 0.12)
+        .fill({ color: 0xfbcfe8 });
+      body
+        .rect(w * 0.4, h * 0.88, w * 0.2, h * 0.12)
+        .fill({ color: 0xfbcfe8 });
     } else if (b.kind === 'electronics_bench') {
       // Electronics bench: green PCB-like surface with a yellow LED.
       body.rect(0, 0, w, h).fill({ color: 0x064e3b });
@@ -1250,7 +1269,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       if (
         b.kind !== 'workbench' &&
         b.kind !== 'forge' &&
-        b.kind !== 'electronics_bench'
+        b.kind !== 'electronics_bench' &&
+        b.kind !== 'artifact_uplink'
       ) {
         continue;
       }

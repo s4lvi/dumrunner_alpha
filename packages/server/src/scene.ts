@@ -141,6 +141,7 @@ const BUILDING_STATS: Record<BuildingKind, { maxHp: number }> = {
   workbench: { maxHp: 150 },
   forge: { maxHp: 220 },
   electronics_bench: { maxHp: 130 },
+  artifact_uplink: { maxHp: 200 },
 };
 
 export type SceneKind = 'surface' | 'dungeon_floor';

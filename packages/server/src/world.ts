@@ -30,6 +30,7 @@ import {
   findEmptySlot,
   addAmmo,
   addPlaceable,
+  BLUEPRINT_CATALOG,
   computeSuitStats,
   consumeAmmo,
   consumeMaterial,
@@ -117,9 +118,10 @@ const SURFACE_SCENE_ID = 'surface';
 const DUNGEON_SCENE_PREFIX = 'dungeon:';
 const TRANSITION_COOLDOWN_MS = 800;
 // Starter blueprints granted on connect / re-granted at every cycle reset.
-// Temporary alpha behaviour; the real source is the artifact-trade store
-// (not yet implemented) where players spend artifacts for blueprints.
-const STARTER_BLUEPRINTS = ['bp_turret'];
+// The artifact-trade store is the real source of new blueprints now;
+// this list stays empty so the loop is honest. Bring entries back here
+// only for testing convenience.
+const STARTER_BLUEPRINTS: string[] = [];
 
 function dungeonSceneId(floorIndex: number): string {
   return `${DUNGEON_SCENE_PREFIX}${floorIndex}`;
@@ -695,6 +697,48 @@ export class World {
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
       inventory: conn.inventory,
+    });
+  }
+
+  // Player spends artifacts at an artifact_uplink to learn a blueprint.
+  // Validates: player is on the surface, within range of an uplink, has
+  // enough artifacts, and doesn't already know it. Consumes the artifacts
+  // and adds the bp to the per-cycle known set.
+  handlePurchaseBlueprint(characterId: string, blueprintId: string): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const entry = BLUEPRINT_CATALOG[blueprintId];
+    if (!entry) return;
+    if (
+      conn.knownBlueprints.has(blueprintId) ||
+      conn.persistentBlueprints.has(blueprintId)
+    ) {
+      return;
+    }
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (
+      !surface?.hasBuildingNearby(
+        conn.x,
+        conn.y,
+        'artifact_uplink',
+        COMBAT.CRAFT_STATION_RANGE_PX
+      )
+    ) {
+      return;
+    }
+    if (countMaterial(conn.inventory, 'artifact') < entry.cost) return;
+
+    consumeMaterial(conn.inventory, 'artifact', entry.cost);
+    conn.knownBlueprints.add(blueprintId);
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+    this.sendDirect(conn.ws, {
+      type: 'blueprints_changed',
+      knownBlueprints: mergedBlueprints(conn),
     });
   }
 

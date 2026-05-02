@@ -80,6 +80,18 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'workbench',
     blueprintId: null,
   },
+  artifact_uplink: {
+    id: 'artifact_uplink',
+    name: 'Artifact Uplink',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 30 },
+      { kind: 'material', materialId: 'circuit', count: 8 },
+      { kind: 'material', materialId: 'crystal', count: 1 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'artifact_uplink', count: 1 },
+    workstation: 'workbench',
+    blueprintId: null,
+  },
   pistol_basic_ammo: {
     id: 'pistol_basic_ammo',
     name: 'Pistol Ammo (50)',
@@ -109,4 +121,40 @@ export const RECIPES: Record<string, Recipe> = {
 
 export function listRecipes(): Recipe[] {
   return Object.values(RECIPES);
+}
+
+// ---------- blueprint catalog (artifact uplink trade store) ----------
+//
+// Source of truth for every blueprint a player can buy. Adding a new
+// purchasable recipe = one entry below + one Recipe entry above with
+// blueprintId set to the matching id.
+//
+// `cost` = number of artifacts required. `tier` is informational for now;
+// higher-tier blueprints will be the persistent (legendary) ones in a
+// later pass.
+
+export type BlueprintTier = 'common' | 'uncommon' | 'rare' | 'legendary';
+
+export type BlueprintCatalogEntry = {
+  id: string;
+  recipeId: string;
+  displayName: string;
+  description: string;
+  cost: number; // in artifacts
+  tier: BlueprintTier;
+};
+
+export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
+  bp_turret: {
+    id: 'bp_turret',
+    recipeId: 'turret',
+    displayName: 'Auto-Turret',
+    description: 'Builds a self-targeting defence turret. Crafted at an Electronics Bench.',
+    cost: 3,
+    tier: 'common',
+  },
+};
+
+export function listBlueprints(): BlueprintCatalogEntry[] {
+  return Object.values(BLUEPRINT_CATALOG);
 }

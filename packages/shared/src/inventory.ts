@@ -20,7 +20,8 @@ export type MaterialKind =
   | 'circuit'
   | 'alloy'
   | 'biotic'
-  | 'crystal';
+  | 'crystal'
+  | 'artifact';
 
 // Single source of truth for material metadata. Server uses this for loot
 // rolls; client uses it for icon tint + tooltip name.
@@ -41,6 +42,9 @@ export const MATERIALS: Record<MaterialKind, MaterialDef> = {
   circuit: { id: 'circuit', name: 'Circuit Board',    tier: 2, color: 0x10b981 },
   biotic:  { id: 'biotic',  name: 'Biotic Tissue',    tier: 2, color: 0xa855f7 },
   crystal: { id: 'crystal', name: 'Resonant Crystal', tier: 3, color: 0x06b6d4 },
+  // Artifacts are the "currency" tier — only spent at the artifact uplink
+  // to learn blueprints. Drop weighting handled in the AI loot tables.
+  artifact: { id: 'artifact', name: 'Artifact', tier: 3, color: 0xf472b6 },
 };
 
 export type AmmoKind = 'pistol_basic';

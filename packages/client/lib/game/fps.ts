@@ -114,6 +114,7 @@ const MATERIAL_TINT: Record<string, number> = {
   circuit: 0x10b981,
   biotic: 0xa855f7,
   crystal: 0x06b6d4,
+  artifact: 0xf472b6,
 };
 const PART_TIER_COLOR: Record<string, number> = {
   Mk1: 0x9ca3af,
@@ -311,7 +312,85 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   function tick() {
     if (!ready) return;
     tickInput();
+    updateNearInteractable();
+    updateNearStations();
     render();
+  }
+
+  // ---------- proximity callbacks (parity with the top-down renderer) ----------
+
+  let lastNearInteractableId: string | null = null;
+  function updateNearInteractable() {
+    const layout_ = layout;
+    if (!layout_ || layout_.interactables.length === 0) {
+      if (lastNearInteractableId !== null) {
+        lastNearInteractableId = null;
+        init.onNearInteractableChanged(null);
+      }
+      return;
+    }
+    const r = 60; // mirror top-down INTERACTABLE_RADIUS
+    const r2 = r * r;
+    let bestId: string | null = null;
+    let bestLabel: string | null = null;
+    let bestDistSq = r2;
+    for (const it of layout_.interactables) {
+      const dx = it.x - selfX;
+      const dy = it.y - selfY;
+      const dsq = dx * dx + dy * dy;
+      if (dsq > r2) continue;
+      if (dsq < bestDistSq) {
+        bestId = it.id;
+        bestLabel = it.label;
+        bestDistSq = dsq;
+      }
+    }
+    if (bestId !== lastNearInteractableId) {
+      lastNearInteractableId = bestId;
+      init.onNearInteractableChanged(
+        bestId && bestLabel ? { id: bestId, label: bestLabel } : null
+      );
+    }
+  }
+
+  // Workstation + artifact-uplink proximity. Mirrors pixi's
+  // updateNearWorkstations so the React HUD lights up the right recipes
+  // / trade prompts in either view.
+  const STATION_RANGE = 96;
+  let lastStationKey = '';
+  function updateNearStations() {
+    if (!layout || layout.tileSize <= 0 || buildings.size === 0) {
+      if (lastStationKey !== '') {
+        lastStationKey = '';
+        init.onNearWorkstationsChanged([]);
+      }
+      return;
+    }
+    const tileSize = layout.tileSize;
+    const r2 = STATION_RANGE * STATION_RANGE;
+    const found = new Set<import('@dumrunner/shared').BuildingKind>();
+    for (const b of buildings.values()) {
+      if (
+        b.kind !== 'workbench' &&
+        b.kind !== 'forge' &&
+        b.kind !== 'electronics_bench' &&
+        b.kind !== 'artifact_uplink'
+      ) {
+        continue;
+      }
+      const cx = (b.tileX + b.width / 2) * tileSize;
+      const cy = (b.tileY + b.height / 2) * tileSize;
+      const halfW = (b.width * tileSize) / 2;
+      const halfH = (b.height * tileSize) / 2;
+      const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
+      const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
+      if (dx * dx + dy * dy <= r2) found.add(b.kind);
+    }
+    const key = [...found].sort().join(',');
+    if (key !== lastStationKey) {
+      lastStationKey = key;
+      init.onNearWorkstationsChanged([...found]);
+    }
   }
 
   // ---------- raycaster ----------

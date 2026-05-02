@@ -256,6 +256,9 @@ export function generateInitialEnemies(
 
 // Scatter loot — material piles dropped into rooms. Same seed → same piles
 // so two clients see the same dungeon scavenge at start-of-cycle.
+//
+// Artifacts intentionally don't appear in floor scatter — they're a kill-
+// drop only currency, sold to the artifact uplink for blueprints.
 export type InitialLootDrop = {
   materialId: 'scrap' | 'wire' | 'circuit' | 'alloy' | 'biotic' | 'crystal';
   count: number;

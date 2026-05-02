@@ -8,6 +8,7 @@ import {
   emptyEquipment,
   emptyInventory,
   HOTBAR_SIZE,
+  listBlueprints,
   listRecipes,
   MATERIALS,
   partStatPreview,
@@ -76,6 +77,9 @@ export function Game({ serverId }: { serverId: string }) {
   const [nearWorkstations, setNearWorkstations] = useState<Set<BuildingKind>>(
     () => new Set()
   );
+  // Ref mirror so the keydown effect (set up once) reads the live value.
+  const nearWorkstationsRef = useRef<Set<BuildingKind>>(new Set());
+  const [showTradeModal, setShowTradeModal] = useState(false);
   // Renderer pick. Initialised from URL param `?fps=1` for backwards-compat;
   // the V hotkey toggles it at runtime.
   const [useFps, setUseFps] = useState<boolean>(() => {
@@ -289,7 +293,9 @@ export function Game({ serverId }: { serverId: string }) {
             setNearInteractable(near);
           },
           onNearWorkstationsChanged: (kinds) => {
-            setNearWorkstations(new Set(kinds));
+            const set = new Set(kinds);
+            nearWorkstationsRef.current = set;
+            setNearWorkstations(set);
           },
         };
         requestAnimationFrame(() => {
@@ -454,15 +460,15 @@ export function Game({ serverId }: { serverId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptJoin]);
 
-  // Opening any UI overlay (inventory etc.) needs to release pointer lock
-  // so the cursor reappears for clicking. Closing the overlay leaves it
-  // released — browsers don't allow programmatic re-lock without a fresh
-  // user gesture, so the player clicks the canvas to re-engage FPS.
+  // Opening any UI overlay (inventory, trade modal, …) needs to release
+  // pointer lock so the cursor reappears for clicking. Closing the overlay
+  // leaves it released — browsers don't allow programmatic re-lock without
+  // a fresh user gesture, so the player clicks the canvas to re-engage FPS.
   useEffect(() => {
-    if (!showInventory) return;
+    if (!showInventory && !showTradeModal) return;
     if (typeof document === 'undefined') return;
     if (document.pointerLockElement) document.exitPointerLock?.();
-  }, [showInventory]);
+  }, [showInventory, showTradeModal]);
 
   // Hot-swap renderers when `useFps` flips. We snapshot scene state from
   // the outgoing renderer, destroy it, then instantiate the other one with
@@ -542,13 +548,19 @@ export function Game({ serverId }: { serverId: string }) {
       }
       if (e.key === 'Escape') {
         setShowInventory(false);
+        setShowTradeModal(false);
         return;
       }
-      // E to interact with the nearest in-range interactable.
+      // E to interact. Priority: layout interactables (stairs / extract)
+      // first, then nearby artifact_uplink → opens the trade modal.
       if (e.key === 'e' || e.key === 'E') {
         const near = nearInteractableRef.current;
         if (near) {
           sendOnLiveWs({ type: 'interact', interactableId: near.id });
+          return;
+        }
+        if (nearWorkstationsRef.current.has('artifact_uplink')) {
+          setShowTradeModal(true);
         }
         return;
       }
@@ -610,6 +622,9 @@ export function Game({ serverId }: { serverId: string }) {
         {nearInteractable && (
           <InteractPrompt label={nearInteractable.label} />
         )}
+        {!nearInteractable && nearWorkstations.has('artifact_uplink') && (
+          <InteractPrompt label="Trade — Artifact Uplink" />
+        )}
         <ControlsHint useFps={useFps} />
 
         {showInventory && (
@@ -635,6 +650,18 @@ export function Game({ serverId }: { serverId: string }) {
             }
             onCraft={(recipeId) =>
               sendOnLiveWs({ type: 'craft_request', recipeId })
+            }
+          />
+        )}
+
+        {showTradeModal && (
+          <TradeModal
+            inventory={inventory}
+            knownBlueprints={knownBlueprints}
+            nearUplink={nearWorkstations.has('artifact_uplink')}
+            onClose={() => setShowTradeModal(false)}
+            onPurchase={(blueprintId) =>
+              sendOnLiveWs({ type: 'purchase_blueprint', blueprintId })
             }
           />
         )}
@@ -1001,6 +1028,91 @@ function InventoryPanel({
   );
 }
 
+// Artifact uplink trade store. Lists every blueprint in the catalog;
+// blueprints already known render as "Owned" and can't be re-bought.
+// Buy is gated on (a) being near an uplink — server checks it again, but
+// the local check stops accidental purchases when the player wandered
+// off — and (b) having enough artifacts.
+function TradeModal({
+  inventory,
+  knownBlueprints,
+  nearUplink,
+  onClose,
+  onPurchase,
+}: {
+  inventory: Inventory;
+  knownBlueprints: Set<string>;
+  nearUplink: boolean;
+  onClose: () => void;
+  onPurchase: (blueprintId: string) => void;
+}) {
+  const blueprints = listBlueprints();
+  const artifacts = countMaterial(inventory, 'artifact');
+  return (
+    <div
+      className="absolute top-3 left-1/2 -translate-x-1/2 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded shadow-lg pointer-events-auto"
+      style={{ width: 'min(560px, 90vw)' }}
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[color:var(--panel-border)] gap-6">
+        <h2 className="font-semibold flex items-center gap-2">
+          <ItemIcon kind="material" subkind="artifact" />
+          <span>Artifact Uplink</span>
+        </h2>
+        <div className="text-xs text-zinc-400">
+          Held: <span className="text-pink-400 font-semibold">{artifacts}</span>{' '}
+          artifact{artifacts === 1 ? '' : 's'}
+        </div>
+        <button
+          onClick={onClose}
+          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+        >
+          Close
+        </button>
+      </div>
+      {!nearUplink && (
+        <div className="px-4 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
+          Move closer to the uplink to trade.
+        </div>
+      )}
+      <ul className="divide-y divide-[color:var(--panel-border)]">
+        {blueprints.map((bp) => {
+          const owned = knownBlueprints.has(bp.id);
+          const canAfford = artifacts >= bp.cost;
+          const enabled = nearUplink && !owned && canAfford;
+          let reason = '';
+          if (owned) reason = 'Owned';
+          else if (!nearUplink) reason = 'Out of range';
+          else if (!canAfford) reason = `Need ${bp.cost - artifacts} more`;
+          return (
+            <li key={bp.id} className="px-4 py-3 flex items-center gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-zinc-200">
+                  {bp.displayName}
+                </div>
+                <div className="text-[11px] text-zinc-500">{bp.description}</div>
+                <div className="text-[10px] uppercase tracking-wider text-zinc-600 mt-0.5">
+                  {bp.tier}
+                </div>
+              </div>
+              <div className="text-right text-xs text-pink-400 tabular-nums whitespace-nowrap">
+                {bp.cost} artifact{bp.cost === 1 ? '' : 's'}
+              </div>
+              <button
+                onClick={() => onPurchase(bp.id)}
+                disabled={!enabled}
+                title={enabled ? '' : reason}
+                className="px-3 py-1.5 rounded text-xs border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {owned ? 'Owned' : 'Buy'}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function CraftPanel({
   inventory,
   knownBlueprints,
@@ -1044,6 +1156,7 @@ const STATION_LABEL: Record<BuildingKind, string> = {
   workbench: 'Workbench',
   forge: 'Forge',
   electronics_bench: 'Electronics Bench',
+  artifact_uplink: 'Artifact Uplink',
 };
 
 function CraftRow({
@@ -1057,20 +1170,23 @@ function CraftRow({
   nearWorkstations: Set<BuildingKind>;
   onCraft: (recipeId: string) => void;
 }) {
-  // Build a list of missing inputs so we can show the deficit explicitly.
-  const missingInputs = recipe.inputs.flatMap((input) => {
+  // Resolve every input into a {id, have, need, satisfied} row so the UI
+  // can show "3/5 scrap" per ingredient instead of the old single
+  // collapsed line.
+  const inputRows = recipe.inputs.map((input) => {
+    const id = input.kind === 'material' ? input.materialId : input.ammoId;
     const have =
       input.kind === 'material'
         ? countMaterial(inventory, input.materialId)
         : countAmmo(inventory, input.ammoId);
-    if (have >= input.count) return [];
-    return [
-      {
-        id: input.kind === 'material' ? input.materialId : input.ammoId,
-        need: input.count - have,
-      },
-    ];
+    return {
+      id,
+      have,
+      need: input.count,
+      satisfied: have >= input.count,
+    };
   });
+  const allInputsSatisfied = inputRows.every((r) => r.satisfied);
 
   const stationOk =
     recipe.workstation === null || nearWorkstations.has(recipe.workstation);
@@ -1079,32 +1195,39 @@ function CraftRow({
   if (!stationOk && recipe.workstation) {
     reasons.push(`At ${STATION_LABEL[recipe.workstation]}`);
   }
-  if (missingInputs.length > 0) {
-    reasons.push(
-      'Need ' + missingInputs.map((m) => `${m.need}× ${m.id}`).join(', ')
-    );
-  }
+  if (!allInputsSatisfied) reasons.push('Insufficient materials');
   const enabled = reasons.length === 0;
-
-  const inputsLabel = recipe.inputs
-    .map((i) => `${i.count} ${i.kind === 'material' ? i.materialId : i.ammoId}`)
-    .join(' + ');
 
   const outLabel =
     recipe.output.kind === 'placeable'
-      ? `${recipe.output.count} ${recipe.output.buildingKind}`
-      : `${recipe.output.count} ${recipe.output.ammoId.replace(/_/g, ' ')}`;
+      ? `${recipe.output.count}× ${STATION_LABEL[recipe.output.buildingKind] ?? recipe.output.buildingKind}`
+      : `${recipe.output.count}× ${recipe.output.ammoId.replace(/_/g, ' ')}`;
 
   return (
-    <li className="flex items-center justify-between gap-3 text-xs">
-      <div className="flex flex-col min-w-0">
+    <li className="flex items-start justify-between gap-3 text-xs py-1.5">
+      <div className="flex flex-col min-w-0 gap-0.5">
         <span className="font-semibold text-zinc-200">{recipe.name}</span>
-        <span className="text-[10px] text-zinc-500 truncate">
-          {inputsLabel} → {outLabel}
-        </span>
-        {!enabled && (
-          <span className="text-[10px] text-amber-400/80 truncate">
-            {reasons.join(' • ')}
+        <span className="text-[10px] text-zinc-500">→ {outLabel}</span>
+        <div className="flex flex-wrap gap-x-3 gap-y-0 text-[10px] mt-0.5">
+          {inputRows.map((r) => (
+            <span
+              key={r.id}
+              className={
+                r.satisfied
+                  ? 'text-emerald-400'
+                  : 'text-red-400/80'
+              }
+            >
+              {r.have}
+              <span className="text-zinc-600">/</span>
+              {r.need}{' '}
+              <span className="text-zinc-400 capitalize">{r.id.replace(/_/g, ' ')}</span>
+            </span>
+          ))}
+        </div>
+        {!stationOk && recipe.workstation && (
+          <span className="text-[10px] text-amber-400/80">
+            Needs {STATION_LABEL[recipe.workstation]}
           </span>
         )}
       </div>
@@ -1112,7 +1235,7 @@ function CraftRow({
         onClick={() => onCraft(recipe.id)}
         disabled={!enabled}
         title={enabled ? '' : reasons.join(' • ')}
-        className="px-2 py-1 rounded text-[11px] border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+        className="px-2 py-1 rounded text-[11px] border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
       >
         Craft
       </button>
@@ -1591,6 +1714,17 @@ function ItemIcon({
       </svg>
     );
   }
+  if (kind === 'placeable' && subkind === 'artifact_uplink') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <rect x="3" y="3" width="18" height="18" fill="#1a1325" stroke="#09090b" strokeWidth={stroke} />
+        <circle cx="12" cy="12" r="6" fill="#f472b6" stroke="#86195e" strokeWidth="1" />
+        <circle cx="12" cy="12" r="3" fill="#fbcfe8" />
+        <rect x="10" y="2" width="4" height="3" fill="#fbcfe8" />
+        <rect x="10" y="19" width="4" height="3" fill="#fbcfe8" />
+      </svg>
+    );
+  }
   if (kind === 'placeable' && subkind === 'electronics_bench') {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24">
@@ -1676,6 +1810,21 @@ function ItemIcon({
             strokeWidth="0.5"
             opacity="0.4"
           />
+        </svg>
+      );
+    }
+    if (subkind === 'artifact') {
+      // Pink-magenta star — flagged as a "premium" find.
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24">
+          <polygon
+            points="12,2 14,9 21,10 16,15 17,22 12,18 7,22 8,15 3,10 10,9"
+            fill="#f472b6"
+            stroke="#0b0d10"
+            strokeWidth={stroke}
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="13" r="2" fill="#fbcfe8" />
         </svg>
       );
     }

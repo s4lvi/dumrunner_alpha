@@ -104,7 +104,8 @@ export type BuildingKind =
   | 'turret'
   | 'workbench'
   | 'forge'
-  | 'electronics_bench';
+  | 'electronics_bench'
+  | 'artifact_uplink';
 
 // Subset of BuildingKind that acts as a crafting workstation. Recipes can
 // require the player to be in range of one of these to craft.
@@ -228,6 +229,7 @@ const BuildingKindSchema = z.enum([
   'workbench',
   'forge',
   'electronics_bench',
+  'artifact_uplink',
 ]);
 
 export const BuildRequestMsgSchema = z.object({
@@ -295,6 +297,11 @@ export const CraftRequestMsgSchema = z.object({
   recipeId: z.string().min(1).max(64),
 });
 
+export const PurchaseBlueprintMsgSchema = z.object({
+  type: z.literal('purchase_blueprint'),
+  blueprintId: z.string().min(1).max(64),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMsgSchema,
   InputMsgSchema,
@@ -309,6 +316,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   UnequipRequestMsgSchema,
   InteractMsgSchema,
   CraftRequestMsgSchema,
+  PurchaseBlueprintMsgSchema,
 ]);
 
 
@@ -417,4 +425,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
