@@ -468,43 +468,56 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     }
     const valid = inRange && !occupied;
 
-    // Draw a billboard ghost at the tile centre, sized like a wall. We
-    // re-use the sprite math so it z-tests against the wall depth buffer
-    // (so the ghost gets clipped behind walls correctly).
+    // Render the ghost as a true 3D cube: per-column ray-AABB test against
+    // the target tile, drawn as a wall slice at whatever distance the ray
+    // first enters the box. Z-tested against the wall depth buffer so the
+    // cube clips correctly when an actual wall stands between the camera
+    // and the placement target.
     const halfFov = FOV / 2;
     const halfPlane = Math.tan(halfFov);
     const planeX = -dirY * halfPlane;
     const planeY = dirX * halfPlane;
-    const det = planeX * dirY - dirX * planeY;
-    if (Math.abs(det) >= 1e-6) {
-      const invDet = 1 / det;
-      const relX = tileCenterX - selfX;
-      const relY = tileCenterY - selfY;
-      const transformX = invDet * (dirY * relX - dirX * relY);
-      const transformY = invDet * (-planeY * relX + planeX * relY);
-      if (transformY > 6) {
-        const screenCenterX = (W / 2) * (1 + transformX / transformY);
-        const ghostH = Math.abs(Math.floor((WALL_HEIGHT_WORLD * H) / transformY));
-        const ghostW = Math.abs(Math.floor((tileSize * H) / transformY));
-        const top = horizonY - ghostH / 2;
-        const left = Math.floor(screenCenterX - ghostW / 2);
-        const right = left + ghostW;
-        const ghostColor = applyFog(
-          valid ? BUILD_GHOST_VALID_COLOR : BUILD_GHOST_INVALID_COLOR,
-          transformY,
-          fogColor
-        );
-        const startStripe = Math.max(0, left);
-        const endStripe = Math.min(W, right);
-        for (let stripe = startStripe; stripe < endStripe; stripe += COLUMN_STEP_PX) {
-          const colIdx = Math.floor(stripe / COLUMN_STEP_PX);
-          if (colIdx < 0 || colIdx >= zBuffer.length) continue;
-          if (transformY >= zBuffer[colIdx]) continue;
-          spriteLayer
-            .rect(stripe, top, COLUMN_STEP_PX, ghostH)
-            .fill({ color: ghostColor, alpha: 0.45 });
-        }
-      }
+    const ax = tileX * tileSize;
+    const ay = tileY * tileSize;
+    const bx = ax + tileSize;
+    const by = ay + tileSize;
+    const baseColor = valid
+      ? BUILD_GHOST_VALID_COLOR
+      : BUILD_GHOST_INVALID_COLOR;
+    const numCols = Math.ceil(W / COLUMN_STEP_PX);
+    const eps = 1e-8;
+
+    for (let i = 0; i < numCols; i++) {
+      const screenX = i * COLUMN_STEP_PX;
+      const camNorm = (2 * screenX) / W - 1;
+      const rdx = dirX + planeX * camNorm;
+      const rdy = dirY + planeY * camNorm;
+      const rlen = Math.hypot(rdx, rdy);
+      const ux = rdx / rlen;
+      const uy = rdy / rlen;
+
+      // Slab test on the tile AABB. Guard zero-axis rays with epsilon so
+      // the divide doesn't yield NaN.
+      const sux = Math.abs(ux) < eps ? (ux < 0 ? -eps : eps) : ux;
+      const suy = Math.abs(uy) < eps ? (uy < 0 ? -eps : eps) : uy;
+      const tx1 = (ax - selfX) / sux;
+      const tx2 = (bx - selfX) / sux;
+      const ty1 = (ay - selfY) / suy;
+      const ty2 = (by - selfY) / suy;
+      const tNear = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2));
+      const tFar = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2));
+      if (tFar < 0 || tNear > tFar) continue; // ray misses
+      const t = Math.max(0, tNear);
+      const perp = t * (ux * dirX + uy * dirY);
+      if (perp <= 0.0001) continue; // camera inside the ghost
+      if (perp >= zBuffer[i]) continue; // wall in front
+
+      const lineH = (WALL_HEIGHT_WORLD * H) / perp;
+      const top = horizonY - lineH / 2;
+      const fogged = applyFog(baseColor, perp, fogColor);
+      spriteLayer
+        .rect(screenX, top, COLUMN_STEP_PX, lineH)
+        .fill({ color: fogged, alpha: 0.45 });
     }
 
     // Resolve any queued click. Reads the latest tile, so the player can
