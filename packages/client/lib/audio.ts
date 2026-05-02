@@ -14,6 +14,7 @@ type SfxId =
   | 'player-hit'
   | 'player-footstep'
   | 'player-jump'
+  | 'enemy-shoot'
   | 'robot-hit'
   | 'robot-destroy'
   | 'robot-detect'
@@ -30,6 +31,9 @@ const SFX_FILES: Record<SfxId, string> = {
   'player-hit': '/sounds/player-hit.mp3',
   'player-footstep': '/sounds/player-footstep.mp3',
   'player-jump': '/sounds/player-jump.mp3',
+  // Enemy weapon discharge — re-uses the player-shoot sample at a
+  // lower per-sfx volume so it reads as "the same gun, but theirs."
+  'enemy-shoot': '/sounds/player-shoot.mp3',
   'robot-hit': '/sounds/robot-hit.mp3',
   'robot-destroy': '/sounds/robot-destroy.mp3',
   'robot-detect': '/sounds/robot-detect.mp3',
@@ -49,6 +53,7 @@ const MUSIC_FILES: Record<Exclude<MusicId, null>, string> = {
 // against the included files; tweak if anything reads too hot.
 const SFX_VOLUME: Partial<Record<SfxId, number>> = {
   'player-shoot': 0.45,
+  'enemy-shoot': 0.3,
   'player-hit': 0.7,
   'player-footstep': 0.25,
   'robot-hit': 0.6,

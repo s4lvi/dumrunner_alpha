@@ -1337,6 +1337,41 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   };
   const interactables = new Map<string, RenderedInteractable>();
 
+  // Sample the segment at half-tile granularity and reject if any
+  // sample falls inside a building footprint. Mirrors the server's
+  // segmentClear so visual fog and AI LoS agree on what blocks sight.
+  function segmentCrossesBuilding(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    tileSize: number
+  ): boolean {
+    if (buildings.size === 0) return false;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    if (len === 0) return false;
+    const stride = Math.max(4, tileSize * 0.25);
+    const steps = Math.max(1, Math.ceil(len / stride));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const sx = x1 + dx * t;
+      const sy = y1 + dy * t;
+      for (const rb of buildings.values()) {
+        const b = rb.data;
+        const px = b.tileX * tileSize;
+        const py = b.tileY * tileSize;
+        const pw = b.width * tileSize;
+        const ph = b.height * tileSize;
+        if (sx >= px && sx <= px + pw && sy >= py && sy <= py + ph) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function updateFog() {
     fogGraphics.clear();
 
@@ -1373,7 +1408,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           if (dx * dx + dy * dy <= radiusSq) {
             const cx = (tx + 0.5) * tileSize;
             const cy = (ty + 0.5) * tileSize;
-            if (segmentInsideWalkables(walkables, selfX, selfY, cx, cy)) {
+            if (
+              segmentInsideWalkables(walkables, selfX, selfY, cx, cy) &&
+              !segmentCrossesBuilding(selfX, selfY, cx, cy, tileSize)
+            ) {
               visible = true;
             }
           }

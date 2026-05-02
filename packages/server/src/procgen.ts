@@ -217,10 +217,13 @@ export type InitialEnemySpawn = {
 // more common. Arrays must enumerate templates known to the server's template
 // library — keep in sync with packages/server/src/ai/templates.ts.
 type TemplateWeights = Record<string, number>;
+// dummy_target was a placeholder for combat testing — stationary, no
+// interesting behaviour. Removed from the live spawn pool; the
+// template stays in the AI library for ad-hoc smoke tests.
 const DEPTH_WEIGHTS: { maxFloor: number; weights: TemplateWeights }[] = [
-  { maxFloor: 2, weights: { dummy_target: 30, chaser_melee: 50, shooter_drone: 20 } },
-  { maxFloor: 5, weights: { chaser_melee: 35, shooter_drone: 35, brute_chaser: 20, dummy_target: 10 } },
-  { maxFloor: 10, weights: { chaser_melee: 25, shooter_drone: 35, brute_chaser: 35, dummy_target: 5 } },
+  { maxFloor: 2, weights: { chaser_melee: 70, shooter_drone: 30 } },
+  { maxFloor: 5, weights: { chaser_melee: 40, shooter_drone: 40, brute_chaser: 20 } },
+  { maxFloor: 10, weights: { chaser_melee: 30, shooter_drone: 35, brute_chaser: 35 } },
   { maxFloor: Infinity, weights: { brute_chaser: 50, shooter_drone: 35, chaser_melee: 15 } },
 ];
 

@@ -547,6 +547,8 @@ export function Game({ serverId }: { serverId: string }) {
           msg.projectile.ownerCharacterId === selfIdRef.current
         ) {
           audio.playSfx('player-shoot');
+        } else if (msg.projectile.ownerKind === 'enemy') {
+          audio.playSfx('enemy-shoot');
         }
         gameRef.current?.spawnProjectile(msg.projectile);
         break;
