@@ -92,6 +92,10 @@ export class AssetGenerationService {
     return this.deps.store.getAsset(assetId);
   }
 
+  listApprovedAssets(): Promise<AssetRecord[]> {
+    return this.deps.store.listApprovedAssets();
+  }
+
   private pump(): void {
     while (
       this.active < this.deps.maxConcurrentJobs &&

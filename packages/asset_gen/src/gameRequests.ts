@@ -154,6 +154,42 @@ export function buildingAssetRequest(kind: BuildingKind): AssetGenerateRequest {
   };
 }
 
+export function projectileAssetRequest(input: {
+  id: string;
+  label: string;
+  color: string;
+}): AssetGenerateRequest {
+  return {
+    requestId: `projectile:${input.id}`,
+    assetKind: 'projectile',
+    renderTarget: 'world_sprite',
+    size: 32,
+    style: {
+      camera: 'top_down',
+      renderStyle: 'pixel_art',
+      outline: true,
+      transparentBackground: true,
+    },
+    gameObject: {
+      id: input.id,
+      label: input.label,
+    },
+    visualBrief: {
+      subject: input.label,
+      materials: ['glowing projectile trail', 'energy core'],
+      colors: [input.color, '#f8fafc', '#111827'],
+      mustInclude: ['small readable projectile shape'],
+      mustAvoid: ['weapon', 'shooter', 'text', 'large explosion'],
+    },
+    constraints: {
+      safeMarginPx: 3,
+      anchor: 'center',
+      maxOpaqueBoundsRatio: 0.78,
+      minReadableAtPx: 16,
+    },
+  };
+}
+
 function tierPalette(tier: CarriedPart['tier']): string[] {
   switch (tier) {
     case 'Mk1':

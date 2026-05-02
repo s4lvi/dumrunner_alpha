@@ -12,11 +12,11 @@ import {
   AssetPrewarmRequestSchema,
 } from './schemas.js';
 import { AssetGenerationService } from './service.js';
-import { InMemoryAssetStore } from './store.js';
+import { LocalAssetStore } from './store.js';
 import { HeuristicAssetVerifier } from './verifier.js';
 
 const config = loadConfig();
-const store = new InMemoryAssetStore(config);
+const store = await LocalAssetStore.create(config);
 const imageGenerator = config.openaiApiKey
   ? new OpenAIImageGenerator(config)
   : new PlaceholderImageGenerator();
@@ -87,6 +87,13 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/v1/assets/index') {
+    sendJson(res, 200, {
+      assets: await service.listApprovedAssets(),
+    });
+    return;
+  }
+
   const jobMatch = url.pathname.match(/^\/v1\/assets\/jobs\/([^/]+)$/);
   if (req.method === 'GET' && jobMatch) {
     const job = await service.getJob(jobMatch[1]);
@@ -147,7 +154,7 @@ async function serveAsset(pathname: string, res: ServerResponse): Promise<void> 
     sendJson(res, 404, { error: 'asset not found' });
     return;
   }
-  const path = join(config.storageDir, filename);
+  const path = join(config.storageDir, 'approved', filename);
   try {
     await readFile(path);
   } catch {
