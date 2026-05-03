@@ -58,10 +58,33 @@ export default function DiscordActivityPage() {
       );
     };
 
+    // Surface enough context that DevTools alone is sufficient to
+    // diagnose a stalled Activity launch. Logged once on mount.
+    console.log('[discord/activity] boot', {
+      hostname: window.location.hostname,
+      search: window.location.search,
+      hasFrameId: new URLSearchParams(window.location.search).has('frame_id'),
+      clientIdConfigured: Boolean(publicEnv.discordClientId),
+    });
+
     (async () => {
       const clientId = publicEnv.discordClientId;
       if (!clientId) {
         fail('Discord client ID not configured.');
+        return;
+      }
+      // If the URL has no `frame_id`, the SDK constructor will throw
+      // immediately with a confusing error. Detect and surface a
+      // clearer message — most common cause is hitting /discord in a
+      // browser instead of through the Activity.
+      const hasFrameId = new URLSearchParams(window.location.search).has(
+        'frame_id'
+      );
+      if (!hasFrameId) {
+        fail(
+          'No Discord Activity context. This page is meant to load inside a Discord call. ' +
+            'If you reached it in a browser, the deploy is alive — return to Discord and launch the Activity from there.'
+        );
         return;
       }
       try {
