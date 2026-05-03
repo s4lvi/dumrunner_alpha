@@ -35,7 +35,6 @@ import {
   type MaterialKind,
   type WeaponKind,
 } from './inventory';
-import { flavoredItemName } from './itemNames';
 import type { BuildingKind, WorkstationKind } from './protocol';
 
 export type RecipeInput =
@@ -278,6 +277,79 @@ export const RECIPES: Record<string, Recipe> = {
     output: { kind: 'attachment', defId: 'mod_high_velocity', count: 1 },
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_high_velocity',
+    craftTimeMs: 25_000,
+  },
+  craft_mod_compensator: {
+    id: 'craft_mod_compensator',
+    name: 'Compensator Mod',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 8 },
+      { kind: 'material', materialId: 'wire', count: 3 },
+    ],
+    output: { kind: 'attachment', defId: 'mod_compensator', count: 1 },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_mod_compensator',
+    craftTimeMs: 30_000,
+  },
+  craft_mod_stabilizer: {
+    id: 'craft_mod_stabilizer',
+    name: 'Recoil Stabilizer Mod',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 6 },
+      { kind: 'material', materialId: 'circuit', count: 2 },
+    ],
+    output: { kind: 'attachment', defId: 'mod_stabilizer', count: 1 },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_mod_stabilizer',
+    craftTimeMs: 30_000,
+  },
+  craft_mod_overclock: {
+    id: 'craft_mod_overclock',
+    name: 'Overclock Module',
+    inputs: [
+      { kind: 'material', materialId: 'circuit', count: 5 },
+      { kind: 'material', materialId: 'wire', count: 4 },
+    ],
+    output: { kind: 'attachment', defId: 'mod_overclock', count: 1 },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_mod_overclock',
+    craftTimeMs: 30_000,
+  },
+  craft_mod_dampener: {
+    id: 'craft_mod_dampener',
+    name: 'Recoil Dampener Mod',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 5 },
+      { kind: 'material', materialId: 'circuit', count: 3 },
+      { kind: 'material', materialId: 'wire', count: 2 },
+    ],
+    output: { kind: 'attachment', defId: 'mod_dampener', count: 1 },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_mod_dampener',
+    craftTimeMs: 35_000,
+  },
+  craft_mod_armor_piercer: {
+    id: 'craft_mod_armor_piercer',
+    name: 'AP Core Mod',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 7 },
+      { kind: 'material', materialId: 'crystal', count: 1 },
+    ],
+    output: { kind: 'attachment', defId: 'mod_armor_piercer', count: 1 },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_mod_armor_piercer',
+    craftTimeMs: 40_000,
+  },
+  craft_mod_lightweight: {
+    id: 'craft_mod_lightweight',
+    name: 'Lightweight Frame Mod',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 3 },
+      { kind: 'material', materialId: 'wire', count: 5 },
+    ],
+    output: { kind: 'attachment', defId: 'mod_lightweight', count: 1 },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_mod_lightweight',
     craftTimeMs: 25_000,
   },
   craft_aff_damage_15: {
@@ -584,6 +656,54 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     cost: 5,
     tier: 'uncommon',
   },
+  bp_mod_compensator: {
+    id: 'bp_mod_compensator',
+    recipeId: 'craft_mod_compensator',
+    displayName: 'Compensator',
+    description: '-50% spread. Tighter than a Foregrip.',
+    cost: 6,
+    tier: 'uncommon',
+  },
+  bp_mod_stabilizer: {
+    id: 'bp_mod_stabilizer',
+    recipeId: 'craft_mod_stabilizer',
+    displayName: 'Recoil Stabilizer',
+    description: '+10% damage. Heavier action, harder hits.',
+    cost: 6,
+    tier: 'uncommon',
+  },
+  bp_mod_overclock: {
+    id: 'bp_mod_overclock',
+    recipeId: 'craft_mod_overclock',
+    displayName: 'Overclock Module',
+    description: '+18% fire rate. Burns through ammo faster.',
+    cost: 7,
+    tier: 'rare',
+  },
+  bp_mod_dampener: {
+    id: 'bp_mod_dampener',
+    recipeId: 'craft_mod_dampener',
+    displayName: 'Recoil Dampener',
+    description: '-25% spread, +150 px/sec projectile speed.',
+    cost: 7,
+    tier: 'rare',
+  },
+  bp_mod_armor_piercer: {
+    id: 'bp_mod_armor_piercer',
+    recipeId: 'craft_mod_armor_piercer',
+    displayName: 'AP Core',
+    description: '+18% damage. Engineered for armoured targets.',
+    cost: 8,
+    tier: 'rare',
+  },
+  bp_mod_lightweight: {
+    id: 'bp_mod_lightweight',
+    recipeId: 'craft_mod_lightweight',
+    displayName: 'Lightweight Frame',
+    description: '+10% fire rate, -10% damage. Faster trigger, weaker rounds.',
+    cost: 5,
+    tier: 'uncommon',
+  },
   bp_aff_damage_15: {
     id: 'bp_aff_damage_15',
     recipeId: 'craft_aff_damage_15',
@@ -618,13 +738,13 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
   },
 };
 
-// Flavored blueprint label for the uplink shop. Wraps the bare
-// displayName with a deterministic prefix/suffix seeded on bp.id so
-// the listing reads "Vorpal Reinforced Frame of Storms" rather than
-// the bare core noun. Crafted instances of that blueprint inherit
-// the same flavor (since the attachment def shares the seed).
+// Blueprint label for the uplink shop. Bare noun — blueprints are
+// recipes for stable, repeatable items, so flavor wrapping there
+// would be misleading ("buy a different Vorpal Pistol of Storms each
+// time?"). The crafted weapon's name comes from weaponDisplayName,
+// which composes from family + tier + attached mods.
 export function blueprintDisplayName(bp: BlueprintCatalogEntry): string {
-  return flavoredItemName(bp.id, bp.displayName);
+  return bp.displayName;
 }
 
 export function listBlueprints(): BlueprintCatalogEntry[] {

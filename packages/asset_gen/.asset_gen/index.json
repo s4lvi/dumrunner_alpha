@@ -2503,6 +2503,407 @@
         "reasons": []
       },
       "createdAt": "2026-05-03T02:23:18.810Z"
+    },
+    {
+      "assetId": "asset_15ea5ae422a046bfb61e061dfa08a78c",
+      "cacheKey": "84dbb1defa02c1ba2e3da78c4cdf81f612c05c78bcba200458c015a109f6f645",
+      "request": {
+        "requestId": "enemy:armored:sun_bleached",
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "armored",
+          "label": "heavy-plate armored juggernaut",
+          "faction": "sun_bleached",
+          "biome": null
+        },
+        "visualBrief": {
+          "subject": "heavy-plate armored juggernaut",
+          "materials": [
+            "wasteland mutation",
+            "scrap armor"
+          ],
+          "colors": [
+            "#4b5563",
+            "#111827",
+            "#22c55e"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "chase movement personality",
+            "melee combat cue"
+          ],
+          "mustAvoid": [
+            "friendly character",
+            "multiple creatures",
+            "floor tile"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_15ea5ae422a046bfb61e061dfa08a78c.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.82
+        },
+        "opaqueBounds": {
+          "x": 7,
+          "y": 8,
+          "w": 50,
+          "h": 46
+        },
+        "averageColors": [
+          "#5c4c3c"
+        ]
+      },
+      "family": {
+        "familyId": "family_e2863b76185ac7a35923",
+        "variantType": "base",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated enemy asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T04:29:18.694Z"
+    },
+    {
+      "assetId": "asset_49c854a363c6421ab6c8e4db371aef5e",
+      "cacheKey": "0bf12102eec9c3d456d0788fc7d32919a8950b184de645f06cf941432d70d444",
+      "request": {
+        "requestId": "building:artifact_uplink",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "artifact_uplink",
+          "label": "artifact uplink",
+          "buildingKind": "artifact_uplink"
+        },
+        "visualBrief": {
+          "subject": "player-built artifact uplink",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_49c854a363c6421ab6c8e4db371aef5e.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 12,
+          "y": 11,
+          "w": 40,
+          "h": 40
+        },
+        "averageColors": [
+          "#625245"
+        ]
+      },
+      "family": {
+        "familyId": "family_538f276fe3a706f8fdbf",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T04:30:24.612Z"
+    },
+    {
+      "assetId": "asset_a8f0ad7ea55b44b2830d8a258f68c66a",
+      "cacheKey": "93b3cf0d740892ef7789b2f66683691b9ea389bfe85eed833997624055f7aa75",
+      "request": {
+        "requestId": "material:alloy",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "alloy",
+          "label": "Alloy Plate",
+          "materialId": "alloy"
+        },
+        "visualBrief": {
+          "subject": "Alloy Plate",
+          "materials": [
+            "alloy plate"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_a8f0ad7ea55b44b2830d8a258f68c66a.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 9,
+          "y": 13,
+          "w": 47,
+          "h": 38
+        },
+        "averageColors": [
+          "#7a7d89"
+        ]
+      },
+      "family": {
+        "familyId": "family_37d9badfa07896ccb32b",
+        "variantType": "icon",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated material asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T04:34:07.880Z"
+    },
+    {
+      "assetId": "asset_6930f704654645358504c8993b669d47",
+      "cacheKey": "ec77d2f99a9d96809e64591d3a1e77c928ba8a61de826eab17c7a71d90f9b1d7",
+      "request": {
+        "requestId": "building:electronics_bench",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "electronics_bench",
+          "label": "electronics bench",
+          "buildingKind": "electronics_bench"
+        },
+        "visualBrief": {
+          "subject": "player-built electronics bench",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_6930f704654645358504c8993b669d47.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 10,
+          "y": 13,
+          "w": 44,
+          "h": 35
+        },
+        "averageColors": [
+          "#6e6d6f"
+        ]
+      },
+      "family": {
+        "familyId": "family_335e5ad87f44fef910ca",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T04:34:53.597Z"
+    },
+    {
+      "assetId": "asset_a34295f953d845e39e6002252696102a",
+      "cacheKey": "82ce2a9e9b907b2f331cba7affec7111688a7c29f94170a7cce2791f5061bd50",
+      "request": {
+        "requestId": "material:artifact",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "artifact",
+          "label": "Artifact",
+          "materialId": "artifact"
+        },
+        "visualBrief": {
+          "subject": "Artifact",
+          "materials": [
+            "artifact"
+          ],
+          "colors": [
+            "#f472b6",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_a34295f953d845e39e6002252696102a.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 12,
+          "y": 13,
+          "w": 39,
+          "h": 38
+        },
+        "averageColors": [
+          "#8d418c"
+        ]
+      },
+      "family": {
+        "familyId": "family_59602f99cdbd959422a8",
+        "variantType": "icon",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated material asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T04:35:29.312Z"
     }
   ],
   "jobs": [
@@ -3964,6 +4365,372 @@
       "error": null,
       "createdAt": "2026-05-03T02:23:09.451Z",
       "updatedAt": "2026-05-03T02:23:18.811Z"
+    },
+    {
+      "jobId": "job_4fb858a5e328451f9aca62ce9ffccf3e",
+      "status": "approved",
+      "cacheKey": "84dbb1defa02c1ba2e3da78c4cdf81f612c05c78bcba200458c015a109f6f645",
+      "request": {
+        "requestId": "enemy:armored:sun_bleached",
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "armored",
+          "label": "heavy-plate armored juggernaut",
+          "faction": "sun_bleached",
+          "biome": null
+        },
+        "visualBrief": {
+          "subject": "heavy-plate armored juggernaut",
+          "materials": [
+            "wasteland mutation",
+            "scrap armor"
+          ],
+          "colors": [
+            "#4b5563",
+            "#111827",
+            "#22c55e"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "chase movement personality",
+            "melee combat cue"
+          ],
+          "mustAvoid": [
+            "friendly character",
+            "multiple creatures",
+            "floor tile"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_15ea5ae422a046bfb61e061dfa08a78c",
+      "error": null,
+      "createdAt": "2026-05-03T04:29:06.569Z",
+      "updatedAt": "2026-05-03T04:29:18.695Z"
+    },
+    {
+      "jobId": "job_a6ab39f48299406cb8f0828eb63b7caa",
+      "status": "queued",
+      "cacheKey": "af4aacf464c2173ecc7d264ae69b33ac0eac12425c9380603a2be884ef15eebd",
+      "request": {
+        "requestId": "enemy:brute_chaser:sun_bleached",
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "brute_chaser",
+          "label": "sun-bleached armored brute",
+          "faction": "sun_bleached",
+          "biome": null
+        },
+        "visualBrief": {
+          "subject": "sun-bleached armored brute",
+          "materials": [
+            "wasteland mutation",
+            "scrap armor"
+          ],
+          "colors": [
+            "#b45309",
+            "#111827",
+            "#22c55e"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "chase movement personality",
+            "melee combat cue"
+          ],
+          "mustAvoid": [
+            "friendly character",
+            "multiple creatures",
+            "floor tile"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": null,
+      "error": null,
+      "createdAt": "2026-05-03T04:29:06.569Z",
+      "updatedAt": "2026-05-03T04:29:06.569Z"
+    },
+    {
+      "jobId": "job_dbba2f33ba0d49aa9df42fd1e9f2ec53",
+      "status": "approved",
+      "cacheKey": "0bf12102eec9c3d456d0788fc7d32919a8950b184de645f06cf941432d70d444",
+      "request": {
+        "requestId": "building:artifact_uplink",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "artifact_uplink",
+          "label": "artifact uplink",
+          "buildingKind": "artifact_uplink"
+        },
+        "visualBrief": {
+          "subject": "player-built artifact uplink",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_49c854a363c6421ab6c8e4db371aef5e",
+      "error": null,
+      "createdAt": "2026-05-03T04:30:11.560Z",
+      "updatedAt": "2026-05-03T04:30:24.614Z"
+    },
+    {
+      "jobId": "job_f75b5f98cbaa498794c8870811e87590",
+      "status": "approved",
+      "cacheKey": "93b3cf0d740892ef7789b2f66683691b9ea389bfe85eed833997624055f7aa75",
+      "request": {
+        "requestId": "material:alloy",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "alloy",
+          "label": "Alloy Plate",
+          "materialId": "alloy"
+        },
+        "visualBrief": {
+          "subject": "Alloy Plate",
+          "materials": [
+            "alloy plate"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_a8f0ad7ea55b44b2830d8a258f68c66a",
+      "error": null,
+      "createdAt": "2026-05-03T04:33:57.210Z",
+      "updatedAt": "2026-05-03T04:34:07.881Z"
+    },
+    {
+      "jobId": "job_1d397354caab40889d9e99c27e478e9a",
+      "status": "queued",
+      "cacheKey": "39192e679ed33e24c55a2aaf1d151442aa0329fdf76d12ca5570157afa4b6791",
+      "request": {
+        "requestId": "material:crystal",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "crystal",
+          "label": "Resonant Crystal",
+          "materialId": "crystal"
+        },
+        "visualBrief": {
+          "subject": "Resonant Crystal",
+          "materials": [
+            "resonant crystal"
+          ],
+          "colors": [
+            "#06b6d4",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": null,
+      "error": null,
+      "createdAt": "2026-05-03T04:33:57.210Z",
+      "updatedAt": "2026-05-03T04:33:57.210Z"
+    },
+    {
+      "jobId": "job_2efbc4981d0f454aab3a19184ead47b6",
+      "status": "approved",
+      "cacheKey": "ec77d2f99a9d96809e64591d3a1e77c928ba8a61de826eab17c7a71d90f9b1d7",
+      "request": {
+        "requestId": "building:electronics_bench",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "electronics_bench",
+          "label": "electronics bench",
+          "buildingKind": "electronics_bench"
+        },
+        "visualBrief": {
+          "subject": "player-built electronics bench",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_6930f704654645358504c8993b669d47",
+      "error": null,
+      "createdAt": "2026-05-03T04:34:41.612Z",
+      "updatedAt": "2026-05-03T04:34:53.599Z"
+    },
+    {
+      "jobId": "job_43ce5e22eb5f45a096dc96553ed32bd5",
+      "status": "approved",
+      "cacheKey": "82ce2a9e9b907b2f331cba7affec7111688a7c29f94170a7cce2791f5061bd50",
+      "request": {
+        "requestId": "material:artifact",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "artifact",
+          "label": "Artifact",
+          "materialId": "artifact"
+        },
+        "visualBrief": {
+          "subject": "Artifact",
+          "materials": [
+            "artifact"
+          ],
+          "colors": [
+            "#f472b6",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_a34295f953d845e39e6002252696102a",
+      "error": null,
+      "createdAt": "2026-05-03T04:35:19.045Z",
+      "updatedAt": "2026-05-03T04:35:29.314Z"
     }
   ]
 }

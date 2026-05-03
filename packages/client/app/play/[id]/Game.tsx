@@ -19,6 +19,8 @@ import {
   partDisplayName,
   TIER_COLORS_HEX,
   WEAPON_FAMILY,
+  WEAPON_TIER_LABEL,
+  weaponDisplayName,
   type WeaponItem,
   KEY_ARTIFACT_COST,
   listBlueprints,
@@ -1619,7 +1621,7 @@ function AmmoHud({
       <div className="flex flex-col items-end gap-1">
         <div className="flex items-baseline gap-2 px-3 py-1.5 rounded bg-[color:var(--panel)]/90 border border-[color:var(--panel-border)]">
           <span className="text-[10px] uppercase tracking-wider text-zinc-400">
-            {slot.weapon.weaponId}
+            {weaponDisplayName(slot.weapon)}
           </span>
           <span className="text-2xl font-bold text-zinc-100 tabular-nums leading-none">
             {mag ?? 0}
@@ -2650,7 +2652,7 @@ function WeaponBenchPanel({
                 : 'border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]')
             }
           >
-            T{w.weapon.tier} {w.weapon.weaponId}
+            {weaponDisplayName(w.weapon)}
           </button>
         ))}
       </div>
@@ -2850,14 +2852,19 @@ function WeaponEditor({
       {/* Tier-up */}
       <div className="flex items-center justify-between gap-2 pt-2 border-t border-[color:var(--panel-border)]">
         <span className="text-zinc-300">
-          Current Tier <span className="text-zinc-100 font-semibold">T{weapon.tier}</span>
+          Current Tier{' '}
+          <span className="text-zinc-100 font-semibold">
+            {WEAPON_TIER_LABEL[weapon.tier] ?? `T${weapon.tier}`}
+          </span>
         </span>
         <button
           onClick={onTierUp}
           disabled={!inRange || weapon.tier >= 4}
           className="px-3 py-1.5 rounded text-[11px] border border-amber-700 bg-amber-950/30 text-amber-200 hover:bg-amber-950 disabled:opacity-40"
         >
-          {weapon.tier >= 4 ? 'Max Tier' : `Tier Up → T${weapon.tier + 1}`}
+          {weapon.tier >= 4
+            ? 'Max Tier'
+            : `Tier Up → ${WEAPON_TIER_LABEL[(weapon.tier + 1) as 1 | 2 | 3 | 4] ?? `T${weapon.tier + 1}`}`}
         </button>
       </div>
     </div>
@@ -2875,7 +2882,7 @@ function outputSlotLabel(slot: InventorySlot): string {
   if (slot.kind === 'ammo') {
     return `${slot.count}× ${slot.ammoId.replace(/_/g, ' ')}`;
   }
-  if (slot.kind === 'weapon') return slot.weapon.weaponId;
+  if (slot.kind === 'weapon') return weaponDisplayName(slot.weapon);
   if (slot.kind === 'attachment') {
     return `${slot.count}× ${attachmentDisplayName(slot.defId)}`;
   }
@@ -3463,11 +3470,10 @@ const DRAG_MIME = 'application/x-dumrunner-slot';
 // applies mods + piece affixes), so the player sees real numbers — not
 // the base-class baseline. Knife / melee returns a short label.
 function weaponTooltip(weapon: WeaponItem): string {
-  const tier = `T${weapon.tier}`;
-  const id = weapon.weaponId;
+  const fullName = weaponDisplayName(weapon);
   const stats = effectiveWeaponStats(weapon);
-  if (!stats) return `${tier} ${id}`;
-  const lines: string[] = [`${tier} ${id}`];
+  if (!stats) return fullName;
+  const lines: string[] = [fullName];
   const mag = weapon.magazineRemaining ?? stats.magazineSize;
   lines.push(`Damage:        ${stats.damage.toFixed(1)}`);
   if (stats.pelletCount > 1) {
@@ -3695,11 +3701,17 @@ function SlotContextMenu({
 function SlotIcon({ slot }: { slot: InventorySlot }) {
   if (slot.kind === 'empty') return <span className="text-zinc-700">·</span>;
   if (slot.kind === 'weapon') {
+    // Slot icon shows tier label + family ("Standard Shotgun"). The
+    // adjective stack lives in the hover tooltip so we don't blow up
+    // the icon width.
+    const tierLabel =
+      WEAPON_TIER_LABEL[slot.weapon.tier] ?? `T${slot.weapon.tier}`;
     return (
       <div className="flex flex-col items-center leading-tight gap-0.5">
         <ItemIcon kind="weapon" subkind={slot.weapon.weaponId} />
-        <span className="text-zinc-300 text-[9px] capitalize">
-          {slot.weapon.weaponId}
+        <span className="text-zinc-300 text-[9px]">
+          {tierLabel}{' '}
+          <span className="capitalize">{slot.weapon.weaponId}</span>
         </span>
       </div>
     );

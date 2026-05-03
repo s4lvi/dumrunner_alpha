@@ -501,6 +501,11 @@ export type AttachmentDef =
       id: string;
       displayName: string;
       description: string;
+      // Borderlands-style adjective the weapon picks up when this
+      // attachment is equipped. Stacks into the weapon's display name
+      // in piece-then-mod order (capped at 3 adjectives so longer-
+      // term builds don't read as a tongue-twister).
+      adjective: string;
       // null = any ranged family
       family: WeaponFamily | null;
       effect: WeaponEffect;
@@ -510,6 +515,7 @@ export type AttachmentDef =
       id: string;
       displayName: string;
       description: string;
+      adjective: string;
       pieceKind: WeaponPieceKind;
       family: WeaponFamily | null;
       effect: WeaponEffect;
@@ -520,6 +526,9 @@ export type AttachmentDef =
       id: string;
       displayName: string;
       description: string;
+      // Adjective shows up when this is applied to a suit piece —
+      // future suit-display-name work can use it.
+      adjective: string;
       slotKind: SuitSlotKind;
       effect: SuitEffect;
       value: number;
@@ -527,11 +536,15 @@ export type AttachmentDef =
 
 export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
   // ---- weapon mods (slot into a weapon's mod list) ----
+  // Each `adjective` becomes part of the weapon's name when attached.
+  // E.g. a Standard Shotgun + Foregrip + Compensator + Calibrated frame
+  // reads as "Standard Steady Vented Brutal Shotgun".
   mod_foregrip: {
     kind: 'weapon_mod',
     id: 'mod_foregrip',
     displayName: 'Foregrip',
     description: '-30% spread. Best on shotguns and SMGs.',
+    adjective: 'Steady',
     family: null,
     effect: { spreadMult: 0.7 },
   },
@@ -539,19 +552,74 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
     kind: 'weapon_mod',
     id: 'mod_high_velocity',
     displayName: 'High-Velocity Barrel',
-    description: '+25% projectile speed. Better tracking at range.',
+    description: '+500 px/sec projectile speed. Better tracking at range.',
+    adjective: 'Hyper',
     family: null,
     effect: { projectileSpeedAdd: 500 },
+  },
+  mod_compensator: {
+    kind: 'weapon_mod',
+    id: 'mod_compensator',
+    displayName: 'Compensator',
+    description: '-50% spread. Tighter than a Foregrip, but louder.',
+    adjective: 'Vented',
+    family: null,
+    effect: { spreadMult: 0.5 },
+  },
+  mod_stabilizer: {
+    kind: 'weapon_mod',
+    id: 'mod_stabilizer',
+    displayName: 'Recoil Stabilizer',
+    description: '+10% damage. Heavier action, harder hits.',
+    adjective: 'Calibrated',
+    family: null,
+    effect: { damageMult: 1.10 },
+  },
+  mod_overclock: {
+    kind: 'weapon_mod',
+    id: 'mod_overclock',
+    displayName: 'Overclock Module',
+    description: '+18% fire rate. Burns through ammo faster.',
+    adjective: 'Overclocked',
+    family: null,
+    effect: { fireIntervalMult: 0.85 },
+  },
+  mod_dampener: {
+    kind: 'weapon_mod',
+    id: 'mod_dampener',
+    displayName: 'Recoil Dampener',
+    description: '-25% spread, slight projectile speed bump.',
+    adjective: 'Damped',
+    family: null,
+    effect: { spreadMult: 0.75, projectileSpeedAdd: 150 },
+  },
+  mod_armor_piercer: {
+    kind: 'weapon_mod',
+    id: 'mod_armor_piercer',
+    displayName: 'AP Core',
+    description: '+18% damage. Engineered for armoured targets.',
+    adjective: 'Lance',
+    family: null,
+    effect: { damageMult: 1.18 },
+  },
+  mod_lightweight: {
+    kind: 'weapon_mod',
+    id: 'mod_lightweight',
+    displayName: 'Lightweight Frame',
+    description: '+10% fire rate, -10% damage. Faster trigger, weaker rounds.',
+    adjective: 'Whisper',
+    family: null,
+    effect: { fireIntervalMult: 0.9, damageMult: 0.9 },
   },
 
   // ---- weapon affixes (slot onto a weapon piece) ----
   aff_damage_15: {
     kind: 'weapon_affix',
     id: 'aff_damage_15',
-    // Clean noun phrase — the flavor wrapper adds prefix/suffix.
-    // Mechanical effect lives in `description`.
+    // Clean noun phrase. Mechanical effect lives in `description`.
     displayName: 'Reinforced Frame',
     description: '+15% damage on every shot. Slots into a weapon frame.',
+    adjective: 'Brutal',
     pieceKind: 'frame',
     family: null,
     effect: { damageMult: 1.15 },
@@ -562,6 +630,7 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
     id: 'aff_firerate_25',
     displayName: 'Lightweight Grip',
     description: '25% faster cadence. Slots into a weapon grip.',
+    adjective: 'Auto',
     pieceKind: 'grip',
     family: null,
     effect: { fireIntervalMult: 0.8 },
@@ -574,6 +643,7 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
     id: 'aff_shield_25',
     displayName: 'Hardened Plating',
     description: '+25 max shield. Slots into a suit plating piece.',
+    adjective: 'Hardplate',
     slotKind: 'plating',
     effect: { shieldBonus: 25 },
     value: 25,
@@ -583,6 +653,7 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
     id: 'aff_speed_5',
     displayName: 'Servomotor Tune',
     description: '+5% movement speed. Slots into a suit utility mod.',
+    adjective: 'Servo',
     slotKind: 'utility_mod',
     effect: { moveSpeedMult: 0.05 },
     value: 0.05,
@@ -593,17 +664,14 @@ export function listAttachments(): AttachmentDef[] {
   return Object.values(ATTACHMENT_DEFS);
 }
 
-// Flavored display name for an attachment def. The def carries a
-// clean core noun (e.g. "Reinforced Frame"); the namer wraps it with
-// a deterministic prefix/suffix seeded on the def id so every
-// instance of the same kind reads the same way ("Vorpal Reinforced
-// Frame of Storms"). Per-instance variance would require switching
-// to non-stackable inventory entries — for now the def's id is the
-// seed.
+// Display name for an attachment def. Bare noun phrase (no flavor
+// wrapper) — these are crafted, fungible components, not unique
+// drops. Ground-loot CarriedParts (which are unique-rolled) get the
+// flavor treatment via partDisplayName instead.
 export function attachmentDisplayName(defId: string): string {
   const def = ATTACHMENT_DEFS[defId];
   if (!def) return defId;
-  return flavoredItemName(defId, def.displayName);
+  return def.displayName;
 }
 
 // Combine a weapon's frame + piece-affix + mod effects into a single
@@ -736,13 +804,41 @@ const WEAPON_CLASS_PREFIX: Record<string, string> = {
   energy: 'Phase',
 };
 
-const TIER_LABEL: Record<PartTier, string> = {
-  Mk1: 'Mk1',
-  Mk2: 'Mk2',
-  Mk3: 'Mk3',
-  Mk4: 'Mk4',
-  Alien: 'Xenotech',
+// Tier labels for dropped parts. The bottom tier reads as raw scrap
+// quality; Military is reserved for the Alien (top) tier so it's an
+// unmistakable upgrade. Mirrors WEAPON_TIER_LABEL below.
+export const PART_TIER_LABEL: Record<PartTier, string> = {
+  Mk1: 'Junk',
+  Mk2: 'Rusty',
+  Mk3: 'Standard',
+  Mk4: 'Precision',
+  Alien: 'Military',
 };
+
+// Same idea for crafted weapons, which have a smaller [1..4] tier
+// space (no "Alien" tier on weapons). Military is unused here for
+// now — drops in if/when a T5 weapon tier ships.
+export const WEAPON_TIER_LABEL: Record<WeaponTier, string> = {
+  1: 'Junk',
+  2: 'Rusty',
+  3: 'Standard',
+  4: 'Precision',
+};
+
+// Friendly weapon-family titles (capitalised, for display). Helps
+// the Borderlands-style name composer ("Standard Steady Shotgun").
+const WEAPON_DISPLAY: Record<WeaponKind, string> = {
+  pistol: 'Pistol',
+  smg: 'SMG',
+  shotgun: 'Shotgun',
+  rifle: 'Rifle',
+  knife: 'Knife',
+};
+
+// The bottom tier ("Junk") gets no flavor prefix on dropped parts —
+// it should read as a basic scrap noun. Higher tiers get a cyberpunk
+// adjective from the deterministic pool in `itemNames.ts`.
+const TIERS_WITHOUT_FLAVOR_PREFIX = new Set<PartTier>(['Mk1']);
 
 // Stable string-hash used to pick a name from a pool deterministically
 // from a part id. Same part always reads as the same item.
@@ -754,11 +850,11 @@ function hashId(id: string): number {
   return Math.abs(h);
 }
 
-// The "core" of a part name — tier + class prefix (for weapon parts) +
-// a deterministic base from the slot's pool. Diablo flavor wraps this
-// with a prefix and "of <suffix>" to give the final display name.
+// The "core" of a part name — tier + class prefix (for weapon parts)
+// + a deterministic base noun from the slot's pool. The cyberpunk
+// flavor prefix wraps this for tier ≥ Mk2.
 function partCoreName(part: CarriedPart): string {
-  const tier = TIER_LABEL[part.tier] ?? part.tier;
+  const tier = PART_TIER_LABEL[part.tier] ?? part.tier;
   if (isSuitPart(part.slot)) {
     const pool = SUIT_PART_NAMES[part.slot as SuitSlotKind];
     const base = pool[hashId(part.id) % pool.length] ?? part.slot;
@@ -784,12 +880,46 @@ function partCoreName(part: CarriedPart): string {
   return `${tier} ${part.slot}`;
 }
 
-// Full flavored display name for a dropped part. Deterministic on
-// part.id so the same part always reads as the same name across
-// sessions / clients. Example: "Vorpal Mk2 Marksman Helical Bore of
-// Storms".
+// Full display name for a dropped part. Deterministic on part.id so
+// the same part always reads as the same name across sessions /
+// clients.
+//   Mk1 (Junk)  → "Junk Carapace Plate"
+//   Mk2+ (rest) → "Razorback Rusty Marksman Helical Bore"
 export function partDisplayName(part: CarriedPart): string {
-  return flavoredItemName(part.id, partCoreName(part));
+  const core = partCoreName(part);
+  if (TIERS_WITHOUT_FLAVOR_PREFIX.has(part.tier)) return core;
+  return flavoredItemName(part.id, core);
+}
+
+// Borderlands-style weapon name. Adjectives come from attached mods
+// + piece affixes; capped at 3 so a fully-built rifle doesn't read
+// as a tongue-twister. Bare weapons just read as the tier + family.
+//   T1 bare       → "Junk Pistol"
+//   T2 + foregrip → "Rusty Steady Shotgun"
+//   T3 + 4 mods   → "Standard Steady Vented Brutal Rifle"
+const MAX_WEAPON_ADJECTIVES = 3;
+const PIECE_ORDER: WeaponPieceKind[] = ['frame', 'grip', 'magazine', 'barrel'];
+
+export function weaponDisplayName(weapon: WeaponItem): string {
+  const tier = WEAPON_TIER_LABEL[weapon.tier] ?? `T${weapon.tier}`;
+  const family = WEAPON_DISPLAY[weapon.weaponId] ?? weapon.weaponId;
+  const adjectives: string[] = [];
+  for (const piece of PIECE_ORDER) {
+    const a = weapon.pieces[piece];
+    if (!a) continue;
+    const def = ATTACHMENT_DEFS[a.id];
+    if (def && 'adjective' in def && def.adjective) {
+      adjectives.push(def.adjective);
+    }
+  }
+  for (const mod of weapon.mods) {
+    const def = ATTACHMENT_DEFS[mod.id];
+    if (def && 'adjective' in def && def.adjective) {
+      adjectives.push(def.adjective);
+    }
+  }
+  const trimmed = adjectives.slice(0, MAX_WEAPON_ADJECTIVES);
+  return [tier, ...trimmed, family].join(' ');
 }
 
 export function affixIdsForSlot(slot: PartSlot): string[] {
