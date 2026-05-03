@@ -35,6 +35,7 @@ import {
   type MaterialKind,
   type WeaponKind,
 } from './inventory';
+import { flavoredItemName } from './itemNames';
 import type { BuildingKind, WorkstationKind } from './protocol';
 
 export type RecipeInput =
@@ -570,52 +571,61 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
   bp_mod_foregrip: {
     id: 'bp_mod_foregrip',
     recipeId: 'craft_mod_foregrip',
-    displayName: 'Mod: Foregrip',
-    description: 'Weapon mod. -30% spread. Slots into any ranged weapon mod slot.',
+    displayName: 'Foregrip',
+    description: '-30% spread. Slots into any ranged weapon mod slot.',
     cost: 4,
     tier: 'uncommon',
   },
   bp_mod_high_velocity: {
     id: 'bp_mod_high_velocity',
     recipeId: 'craft_mod_high_velocity',
-    displayName: 'Mod: High-Velocity Barrel',
-    description: 'Weapon mod. +500 px/sec projectile speed.',
+    displayName: 'High-Velocity Barrel',
+    description: '+500 px/sec projectile speed. Slots into any mod slot.',
     cost: 5,
     tier: 'uncommon',
   },
   bp_aff_damage_15: {
     id: 'bp_aff_damage_15',
     recipeId: 'craft_aff_damage_15',
-    displayName: 'Component: +15% Damage (Frame)',
-    description: 'Weapon component. Reinforced frame: +15% damage.',
+    displayName: 'Reinforced Frame',
+    description: '+15% damage on every shot. Slots into a weapon frame.',
     cost: 6,
     tier: 'rare',
   },
   bp_aff_firerate_25: {
     id: 'bp_aff_firerate_25',
     recipeId: 'craft_aff_firerate_25',
-    displayName: 'Component: +25% Fire Rate (Grip)',
-    description: 'Weapon component. Lightweight grip: 25% faster cadence.',
+    displayName: 'Lightweight Grip',
+    description: '25% faster cadence. Slots into a weapon grip.',
     cost: 6,
     tier: 'rare',
   },
   bp_aff_shield_25: {
     id: 'bp_aff_shield_25',
     recipeId: 'craft_aff_shield_25',
-    displayName: 'Component: +25 Shield (Plating)',
-    description: 'Suit component. Hardened plating: +25 max shield.',
+    displayName: 'Hardened Plating',
+    description: '+25 max shield. Slots into a suit plating piece.',
     cost: 5,
     tier: 'uncommon',
   },
   bp_aff_speed_5: {
     id: 'bp_aff_speed_5',
     recipeId: 'craft_aff_speed_5',
-    displayName: 'Component: +5% Speed (Utility)',
-    description: 'Suit component. Servomotor tune: +5% movement speed.',
+    displayName: 'Servomotor Tune',
+    description: '+5% movement speed. Slots into a suit utility mod.',
     cost: 5,
     tier: 'uncommon',
   },
 };
+
+// Flavored blueprint label for the uplink shop. Wraps the bare
+// displayName with a deterministic prefix/suffix seeded on bp.id so
+// the listing reads "Vorpal Reinforced Frame of Storms" rather than
+// the bare core noun. Crafted instances of that blueprint inherit
+// the same flavor (since the attachment def shares the seed).
+export function blueprintDisplayName(bp: BlueprintCatalogEntry): string {
+  return flavoredItemName(bp.id, bp.displayName);
+}
 
 export function listBlueprints(): BlueprintCatalogEntry[] {
   return Object.values(BLUEPRINT_CATALOG);

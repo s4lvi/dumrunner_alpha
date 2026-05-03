@@ -7,6 +7,7 @@
 // panel.
 
 import type { Affix, CarriedPart, BuildingKind, PartSlot, PartTier } from './protocol';
+import { flavoredItemName } from './itemNames';
 
 export const HOTBAR_SIZE = 9;
 export const INVENTORY_SIZE = 36;
@@ -503,8 +504,10 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
   aff_damage_15: {
     kind: 'weapon_affix',
     id: 'aff_damage_15',
-    displayName: '+15% Damage (Frame)',
-    description: 'Reinforced frame: +15% damage on every shot.',
+    // Clean noun phrase — the flavor wrapper adds prefix/suffix.
+    // Mechanical effect lives in `description`.
+    displayName: 'Reinforced Frame',
+    description: '+15% damage on every shot. Slots into a weapon frame.',
     pieceKind: 'frame',
     family: null,
     effect: { damageMult: 1.15 },
@@ -513,8 +516,8 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
   aff_firerate_25: {
     kind: 'weapon_affix',
     id: 'aff_firerate_25',
-    displayName: '+25% Fire Rate (Grip)',
-    description: 'Lightweight grip: 25% faster cadence.',
+    displayName: 'Lightweight Grip',
+    description: '25% faster cadence. Slots into a weapon grip.',
     pieceKind: 'grip',
     family: null,
     effect: { fireIntervalMult: 0.8 },
@@ -525,8 +528,8 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
   aff_shield_25: {
     kind: 'suit_affix',
     id: 'aff_shield_25',
-    displayName: '+25 Shield (Plating)',
-    description: 'Hardened plating: +25 max shield.',
+    displayName: 'Hardened Plating',
+    description: '+25 max shield. Slots into a suit plating piece.',
     slotKind: 'plating',
     effect: { shieldBonus: 25 },
     value: 25,
@@ -534,8 +537,8 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
   aff_speed_5: {
     kind: 'suit_affix',
     id: 'aff_speed_5',
-    displayName: '+5% Move Speed (Utility)',
-    description: 'Servomotor tune-up: +5% movement speed.',
+    displayName: 'Servomotor Tune',
+    description: '+5% movement speed. Slots into a suit utility mod.',
     slotKind: 'utility_mod',
     effect: { moveSpeedMult: 0.05 },
     value: 0.05,
@@ -544,6 +547,19 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
 
 export function listAttachments(): AttachmentDef[] {
   return Object.values(ATTACHMENT_DEFS);
+}
+
+// Flavored display name for an attachment def. The def carries a
+// clean core noun (e.g. "Reinforced Frame"); the namer wraps it with
+// a deterministic prefix/suffix seeded on the def id so every
+// instance of the same kind reads the same way ("Vorpal Reinforced
+// Frame of Storms"). Per-instance variance would require switching
+// to non-stackable inventory entries — for now the def's id is the
+// seed.
+export function attachmentDisplayName(defId: string): string {
+  const def = ATTACHMENT_DEFS[defId];
+  if (!def) return defId;
+  return flavoredItemName(defId, def.displayName);
 }
 
 // Combine a weapon's frame + piece-affix + mod effects into a single
@@ -694,7 +710,10 @@ function hashId(id: string): number {
   return Math.abs(h);
 }
 
-export function partDisplayName(part: CarriedPart): string {
+// The "core" of a part name — tier + class prefix (for weapon parts) +
+// a deterministic base from the slot's pool. Diablo flavor wraps this
+// with a prefix and "of <suffix>" to give the final display name.
+function partCoreName(part: CarriedPart): string {
   const tier = TIER_LABEL[part.tier] ?? part.tier;
   if (isSuitPart(part.slot)) {
     const pool = SUIT_PART_NAMES[part.slot as SuitSlotKind];
@@ -719,6 +738,14 @@ export function partDisplayName(part: CarriedPart): string {
     return cls ? `${tier} ${cls} ${base}` : `${tier} ${base}`;
   }
   return `${tier} ${part.slot}`;
+}
+
+// Full flavored display name for a dropped part. Deterministic on
+// part.id so the same part always reads as the same name across
+// sessions / clients. Example: "Vorpal Mk2 Marksman Helical Bore of
+// Storms".
+export function partDisplayName(part: CarriedPart): string {
+  return flavoredItemName(part.id, partCoreName(part));
 }
 
 export function affixIdsForSlot(slot: PartSlot): string[] {

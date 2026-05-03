@@ -10,6 +10,8 @@ import {
   AFFIX_DEFS,
   computeSuitStats,
   ATTACHMENT_DEFS,
+  attachmentDisplayName,
+  blueprintDisplayName,
   BUILDING_REGISTRY,
   CONSUMABLES,
   HOTBAR_SIZE,
@@ -1766,7 +1768,7 @@ function TradeBlueprintsList({
           <li key={bp.id} className="px-4 py-3 flex items-center gap-4">
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold text-zinc-200">
-                {bp.displayName}
+                {blueprintDisplayName(bp)}
               </div>
               <div className="text-[11px] text-zinc-500">{bp.description}</div>
               <div className="text-[10px] uppercase tracking-wider text-zinc-600 mt-0.5">
@@ -2210,14 +2212,13 @@ function SuitAffixPanel({
               {SLOT_LABELS[slot] ?? slot}
             </div>
             {applied.map((id, i) => {
-              const def = ATTACHMENT_DEFS[id];
               return (
                 <div
                   key={`${id}-${i}`}
                   className="flex items-center justify-between px-2 py-1 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
                 >
                   <span className="text-emerald-200">
-                    {def?.displayName ?? id}
+                    {attachmentDisplayName(id)}
                   </span>
                   <button
                     onClick={() => onDetach(slot, i)}
@@ -2241,7 +2242,7 @@ function SuitAffixPanel({
                       title={def?.description}
                       className="px-2 py-0.5 rounded text-[10px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950 disabled:opacity-40"
                     >
-                      + {def?.displayName ?? id}
+                      + {attachmentDisplayName(id)}
                     </button>
                   );
                 })}
@@ -2425,7 +2426,6 @@ function WeaponEditor({
         </div>
         {pieces.map((piece) => {
           const attached = weapon.pieces[piece];
-          const def = attached ? ATTACHMENT_DEFS[attached.id] : null;
           const candidates = ownedAffixForPiece(piece);
           return (
             <div
@@ -2437,7 +2437,7 @@ function WeaponEditor({
                   {piece}
                 </span>
                 <span className="text-zinc-200">
-                  {def?.displayName ?? '— empty —'}
+                  {attached ? attachmentDisplayName(attached.id) : '— empty —'}
                 </span>
               </div>
               {attached ? (
@@ -2465,7 +2465,7 @@ function WeaponEditor({
                           title={cdef?.description}
                           className="px-2 py-1 rounded text-[10px] border border-violet-700 bg-violet-950/30 text-violet-200 hover:bg-violet-950 disabled:opacity-40"
                         >
-                          + {cdef?.displayName ?? id}
+                          + {attachmentDisplayName(id)}
                         </button>
                       );
                     })
@@ -2493,13 +2493,12 @@ function WeaponEditor({
           </div>
         )}
         {weapon.mods.map((mod, i) => {
-          const def = ATTACHMENT_DEFS[mod.id];
           return (
             <div
               key={i}
               className="flex items-center justify-between px-2 py-1.5 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
             >
-              <span className="text-zinc-200">{def?.displayName ?? mod.id}</span>
+              <span className="text-zinc-200">{attachmentDisplayName(mod.id)}</span>
               <button
                 onClick={() => onDetachMod(i)}
                 disabled={!inRange}
@@ -2527,7 +2526,7 @@ function WeaponEditor({
                     title={def?.description}
                     className="px-2 py-1 rounded text-[10px] border border-blue-700 bg-blue-950/30 text-blue-200 hover:bg-blue-950 disabled:opacity-40"
                   >
-                    + {def?.displayName ?? id}
+                    + {attachmentDisplayName(id)}
                   </button>
                 );
               })
@@ -2566,8 +2565,7 @@ function outputSlotLabel(slot: InventorySlot): string {
   }
   if (slot.kind === 'weapon') return slot.weapon.weaponId;
   if (slot.kind === 'attachment') {
-    const def = ATTACHMENT_DEFS[slot.defId];
-    return `${slot.count}× ${def?.displayName ?? slot.defId}`;
+    return `${slot.count}× ${attachmentDisplayName(slot.defId)}`;
   }
   if (slot.kind === 'consumable') {
     const def = CONSUMABLES[slot.consumableId];
@@ -2766,8 +2764,7 @@ function formatRecipeOutput(out: Recipe['output']): string {
     return `${out.count}× ${out.ammoId.replace(/_/g, ' ')}`;
   }
   if (out.kind === 'attachment') {
-    const def = ATTACHMENT_DEFS[out.defId];
-    return `${out.count}× ${def?.displayName ?? out.defId}`;
+    return `${out.count}× ${attachmentDisplayName(out.defId)}`;
   }
   if (out.kind === 'consumable') {
     const def = CONSUMABLES[out.consumableId];
@@ -3171,7 +3168,7 @@ function slotTooltip(slot: InventorySlot): string | undefined {
   }
   if (slot.kind === 'attachment') {
     const def = ATTACHMENT_DEFS[slot.defId];
-    return `${def?.displayName ?? slot.defId} ×${slot.count}\n${def?.description ?? ''}`;
+    return `${attachmentDisplayName(slot.defId)} ×${slot.count}\n${def?.description ?? ''}`;
   }
   if (slot.kind === 'part') {
     const part = slot.part;

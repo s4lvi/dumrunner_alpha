@@ -7,3 +7,4 @@ export * from './inventory';
 export * from './crafting';
 export * from './buildings';
 export * from './visuals';
+export * from './itemNames';
