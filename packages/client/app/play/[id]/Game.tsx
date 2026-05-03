@@ -1500,9 +1500,12 @@ function AmmoHud({
   const mag = slot.weapon.magazineRemaining;
   const ammoKind = AMMO_KIND_BY_FAMILY[family];
   const reserve = ammoKind ? countAmmo(inventory, ammoKind) : 0;
+  // Bottom-LEFT, away from the controls-hint cluster in the bottom-
+  // right. Sits above the stat bars (which are absolute-positioned by
+  // pixi).
   return (
-    <div className="absolute bottom-4 right-4 pointer-events-none select-none">
-      <div className="flex flex-col items-end gap-1">
+    <div className="absolute bottom-4 left-4 pointer-events-none select-none">
+      <div className="flex flex-col items-start gap-1">
         <div className="flex items-baseline gap-2 px-3 py-1.5 rounded bg-[color:var(--panel)]/90 border border-[color:var(--panel-border)]">
           <span className="text-[10px] uppercase tracking-wider text-zinc-400">
             {slot.weapon.weaponId}
