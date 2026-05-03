@@ -540,10 +540,20 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         selfY += dys * lerp;
       }
 
-      // Firing (held button = continuous fire at pistol rate). Disabled in
-      // build mode — clicks place/demolish buildings instead. Also gated on
-      // having a weapon selected; otherwise the click is a no-op (no
-      // muzzle flash, no outbound fire).
+      // Firing (held button = continuous fire). Disabled in build mode
+      // — clicks place/demolish buildings instead. Also gated on having
+      // a weapon selected; otherwise the click is a no-op.
+      //
+      // The muzzle flash is NOT triggered here. It's driven off the
+      // server's projectile_spawned event for the local player so the
+      // visual cadence matches the actual fire rate (which the client
+      // doesn't know — it varies per weapon family + mods + affixes)
+      // and so empty-mag / reloading / out-of-ammo states don't flash.
+      // Knife slash is similarly server-driven via weapon_swung.
+      //
+      // The local rate-limit here just throttles how often we tell the
+      // server we're holding the trigger. The server enforces real
+      // weapon timing.
       if (mouseDown && buildKind === null && equippedWeapon !== null) {
         const now = performance.now();
         const interval =
@@ -557,11 +567,6 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           if (Math.hypot(fdx, fdy) > 1) {
             init.sendFire(fdx, fdy);
             lastFireAt = now;
-            // Only ranged weapons get the muzzle flash; knife uses the
-            // weapon_swung server message to render its slash.
-            if (equippedWeapon !== 'knife') {
-              spawnMuzzleFlash(selfX, selfY, fdx, fdy);
-            }
           }
         }
       }
@@ -2161,6 +2166,17 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     spawnProjectile(p: ProjectileState) {
       addProjectile(p);
+      // Muzzle flash for the local player. Server-driven so the
+      // cadence is the real fire rate (varies per weapon + mods +
+      // affixes) and empty-mag / reloading / no-reserve correctly
+      // produce no flash. Per-pellet projectiles each call this — the
+      // flash overlaps cleanly so a shotgun blast still looks fine.
+      if (
+        p.ownerKind === 'player' &&
+        p.ownerCharacterId === init.self.characterId
+      ) {
+        spawnMuzzleFlash(p.x, p.y, p.vx, p.vy);
+      }
     },
     despawnProjectile(id: string) {
       const p = projectiles.get(id);

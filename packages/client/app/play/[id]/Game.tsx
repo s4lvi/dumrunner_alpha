@@ -537,6 +537,9 @@ export function Game({ serverId }: { serverId: string }) {
       case 'reload_started':
         if (msg.characterId === selfIdRef.current) {
           setReloadEndsAt(Date.now() + msg.durationMs);
+          // Placeholder reload SFX — collect-scrap roughly evokes the
+          // mechanical clank we want until a real reload sample lands.
+          audio.playSfx('collect-scrap');
         }
         break;
       case 'weapon_reloaded':
@@ -768,13 +771,56 @@ export function Game({ serverId }: { serverId: string }) {
 
   useEffect(() => {
     showTradeModalRef.current = showTradeModal;
+    if (showTradeModal) audio.playSfx('ui-back');
   }, [showTradeModal]);
   useEffect(() => {
     stationModalKindRef.current = stationModalKind;
+    if (stationModalKind !== null) audio.playSfx('ui-back');
   }, [stationModalKind]);
   useEffect(() => {
     showInventoryRef.current = showInventory;
+    if (showInventory) audio.playSfx('ui-back');
   }, [showInventory]);
+
+  // Global UI SFX. Click on any non-disabled <button> plays ui-click;
+  // hover (entering a new button) plays ui-hover. Implemented as
+  // delegated listeners on document so we don't need to wrap every
+  // button — and so future modals get the SFX automatically.
+  useEffect(() => {
+    let lastHoverButton: HTMLButtonElement | null = null;
+    let lastHoverAt = 0;
+    function isLiveButton(el: EventTarget | null): HTMLButtonElement | null {
+      if (!(el instanceof Element)) return null;
+      const btn = el.closest('button');
+      if (!btn) return null;
+      if (btn.disabled) return null;
+      return btn as HTMLButtonElement;
+    }
+    const onClick = (e: MouseEvent) => {
+      if (isLiveButton(e.target)) audio.playSfx('ui-click');
+    };
+    const onPointerOver = (e: PointerEvent) => {
+      const btn = isLiveButton(e.target);
+      if (!btn) {
+        lastHoverButton = null;
+        return;
+      }
+      // pointerover fires for every child element under the button as
+      // the cursor moves; throttle so the SFX only plays once per
+      // button-entry. 50ms guard catches the worst of the jitter.
+      const now = performance.now();
+      if (btn === lastHoverButton && now - lastHoverAt < 50) return;
+      lastHoverButton = btn;
+      lastHoverAt = now;
+      audio.playSfx('ui-hover');
+    };
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('pointerover', onPointerOver, true);
+    return () => {
+      document.removeEventListener('click', onClick, true);
+      document.removeEventListener('pointerover', onPointerOver, true);
+    };
+  }, []);
   useEffect(() => {
     inventoryRef.current = inventory;
   }, [inventory]);

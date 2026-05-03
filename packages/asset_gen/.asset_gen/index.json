@@ -2341,6 +2341,87 @@
         "reasons": []
       },
       "createdAt": "2026-05-03T01:09:52.956Z"
+    },
+    {
+      "assetId": "asset_44b0afcb959b49f6b3f743777a0bcdf1",
+      "cacheKey": "c3c34a3c8520a9cabc68c97c3fcc808cca8a6339005c9d53207cc5c6a156b906",
+      "request": {
+        "requestId": "building:workbench",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "workbench",
+          "label": "workbench",
+          "buildingKind": "workbench"
+        },
+        "visualBrief": {
+          "subject": "player-built workbench",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_44b0afcb959b49f6b3f743777a0bcdf1.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 12,
+          "y": 15,
+          "w": 42,
+          "h": 31
+        },
+        "averageColors": [
+          "#68635f"
+        ]
+      },
+      "family": {
+        "familyId": "family_1342309e2352199aba80",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T02:22:11.647Z"
     }
   ],
   "jobs": [
@@ -3696,6 +3777,59 @@
       "error": null,
       "createdAt": "2026-05-03T01:09:37.956Z",
       "updatedAt": "2026-05-03T01:09:52.957Z"
+    },
+    {
+      "jobId": "job_c1d14b4a2cd14788bc1fd1fcda13cde9",
+      "status": "approved",
+      "cacheKey": "c3c34a3c8520a9cabc68c97c3fcc808cca8a6339005c9d53207cc5c6a156b906",
+      "request": {
+        "requestId": "building:workbench",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "workbench",
+          "label": "workbench",
+          "buildingKind": "workbench"
+        },
+        "visualBrief": {
+          "subject": "player-built workbench",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_44b0afcb959b49f6b3f743777a0bcdf1",
+      "error": null,
+      "createdAt": "2026-05-03T02:21:59.148Z",
+      "updatedAt": "2026-05-03T02:22:11.648Z"
     }
   ]
 }

@@ -320,12 +320,13 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
     init.sendInput(mx, my, sprint);
 
-    // Hold-to-fire while pointer-locked + a weapon equipped. Server gates
-    // by per-weapon fire interval, so it's safe to send every frame; it'll
-    // ignore the dropped requests.
+    // Hold-to-fire while pointer-locked + a weapon equipped. Server
+    // gates by per-weapon fire interval, magazine, and reload state,
+    // so we send every frame and let it drop the noise. The crosshair
+    // flash is driven off projectile_spawned (see spawnProjectile
+    // below) so empty-mag / reloading frames don't flash.
     if (mouseDown && pointerLocked && equippedWeapon !== null) {
       init.sendFire(cy, sy);
-      lastFireFlashAt = performance.now();
     }
   }
 
@@ -1192,6 +1193,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     spawnProjectile(p) {
       projectiles.set(p.id, p);
       projectileSpawnedAt.set(p.id, performance.now());
+      // Crosshair flash mirrors the actual fire — driven off the
+      // server's projectile broadcast, not the local mouse-down.
+      // Cadence matches the real fire rate (per weapon + mods); empty
+      // mag / reloading / no reserve produce no flash.
+      if (
+        p.ownerKind === 'player' &&
+        p.ownerCharacterId === init.self.characterId
+      ) {
+        lastFireFlashAt = performance.now();
+      }
     },
     despawnProjectile(id) {
       projectiles.delete(id);
