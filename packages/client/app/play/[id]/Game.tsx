@@ -165,6 +165,14 @@ export function Game({ serverId }: { serverId: string }) {
   // and the E action when no other interactable / station wins.
   const [nearestDoorId, setNearestDoorId] = useState<string | null>(null);
   const nearestDoorIdRef = useRef<string | null>(null);
+  // Storage chest in range, or null. Stored as id (not just kind) so
+  // we can identify which specific chest the player wants to open
+  // when multiple are placed near each other.
+  const [nearestChestId, setNearestChestId] = useState<string | null>(null);
+  const nearestChestIdRef = useRef<string | null>(null);
+  // Open chest modal target. Null when not viewing any chest.
+  const [chestModalId, setChestModalId] = useState<string | null>(null);
+  const chestModalIdRef = useRef<string | null>(null);
   const [showTradeModal, setShowTradeModal] = useState(false);
   // Refs mirror the modal flags so the global keydown effect (set up with
   // [] deps) reads live values without needing exhaustive deps.
@@ -222,6 +230,7 @@ export function Game({ serverId }: { serverId: string }) {
       all: BuildingKind[];
       nearest: BuildingKind | null;
       nearestDoorId: string | null;
+      nearestChestId: string | null;
     }) => void;
   } | null>(null);
   // Holds the live ws so number-key handlers can send select_hotbar without
@@ -438,7 +447,12 @@ export function Game({ serverId }: { serverId: string }) {
             nearInteractableRef.current = near;
             setNearInteractable(near);
           },
-          onNearWorkstationsChanged: ({ all, nearest, nearestDoorId }) => {
+          onNearWorkstationsChanged: ({
+            all,
+            nearest,
+            nearestDoorId,
+            nearestChestId,
+          }) => {
             const set = new Set(all);
             nearWorkstationsRef.current = set;
             setNearWorkstations(set);
@@ -446,6 +460,8 @@ export function Game({ serverId }: { serverId: string }) {
             setNearestStation(nearest);
             nearestDoorIdRef.current = nearestDoorId;
             setNearestDoorId(nearestDoorId);
+            nearestChestIdRef.current = nearestChestId;
+            setNearestChestId(nearestChestId);
           },
         };
         requestAnimationFrame(() => {
@@ -1022,6 +1038,12 @@ export function Game({ serverId }: { serverId: string }) {
         setShowInventory((s) => !s);
         return;
       }
+      if (e.key === 'Escape' && chestModalIdRef.current) {
+        e.preventDefault();
+        chestModalIdRef.current = null;
+        setChestModalId(null);
+        return;
+      }
       if (e.key === 'Escape') {
         setShowInventory(false);
         setShowTradeModal(false);
@@ -1053,6 +1075,14 @@ export function Game({ serverId }: { serverId: string }) {
         ) {
           setShowTradeModal(false);
           setStationModalKind(nearestKind);
+          return;
+        }
+        if (nearestKind === 'storage_chest') {
+          const chestId = nearestChestIdRef.current;
+          if (chestId) {
+            chestModalIdRef.current = chestId;
+            setChestModalId(chestId);
+          }
           return;
         }
         const doorId = nearestDoorIdRef.current;
@@ -1186,6 +1216,9 @@ export function Game({ serverId }: { serverId: string }) {
               label={`Use — ${STATION_LABEL[nearestStation]}`}
             />
           )}
+        {!nearInteractable && nearestStation === 'storage_chest' && (
+          <InteractPrompt label="Open — Storage" />
+        )}
         {!nearInteractable && nearestStation === null && nearestDoorId && (
           <InteractPrompt
             label={
@@ -1312,6 +1345,38 @@ export function Game({ serverId }: { serverId: string }) {
             }
           />
         )}
+
+        {chestModalId &&
+          (() => {
+            const chest = buildings.get(chestModalId);
+            // Auto-close if the chest stops existing (destroyed) or
+            // the player walks out of range.
+            if (
+              !chest ||
+              chest.kind !== 'storage_chest' ||
+              nearestChestId !== chestModalId
+            ) {
+              setChestModalId(null);
+              return null;
+            }
+            return (
+              <StorageChestModal
+                inventory={inventory}
+                chest={chest}
+                onClose={() => setChestModalId(null)}
+                onMove={(fromKind, fromIdx, toKind, toIdx) =>
+                  sendOnLiveWs({
+                    type: 'storage_move',
+                    buildingId: chestModalId,
+                    fromKind,
+                    fromIdx,
+                    toKind,
+                    toIdx,
+                  })
+                }
+              />
+            );
+          })()}
 
         {slotMenu && (
           <SlotContextMenu
@@ -2920,6 +2985,149 @@ function WeaponEditor({
             ? 'Max Tier'
             : `Tier Up → ${WEAPON_TIER_LABEL[(weapon.tier + 1) as 1 | 2 | 3 | 4] ?? `T${weapon.tier + 1}`}`}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function StorageChestModal({
+  inventory,
+  chest,
+  onClose,
+  onMove,
+}: {
+  inventory: Inventory;
+  chest: BuildingState;
+  onClose: () => void;
+  onMove: (
+    fromKind: 'inventory' | 'chest',
+    fromIdx: number,
+    toKind: 'inventory' | 'chest',
+    toIdx: number
+  ) => void;
+}) {
+  const chestSlots = chest.output ?? [];
+
+  // Find the best landing index on the destination side: first
+  // stack-mergeable slot wins, else first empty slot, else -1.
+  const findTarget = (
+    src: InventorySlot,
+    dst: InventorySlot[]
+  ): number => {
+    if (src.kind === 'empty') return -1;
+    for (let i = 0; i < dst.length; i++) {
+      const d = dst[i];
+      if (
+        (src.kind === 'material' &&
+          d.kind === 'material' &&
+          src.materialId === d.materialId) ||
+        (src.kind === 'ammo' &&
+          d.kind === 'ammo' &&
+          src.ammoId === d.ammoId) ||
+        (src.kind === 'placeable' &&
+          d.kind === 'placeable' &&
+          src.buildingKind === d.buildingKind) ||
+        (src.kind === 'attachment' &&
+          d.kind === 'attachment' &&
+          src.defId === d.defId) ||
+        (src.kind === 'consumable' &&
+          d.kind === 'consumable' &&
+          src.consumableId === d.consumableId)
+      ) {
+        return i;
+      }
+    }
+    for (let i = 0; i < dst.length; i++) {
+      if (dst[i].kind === 'empty') return i;
+    }
+    return -1;
+  };
+
+  const handleClick = (
+    side: 'inventory' | 'chest',
+    idx: number,
+    slot: InventorySlot
+  ) => {
+    if (slot.kind === 'empty') return;
+    const otherSide: 'inventory' | 'chest' =
+      side === 'inventory' ? 'chest' : 'inventory';
+    const target = findTarget(
+      slot,
+      otherSide === 'inventory' ? inventory : chestSlots
+    );
+    if (target === -1) return;
+    onMove(side, idx, otherSide, target);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="w-[720px] max-w-[95vw] bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded-lg shadow-2xl">
+        <header className="flex items-center justify-between px-5 py-3 border-b border-[color:var(--panel-border)]">
+          <div>
+            <h2 className="font-semibold text-zinc-100">Storage</h2>
+            <p className="text-[11px] text-zinc-500">
+              Click a slot to transfer to the other side.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-sm text-zinc-400 hover:text-zinc-200 px-2"
+          >
+            Close [Esc]
+          </button>
+        </header>
+        <div className="grid grid-cols-2 gap-4 p-5">
+          <ChestSlotGrid
+            title="Your inventory"
+            slots={inventory}
+            onClick={(idx, slot) => handleClick('inventory', idx, slot)}
+          />
+          <ChestSlotGrid
+            title="Chest"
+            slots={chestSlots}
+            onClick={(idx, slot) => handleClick('chest', idx, slot)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChestSlotGrid({
+  title,
+  slots,
+  onClick,
+}: {
+  title: string;
+  slots: InventorySlot[];
+  onClick: (idx: number, slot: InventorySlot) => void;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">
+        {title}
+      </div>
+      <div className="grid grid-cols-4 gap-1.5">
+        {slots.map((slot, idx) => {
+          const empty = slot.kind === 'empty';
+          return (
+            <button
+              key={idx}
+              type="button"
+              disabled={empty}
+              onClick={() => onClick(idx, slot)}
+              className={
+                'aspect-square rounded border text-[10px] leading-tight px-1 py-1 text-center break-words ' +
+                (empty
+                  ? 'bg-[color:var(--bg)] border-[color:var(--panel-border)] text-zinc-700 cursor-default'
+                  : 'bg-[color:var(--bg)] border-[color:var(--panel-border)] text-zinc-200 hover:border-[color:var(--accent)]')
+              }
+              title={empty ? 'Empty' : outputSlotLabel(slot)}
+            >
+              {empty ? '' : outputSlotLabel(slot)}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

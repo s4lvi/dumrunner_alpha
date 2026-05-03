@@ -84,6 +84,19 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: null,
     blueprintId: null,
   },
+  storage_chest: {
+    id: 'storage_chest',
+    name: 'Storage Chest',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 15 },
+      { kind: 'material', materialId: 'alloy', count: 4 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'storage_chest', count: 1 },
+    // Hand-craftable — no station required so a brand-new player
+    // can drop one immediately on landing.
+    workstation: null,
+    blueprintId: null,
+  },
 
   // ---- Workbench tier: tier-2 stations + ammo. ----
   forge: {

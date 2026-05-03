@@ -60,6 +60,7 @@ export type GameInit = {
     all: BuildingKind[];
     nearest: BuildingKind | null;
     nearestDoorId: string | null;
+    nearestChestId: string | null;
   }) => void;
   // Optional asset_gen-backed sprite resolver. Renderer asks the host
   // for a PNG url keyed by enemy template id; returning null falls back
@@ -1325,6 +1326,21 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         .moveTo(w * 0.3, h * 0.3)
         .lineTo(w * 0.7, h * 0.7)
         .stroke({ color: 0x10b981, width: 1 });
+    } else if (b.kind === 'storage_chest') {
+      // Storage: brass-banded crate with a single padlock. Reads
+      // distinctly from workstations (no glowing core) at a glance.
+      body.rect(0, 0, w, h).fill({ color: 0x4a3520 });
+      body.rect(0, 0, w, h).stroke({ color: 0x1f1611, width: 2 });
+      body
+        .rect(0, h * 0.2, w, h * 0.08)
+        .fill({ color: 0xa16207 });
+      body
+        .rect(0, h * 0.72, w, h * 0.08)
+        .fill({ color: 0xa16207 });
+      body
+        .rect(w * 0.42, h * 0.4, w * 0.16, h * 0.2)
+        .fill({ color: 0xfbbf24 })
+        .stroke({ color: 0x713f12, width: 1 });
     } else {
       // Wall — chunky gray block with a darker border + hatch lines.
       body.rect(0, 0, w, h).fill({ color: 0x52525b });
@@ -1582,6 +1598,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           all: [],
           nearest: null,
           nearestDoorId: null,
+          nearestChestId: null,
         });
       }
       return;
@@ -1592,6 +1609,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     let nearestDsq = Infinity;
     let nearestDoorId: string | null = null;
     let nearestDoorDsq = Infinity;
+    let nearestChestId: string | null = null;
+    let nearestChestDsq = Infinity;
     for (const rb of buildings.values()) {
       const b = rb.data;
       const cx = (b.tileX + b.width / 2) * tileSize;
@@ -1613,7 +1632,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         b.kind !== 'forge' &&
         b.kind !== 'electronics_bench' &&
         b.kind !== 'weapon_bench' &&
-        b.kind !== 'artifact_uplink'
+        b.kind !== 'artifact_uplink' &&
+        b.kind !== 'storage_chest'
       ) {
         continue;
       }
@@ -1623,6 +1643,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           nearestDsq = dsq;
           nearestKind = b.kind;
         }
+        if (b.kind === 'storage_chest' && dsq < nearestChestDsq) {
+          nearestChestDsq = dsq;
+          nearestChestId = b.id;
+        }
       }
     }
     const key =
@@ -1630,13 +1654,16 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       '|' +
       (nearestKind ?? '') +
       '|' +
-      (nearestDoorId ?? '');
+      (nearestDoorId ?? '') +
+      '|' +
+      (nearestChestId ?? '');
     if (key !== lastWorkstationKey) {
       lastWorkstationKey = key;
       init.onNearWorkstationsChanged({
         all: [...found],
         nearest: nearestKind,
         nearestDoorId,
+        nearestChestId,
       });
     }
   }

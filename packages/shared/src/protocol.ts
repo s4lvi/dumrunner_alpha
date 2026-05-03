@@ -156,7 +156,8 @@ export type BuildingKind =
   | 'weapon_bench'
   | 'artifact_uplink'
   | 'power_link'
-  | 'door';
+  | 'door'
+  | 'storage_chest';
 
 // Subset of BuildingKind that acts as a crafting workstation. Recipes can
 // require the player to be in range of one of these to craft.
@@ -301,6 +302,7 @@ const BuildingKindSchema = z.enum([
   'artifact_uplink',
   'power_link',
   'door',
+  'storage_chest',
 ]);
 
 export const BuildRequestMsgSchema = z.object({
@@ -500,6 +502,20 @@ export const PauseServerMsgSchema = z.object({
   type: z.literal('pause_server'),
 });
 
+// Move an inventory slot ↔ storage-chest slot. Either side may be
+// 'inventory' or 'chest'; the server validates proximity to the
+// chest and that both slots are within bounds, then swaps them.
+// Stack-merging (same material id) consolidates count where
+// possible; otherwise the slots simply trade.
+export const StorageMoveMsgSchema = z.object({
+  type: z.literal('storage_move'),
+  buildingId: z.string().min(1).max(64),
+  fromKind: z.enum(['inventory', 'chest']),
+  fromIdx: z.number().int().nonnegative(),
+  toKind: z.enum(['inventory', 'chest']),
+  toIdx: z.number().int().nonnegative(),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMsgSchema,
   InputMsgSchema,
@@ -529,6 +545,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   ReloadWeaponMsgSchema,
   ChatMsgSchema,
   PauseServerMsgSchema,
+  StorageMoveMsgSchema,
 ]);
 
 
@@ -708,4 +725,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 28;
+export const PROTOCOL_VERSION = 29;

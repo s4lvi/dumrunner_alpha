@@ -1212,6 +1212,69 @@ export function consumeAmmo(
 
 // Move/merge from one slot to another. Same-kind same-id stackables merge;
 // otherwise the two slots are swapped. Returns true if anything changed.
+// Generic two-array slot swap with stack-merging. Used for inventory ↔
+// storage chest moves; same merge rules as swapSlots within one inv.
+// Returns true if anything changed.
+export function swapSlotsBetween(
+  src: InventorySlot[],
+  srcIdx: number,
+  dst: InventorySlot[],
+  dstIdx: number
+): boolean {
+  if (src === dst && srcIdx === dstIdx) return false;
+  if (
+    srcIdx < 0 ||
+    dstIdx < 0 ||
+    srcIdx >= src.length ||
+    dstIdx >= dst.length
+  ) {
+    return false;
+  }
+  const a = src[srcIdx];
+  const b = dst[dstIdx];
+
+  if (
+    a.kind === 'material' &&
+    b.kind === 'material' &&
+    a.materialId === b.materialId
+  ) {
+    b.count += a.count;
+    src[srcIdx] = { kind: 'empty' };
+    return true;
+  }
+  if (a.kind === 'ammo' && b.kind === 'ammo' && a.ammoId === b.ammoId) {
+    b.count += a.count;
+    src[srcIdx] = { kind: 'empty' };
+    return true;
+  }
+  if (
+    a.kind === 'placeable' &&
+    b.kind === 'placeable' &&
+    a.buildingKind === b.buildingKind
+  ) {
+    b.count += a.count;
+    src[srcIdx] = { kind: 'empty' };
+    return true;
+  }
+  if (a.kind === 'attachment' && b.kind === 'attachment' && a.defId === b.defId) {
+    b.count += a.count;
+    src[srcIdx] = { kind: 'empty' };
+    return true;
+  }
+  if (
+    a.kind === 'consumable' &&
+    b.kind === 'consumable' &&
+    a.consumableId === b.consumableId
+  ) {
+    b.count += a.count;
+    src[srcIdx] = { kind: 'empty' };
+    return true;
+  }
+  src[srcIdx] = b;
+  dst[dstIdx] = a;
+  return true;
+}
+
 export function swapSlots(inv: Inventory, from: number, to: number): boolean {
   if (from === to) return false;
   if (from < 0 || to < 0 || from >= inv.length || to >= inv.length) return false;

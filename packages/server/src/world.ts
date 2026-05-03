@@ -792,6 +792,29 @@ export class World {
     conn.hotbarSelection = slot;
   }
 
+  handleStorageMove(
+    characterId: string,
+    buildingId: string,
+    fromKind: 'inventory' | 'chest',
+    fromIdx: number,
+    toKind: 'inventory' | 'chest',
+    toIdx: number
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (!surface) return;
+    surface.handleStorageMove(
+      conn,
+      buildingId,
+      fromKind,
+      fromIdx,
+      toKind,
+      toIdx
+    );
+  }
+
   handleInventorySwap(characterId: string, from: number, to: number): void {
     const conn = this.connections.get(characterId);
     if (!conn) return;

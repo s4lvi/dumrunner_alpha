@@ -42,6 +42,7 @@ import {
   consumePlaceable,
   countAmmo,
   isStationKind,
+  swapSlotsBetween,
   weaponFamily,
 } from '@dumrunner/shared';
 import {
@@ -170,9 +171,26 @@ type BuildingRuntime = BuildingState & {
 // Output slot count per station. Stack-merging means materials and
 // placeables collapse, so 8 is generous.
 const STATION_OUTPUT_SLOTS = 8;
+// Storage chests get a bigger grid since they're meant to hold a
+// crew's stockpile across cycles.
+const STORAGE_CHEST_SLOTS = 16;
 
 function emptyOutputBuffer(): import('@dumrunner/shared').InventorySlot[] {
   return Array.from({ length: STATION_OUTPUT_SLOTS }, () => ({ kind: 'empty' as const }));
+}
+
+function emptyChestBuffer(): import('@dumrunner/shared').InventorySlot[] {
+  return Array.from({ length: STORAGE_CHEST_SLOTS }, () => ({
+    kind: 'empty' as const,
+  }));
+}
+
+function emptyBufferForKind(
+  kind: import('@dumrunner/shared').BuildingKind
+): import('@dumrunner/shared').InventorySlot[] {
+  if (kind === 'storage_chest') return emptyChestBuffer();
+  if (isStationKind(kind)) return emptyOutputBuffer();
+  return [];
 }
 
 const CORPSE_PICKUP_RADIUS = COMBAT.LOOT_PICKUP_RADIUS;
@@ -221,6 +239,10 @@ export type SceneSnapshot = {
     height: number;
     hp: number;
     maxHp: number;
+    // Persisted only for chests; station output buffers reset on
+    // hydrate. Optional for backwards compatibility with snapshots
+    // written before storage chests existed.
+    output?: import('@dumrunner/shared').InventorySlot[];
   }>;
   nextEnemyId: number;
   nextProjectileId: number;
@@ -435,10 +457,19 @@ export class Scene {
     this.buildings.clear();
     if (snap.buildings) {
       for (const saved of snap.buildings) {
+        // Storage chests persist contents across sessions; station
+        // output buffers reset (the assumption is that whoever was
+        // crafting picked up before the world idle-shut-down).
+        const restoredOutput =
+          saved.kind === 'storage_chest' &&
+          Array.isArray(saved.output) &&
+          saved.output.length > 0
+            ? saved.output
+            : emptyBufferForKind(saved.kind);
         this.buildings.set(saved.id, {
           ...saved,
           lastFireAt: 0,
-          output: isStationKind(saved.kind) ? emptyOutputBuffer() : [],
+          output: restoredOutput,
         });
       }
     }
@@ -570,7 +601,7 @@ export class Scene {
       hp: maxHp,
       maxHp,
       lastFireAt: 0,
-      output: isStationKind(kind) ? emptyOutputBuffer() : [],
+      output: emptyBufferForKind(kind),
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
@@ -1324,6 +1355,49 @@ export class Scene {
   // materials/ammo/placeables of the same id; falls back to the first
   // empty slot. Returns true on success, false if the buffer is full.
   // Caller is responsible for falling back to player inventory.
+  // Inventory ↔ storage chest move. Validates the chest exists, is a
+  // chest, the player is in range, and both slot indices are sane,
+  // then swaps the slots (with stack-merge) and broadcasts the
+  // updated chest state. Inventory diff goes only to the moving
+  // player.
+  handleStorageMove(
+    conn: SceneConnection,
+    buildingId: string,
+    fromKind: 'inventory' | 'chest',
+    fromIdx: number,
+    toKind: 'inventory' | 'chest',
+    toIdx: number
+  ): boolean {
+    const b = this.buildings.get(buildingId);
+    if (!b || b.kind !== 'storage_chest') return false;
+    // Range gate — same radius as crafting interactions.
+    const tileSize = this.layout?.tileSize ?? 0;
+    if (tileSize <= 0) return false;
+    const cx = (b.tileX + b.width / 2) * tileSize;
+    const cy = (b.tileY + b.height / 2) * tileSize;
+    const dx = cx - conn.x;
+    const dy = cy - conn.y;
+    if (dx * dx + dy * dy > COMBAT.CRAFT_STATION_RANGE_PX * COMBAT.CRAFT_STATION_RANGE_PX) {
+      return false;
+    }
+
+    const src = fromKind === 'inventory' ? conn.inventory : b.output;
+    const dst = toKind === 'inventory' ? conn.inventory : b.output;
+    const changed = swapSlotsBetween(src, fromIdx, dst, toIdx);
+    if (!changed) return false;
+
+    // Push diffs.
+    if (fromKind === 'inventory' || toKind === 'inventory') {
+      conn.inventoryDirty = true;
+      this.bindings.send(conn.characterId, {
+        type: 'inventory_changed',
+        inventory: conn.inventory,
+      });
+    }
+    this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
+    return true;
+  }
+
   depositToStationOutput(
     stationId: string,
     output: import('@dumrunner/shared').InventorySlot

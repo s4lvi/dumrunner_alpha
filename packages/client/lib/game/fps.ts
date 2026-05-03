@@ -397,6 +397,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           all: [],
           nearest: null,
           nearestDoorId: null,
+          nearestChestId: null,
         });
       }
       return;
@@ -408,6 +409,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     let nearestDsq = Infinity;
     let nearestDoorId: string | null = null;
     let nearestDoorDsq = Infinity;
+    let nearestChestId: string | null = null;
+    let nearestChestDsq = Infinity;
     for (const b of buildings.values()) {
       const cx = (b.tileX + b.width / 2) * tileSize;
       const cy = (b.tileY + b.height / 2) * tileSize;
@@ -428,7 +431,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         b.kind !== 'forge' &&
         b.kind !== 'electronics_bench' &&
         b.kind !== 'weapon_bench' &&
-        b.kind !== 'artifact_uplink'
+        b.kind !== 'artifact_uplink' &&
+        b.kind !== 'storage_chest'
       ) {
         continue;
       }
@@ -438,6 +442,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           nearestDsq = dsq;
           nearestKind = b.kind;
         }
+        if (b.kind === 'storage_chest' && dsq < nearestChestDsq) {
+          nearestChestDsq = dsq;
+          nearestChestId = b.id;
+        }
       }
     }
     const key =
@@ -445,13 +453,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       '|' +
       (nearestKind ?? '') +
       '|' +
-      (nearestDoorId ?? '');
+      (nearestDoorId ?? '') +
+      '|' +
+      (nearestChestId ?? '');
     if (key !== lastStationKey) {
       lastStationKey = key;
       init.onNearWorkstationsChanged({
         all: [...found],
         nearest: nearestKind,
         nearestDoorId,
+        nearestChestId,
       });
     }
   }

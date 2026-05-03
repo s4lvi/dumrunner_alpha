@@ -76,6 +76,15 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
   pause_server: (w, c) => {
     void w.handlePauseServer(c);
   },
+  storage_move: (w, c, m) =>
+    w.handleStorageMove(
+      c,
+      m.buildingId,
+      m.fromKind,
+      m.fromIdx,
+      m.toKind,
+      m.toIdx
+    ),
 };
 
 const wss = new WebSocketServer({ port: env.port, host: env.host });

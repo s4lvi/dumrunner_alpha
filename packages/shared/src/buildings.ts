@@ -127,6 +127,17 @@ export const BUILDING_REGISTRY: Record<BuildingKind, BuildingDef> = {
     isStation: false,
     isWorkstation: false,
   },
+  // Persistent shared inventory bucket. Contents survive perihelion
+  // and process restarts via the world snapshot. UX-side it opens a
+  // modal (counts as a station for hover/interact purposes) but
+  // hosts no recipes.
+  storage_chest: {
+    label: 'Storage',
+    maxHp: 250,
+    hordePriority: 20,
+    isStation: true,
+    isWorkstation: false,
+  },
 };
 
 // Convenient ordered list of every kind, e.g. for prewarm callers
