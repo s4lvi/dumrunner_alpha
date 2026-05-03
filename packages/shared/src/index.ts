@@ -8,3 +8,4 @@ export * from './crafting';
 export * from './buildings';
 export * from './visuals';
 export * from './itemNames';
+export * from './weaponStats';

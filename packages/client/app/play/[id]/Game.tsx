@@ -14,17 +14,18 @@ import {
   blueprintDisplayName,
   BUILDING_REGISTRY,
   CONSUMABLES,
+  effectiveWeaponStats,
   HOTBAR_SIZE,
   partDisplayName,
   TIER_COLORS_HEX,
   WEAPON_FAMILY,
+  type WeaponItem,
   KEY_ARTIFACT_COST,
   listBlueprints,
   listRecipes,
   MATERIALS,
   TIER_PIECE_SLOTS,
   TIER_MOD_SLOTS,
-  type WeaponItem,
   type WeaponPieceKind,
   partPrimaryStat,
   PLAYER_BASE_STATS,
@@ -3261,10 +3262,52 @@ const DRAG_MIME = 'application/x-dumrunner-slot';
 // Native-title hover tooltip describing what's in the slot. Suit parts
 // expand into the stat bonuses they'd grant if equipped, so the player
 // can compare an Mk2 chassis on the ground vs. their Mk1 in the suit.
+// Multi-line stat block for the equipped/inventory weapon. Mirrors
+// what server combat actually does at fire time (effectiveWeaponStats
+// applies mods + piece affixes), so the player sees real numbers — not
+// the base-class baseline. Knife / melee returns a short label.
+function weaponTooltip(weapon: WeaponItem): string {
+  const tier = `T${weapon.tier}`;
+  const id = weapon.weaponId;
+  const stats = effectiveWeaponStats(weapon);
+  if (!stats) return `${tier} ${id}`;
+  const lines: string[] = [`${tier} ${id}`];
+  const mag = weapon.magazineRemaining ?? stats.magazineSize;
+  lines.push(`Damage:        ${stats.damage.toFixed(1)}`);
+  if (stats.pelletCount > 1) {
+    lines.push(
+      `  ${stats.pelletCount} pellets · ${(stats.damage * stats.pelletCount).toFixed(0)} burst`
+    );
+  }
+  lines.push(`Fire rate:     ${stats.shotsPerSecond.toFixed(2)}/s`);
+  const inaccDeg = (stats.inaccuracyHalfRad * 180) / Math.PI;
+  lines.push(
+    `Accuracy:      ${(stats.accuracy * 100).toFixed(0)}%  (±${inaccDeg.toFixed(1)}°)`
+  );
+  lines.push(`Magazine:      ${mag} / ${stats.magazineSize}`);
+  lines.push(`Reload:        ${(stats.reloadMs / 1000).toFixed(2)}s`);
+  lines.push(`Ammo:          ${stats.ammoKind.replace(/_/g, ' ')}`);
+  // Piece affixes + mods. Surface what's attached so the tooltip is
+  // self-contained — no need to open the weapon bench to remember.
+  const piecesAttached: string[] = [];
+  for (const [piece, attachment] of Object.entries(weapon.pieces)) {
+    if (!attachment) continue;
+    piecesAttached.push(`${piece}: ${attachmentDisplayName(attachment.id)}`);
+  }
+  if (piecesAttached.length > 0) {
+    lines.push('— Affixes —');
+    for (const p of piecesAttached) lines.push(p);
+  }
+  if (weapon.mods.length > 0) {
+    lines.push('— Mods —');
+    for (const m of weapon.mods) lines.push(attachmentDisplayName(m.id));
+  }
+  return lines.join('\n');
+}
+
 function slotTooltip(slot: InventorySlot): string | undefined {
   if (slot.kind === 'empty') return undefined;
-  if (slot.kind === 'weapon')
-    return `T${slot.weapon.tier} ${slot.weapon.weaponId}`;
+  if (slot.kind === 'weapon') return weaponTooltip(slot.weapon);
   if (slot.kind === 'material') {
     const def = MATERIALS[slot.materialId];
     return `${def?.name ?? slot.materialId} ×${slot.count}`;
