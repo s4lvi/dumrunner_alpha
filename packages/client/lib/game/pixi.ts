@@ -586,18 +586,44 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       selfP.container.alpha = selfAlive ? 1 : 0.35;
     }
 
-    // Interpolate remote players and enemies toward their last broadcast pos.
+    // Interpolate remote players and enemies toward their last broadcast
+    // pos. Two important rules:
+    //  - Always lerp, even when container.visible is false. Skipping hidden
+    //    entities used to freeze data.x/y at a stale value, which the
+    //    visibility scan then read in the next frame — keeping the entity
+    //    hidden indefinitely while the server kept moving it. Coming back
+    //    into LoS produced a visible rubber-band as the lerp finally
+    //    caught up.
+    //  - On large server-to-render deltas (>SNAP_DIST_PX) snap instead of
+    //    lerping. This avoids the slow slide when the server has moved an
+    //    entity far in one or two ticks (e.g. a hidden enemy aggro'd and
+    //    chased the player around a corner before any frames showed it).
     const lerp = Math.min(1, dt * 12);
+    const SNAP_DIST_PX = 80;
+    const snapDsq = SNAP_DIST_PX * SNAP_DIST_PX;
     for (const [id, p] of players) {
       if (id === init.self.characterId) continue;
-      p.data.x = p.data.x + (p.targetX - p.data.x) * lerp;
-      p.data.y = p.data.y + (p.targetY - p.data.y) * lerp;
+      const dx = p.targetX - p.data.x;
+      const dy = p.targetY - p.data.y;
+      if (dx * dx + dy * dy > snapDsq) {
+        p.data.x = p.targetX;
+        p.data.y = p.targetY;
+      } else {
+        p.data.x += dx * lerp;
+        p.data.y += dy * lerp;
+      }
       p.container.position.set(p.data.x, p.data.y);
     }
     for (const e of enemies.values()) {
-      if (!e.container.visible) continue;
-      e.data.x = e.data.x + (e.targetX - e.data.x) * lerp;
-      e.data.y = e.data.y + (e.targetY - e.data.y) * lerp;
+      const dx = e.targetX - e.data.x;
+      const dy = e.targetY - e.data.y;
+      if (dx * dx + dy * dy > snapDsq) {
+        e.data.x = e.targetX;
+        e.data.y = e.targetY;
+      } else {
+        e.data.x += dx * lerp;
+        e.data.y += dy * lerp;
+      }
       e.container.position.set(e.data.x, e.data.y);
     }
 
@@ -1730,16 +1756,21 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const see = (x: number, y: number) =>
       segmentInsideWalkables(walkables, selfX, selfY, x, y);
 
+    // Visibility uses the server-authoritative target position rather
+    // than the interpolated render position — otherwise a stale
+    // data.x/y (still lerping toward the real spot) would keep the
+    // entity hidden after the server moved it into LoS, and you'd be
+    // shot by an "invisible" enemy until the render caught up.
     for (const [id, p] of players) {
       if (id === init.self.characterId) {
         p.container.visible = true;
         continue;
       }
-      p.container.visible = see(p.data.x, p.data.y);
+      p.container.visible = see(p.targetX, p.targetY);
     }
     for (const e of enemies.values()) {
       if (e.data.hp <= 0) continue; // already hidden by death handler
-      e.container.visible = see(e.data.x, e.data.y);
+      e.container.visible = see(e.targetX, e.targetY);
     }
     for (const pr of projectiles.values()) {
       // Use the graphic's actual position (extrapolated) rather than spawn pos.

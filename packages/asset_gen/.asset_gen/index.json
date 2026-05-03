@@ -2107,6 +2107,240 @@
         "reasons": []
       },
       "createdAt": "2026-05-02T22:50:11.281Z"
+    },
+    {
+      "assetId": "asset_eb7b226160e24d75a96ae21d693fe1e0",
+      "cacheKey": "e7b73170bd2cbb81e82e842f14309da41cb475db1b22a31ff9b352d7bc7cbb58",
+      "request": {
+        "requestId": "material:key",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "key",
+          "label": "Key",
+          "materialId": "key"
+        },
+        "visualBrief": {
+          "subject": "Key",
+          "materials": [
+            "key"
+          ],
+          "colors": [
+            "#facc15",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_eb7b226160e24d75a96ae21d693fe1e0.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 13,
+          "y": 13,
+          "w": 38,
+          "h": 36
+        },
+        "averageColors": [
+          "#b39532"
+        ]
+      },
+      "family": {
+        "familyId": "family_9bc7e6bf8b6f15cbd51c",
+        "variantType": "icon",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated material asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T01:09:17.690Z"
+    },
+    {
+      "assetId": "asset_7e5da9ec143d433da3f089873e622b1e",
+      "cacheKey": "72ac460a93b6c86d535f683c72c1cbd29c7812109049d8b4fad16ca41281c79f",
+      "request": {
+        "requestId": "material:biotic",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "biotic",
+          "label": "Biotic Tissue",
+          "materialId": "biotic"
+        },
+        "visualBrief": {
+          "subject": "Biotic Tissue",
+          "materials": [
+            "biotic tissue"
+          ],
+          "colors": [
+            "#a855f7",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_7e5da9ec143d433da3f089873e622b1e.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 11,
+          "y": 15,
+          "w": 42,
+          "h": 34
+        },
+        "averageColors": [
+          "#852979"
+        ]
+      },
+      "family": {
+        "familyId": "family_030cfe35e821f312b068",
+        "variantType": "icon",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated material asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T01:09:41.839Z"
+    },
+    {
+      "assetId": "asset_6a9b04aa0ca340ddad344624022a367e",
+      "cacheKey": "e02a2fae5a1c3b826e1da5bda35cd5ff55f52fb93e70a1755c558622d85b5f0b",
+      "request": {
+        "requestId": "material:wire",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "wire",
+          "label": "Wire",
+          "materialId": "wire"
+        },
+        "visualBrief": {
+          "subject": "Wire",
+          "materials": [
+            "wire"
+          ],
+          "colors": [
+            "#eab308",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_6a9b04aa0ca340ddad344624022a367e.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 12,
+          "y": 16,
+          "w": 41,
+          "h": 32
+        },
+        "averageColors": [
+          "#3b3834"
+        ]
+      },
+      "family": {
+        "familyId": "family_cabd3914198638dc36e7",
+        "variantType": "icon",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated material asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T01:09:52.956Z"
     }
   ],
   "jobs": [
@@ -3312,6 +3546,156 @@
       "error": null,
       "createdAt": "2026-05-02T22:49:59.829Z",
       "updatedAt": "2026-05-02T22:50:11.284Z"
+    },
+    {
+      "jobId": "job_d672f3d8974a4e2fb4ad42a8a4a3b9be",
+      "status": "approved",
+      "cacheKey": "e7b73170bd2cbb81e82e842f14309da41cb475db1b22a31ff9b352d7bc7cbb58",
+      "request": {
+        "requestId": "material:key",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "key",
+          "label": "Key",
+          "materialId": "key"
+        },
+        "visualBrief": {
+          "subject": "Key",
+          "materials": [
+            "key"
+          ],
+          "colors": [
+            "#facc15",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_eb7b226160e24d75a96ae21d693fe1e0",
+      "error": null,
+      "createdAt": "2026-05-03T01:09:04.875Z",
+      "updatedAt": "2026-05-03T01:09:17.691Z"
+    },
+    {
+      "jobId": "job_7c0463eb90ee4efda88e63c30bc5c8e2",
+      "status": "approved",
+      "cacheKey": "72ac460a93b6c86d535f683c72c1cbd29c7812109049d8b4fad16ca41281c79f",
+      "request": {
+        "requestId": "material:biotic",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "biotic",
+          "label": "Biotic Tissue",
+          "materialId": "biotic"
+        },
+        "visualBrief": {
+          "subject": "Biotic Tissue",
+          "materials": [
+            "biotic tissue"
+          ],
+          "colors": [
+            "#a855f7",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_7e5da9ec143d433da3f089873e622b1e",
+      "error": null,
+      "createdAt": "2026-05-03T01:09:29.363Z",
+      "updatedAt": "2026-05-03T01:09:41.840Z"
+    },
+    {
+      "jobId": "job_d2b3ad57826b49acb189aab66f690a23",
+      "status": "approved",
+      "cacheKey": "e02a2fae5a1c3b826e1da5bda35cd5ff55f52fb93e70a1755c558622d85b5f0b",
+      "request": {
+        "requestId": "material:wire",
+        "assetKind": "material",
+        "renderTarget": "inventory_icon",
+        "size": 64,
+        "style": {
+          "camera": "three_quarter",
+          "renderStyle": "clean_icon",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "wire",
+          "label": "Wire",
+          "materialId": "wire"
+        },
+        "visualBrief": {
+          "subject": "Wire",
+          "materials": [
+            "wire"
+          ],
+          "colors": [
+            "#eab308",
+            "#111827"
+          ],
+          "mustInclude": [
+            "small stackable pickup icon"
+          ],
+          "mustAvoid": [
+            "text",
+            "coin",
+            "large crate"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 5,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.82,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_6a9b04aa0ca340ddad344624022a367e",
+      "error": null,
+      "createdAt": "2026-05-03T01:09:37.956Z",
+      "updatedAt": "2026-05-03T01:09:52.957Z"
     }
   ]
 }
