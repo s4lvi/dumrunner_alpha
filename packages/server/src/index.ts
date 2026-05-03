@@ -73,6 +73,9 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
   use_consumable: (w, c, m) => w.handleUseConsumable(c, m.slot),
   reload_weapon: (w, c) => w.handleReloadWeapon(c),
   chat: (w, c, m) => w.handleChat(c, m.text),
+  pause_server: (w, c) => {
+    void w.handlePauseServer(c);
+  },
 };
 
 const wss = new WebSocketServer({ port: env.port, host: env.host });

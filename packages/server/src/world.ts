@@ -226,6 +226,12 @@ export class World {
     daysPerCycle: 3,
     dropItemsOnDeath: true,
   };
+  // Owner accountId from the servers row. Pause is gated to this id.
+  private ownerAccountId: string | null = null;
+  // Last poll of `servers.is_paused`. Used to detect lobby-side pauses
+  // when the owner isn't connected (poll runs every PAUSE_POLL_MS).
+  private lastPauseCheckAt = 0;
+  private pausing = false;
   // Deepest dungeon floor any crewmate has reached this cycle. Drives the
   // surface Power Link's descent target and (Phase 3) the power capacity.
   // Resets to 1 on cycle reset OR Power Link destruction.
@@ -298,9 +304,12 @@ export class World {
     {
       const { data: serverRow } = await supabase
         .from('servers')
-        .select('world_seed, day_duration_sec, days_per_cycle, drop_items_on_death')
+        .select(
+          'world_seed, day_duration_sec, days_per_cycle, drop_items_on_death, owner_id'
+        )
         .eq('id', this.serverId)
         .maybeSingle();
+      this.ownerAccountId = serverRow?.owner_id ?? null;
       const seedRaw =
         serverRow?.world_seed != null ? Number(serverRow.world_seed) : NaN;
       this.worldSeed = Number.isFinite(seedRaw)
@@ -1504,6 +1513,7 @@ export class World {
 
     this.tickHordeClock(now);
     this.tickCraftJobs(now);
+    void this.checkPausedFlag(now);
 
     for (const scene of this.scenes.values()) {
       scene.tick(dt, now);
@@ -1768,6 +1778,78 @@ export class World {
     });
   }
   private lastChatAt = new Map<string, number>();
+
+  // Owner-only pause flow. Persists state, broadcasts to every
+  // connection, closes them, marks the DB row paused, and stops
+  // tick/persist timers. Lobby-side join from the owner flips
+  // is_paused back to false; non-owner joins are rejected.
+  async handlePauseServer(characterId: string): Promise<void> {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (this.ownerAccountId === null || conn.accountId !== this.ownerAccountId) {
+      this.sendDirect(conn.ws, { type: 'error', message: 'pause_owner_only' });
+      return;
+    }
+    await this.pauseAndKick({ markDb: true });
+  }
+
+  // Shared core for both owner-initiated pause and the DB poll path.
+  // markDb=false means the DB flag is already set (poll detected it),
+  // so we just kick and exit.
+  private async pauseAndKick(opts: { markDb: boolean }): Promise<void> {
+    if (this.pausing) return;
+    this.pausing = true;
+    console.log(
+      `[world ${this.serverId}] pausing — kicking ${this.connections.size} connection(s)`
+    );
+    if (opts.markDb) {
+      const { error } = await supabase
+        .from('servers')
+        .update({ is_paused: true })
+        .eq('id', this.serverId);
+      if (error) {
+        console.error(
+          `[world ${this.serverId}] pause: db update failed`,
+          error.message
+        );
+      }
+    }
+    // Persist everyone's character + world snapshot before kicking.
+    await this.flushConnections();
+    // Tell each connection it's been paused so the client can
+    // route back to the lobby with a useful message; close right
+    // after.
+    const conns = [...this.connections.values()];
+    for (const c of conns) {
+      this.sendDirect(c.ws, { type: 'server_paused' });
+    }
+    for (const c of conns) {
+      try {
+        c.ws.close(4090, 'server_paused');
+      } catch {
+        // ignore
+      }
+    }
+    this.connections.clear();
+    this.stopTimers();
+  }
+
+  // Polls servers.is_paused so a lobby pause (owner not connected,
+  // or kicked from a different surface) still kicks anyone here.
+  private async checkPausedFlag(now: number): Promise<void> {
+    if (this.pausing) return;
+    if (now - this.lastPauseCheckAt < 5_000) return;
+    this.lastPauseCheckAt = now;
+    const { data, error } = await supabase
+      .from('servers')
+      .select('is_paused')
+      .eq('id', this.serverId)
+      .maybeSingle();
+    if (error || !data) return;
+    if (data.is_paused) {
+      await this.pauseAndKick({ markDb: false });
+    }
+  }
 
   // Called by Scene whenever a player dies. Posts a system chat line
   // and lets the world do any cross-scene bookkeeping in one place.

@@ -56,6 +56,7 @@ type JoinResponse = {
   token: string;
   characterId: string;
   displayName: string;
+  isOwner: boolean;
 };
 
 type Status =
@@ -553,6 +554,15 @@ export function Game({ serverId }: { serverId: string }) {
           msg.dirX,
           msg.dirY
         );
+        break;
+      case 'server_paused':
+        // Owner triggered a pause. Server will close the WS right
+        // after this message; we just route the user back to the
+        // lobby with a friendly status.
+        setStatus({
+          kind: 'error',
+          message: 'Server paused by owner. Owner can resume from the server browser.',
+        });
         break;
       case 'chat': {
         const entry: ChatEntry = {
@@ -1098,19 +1108,38 @@ export function Game({ serverId }: { serverId: string }) {
         <Link href="/servers" className="text-sm text-zinc-400">
           ← Servers
         </Link>
-        <div className="text-sm text-zinc-400">
-          server {serverId.slice(0, 8)}…
-          {' • '}
-          {status.kind === 'connected' && (
-            <span className="text-emerald-400">connected</span>
+        <div className="flex items-center gap-3">
+          {status.kind === 'connected' && status.resp.isOwner && (
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  confirm(
+                    'Pause the server? Everyone will be kicked and progress is saved.'
+                  )
+                ) {
+                  sendOnLiveWs({ type: 'pause_server' });
+                }
+              }}
+              className="px-3 py-1.5 rounded text-xs border border-amber-900 text-amber-300 hover:bg-amber-900/20"
+            >
+              Pause Server
+            </button>
           )}
-          {status.kind === 'connecting' && <span>connecting…</span>}
-          {status.kind === 'joining' && <span>joining…</span>}
-          {status.kind === 'idle' && <span>idle</span>}
-          {status.kind === 'password_required' && <span>password required</span>}
-          {status.kind === 'error' && (
-            <span className="text-red-400">error: {status.message}</span>
-          )}
+          <div className="text-sm text-zinc-400">
+            server {serverId.slice(0, 8)}…
+            {' • '}
+            {status.kind === 'connected' && (
+              <span className="text-emerald-400">connected</span>
+            )}
+            {status.kind === 'connecting' && <span>connecting…</span>}
+            {status.kind === 'joining' && <span>joining…</span>}
+            {status.kind === 'idle' && <span>idle</span>}
+            {status.kind === 'password_required' && <span>password required</span>}
+            {status.kind === 'error' && (
+              <span className="text-red-400">error: {status.message}</span>
+            )}
+          </div>
         </div>
       </header>
 

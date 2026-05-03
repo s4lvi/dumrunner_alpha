@@ -4,6 +4,7 @@ import { supabaseServer } from '@/lib/supabase/server';
 import { AppNav } from '@/app/components/AppNav';
 import { JoinByIdForm } from './JoinByIdForm';
 import { DeleteServerButton } from './DeleteServerButton';
+import { ResumeServerButton } from './ResumeServerButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +16,7 @@ type ServerRow = {
   owner_id: string;
   created_at: string;
   has_password: boolean;
+  is_paused: boolean;
 };
 
 export default async function ServersPage() {
@@ -28,7 +30,9 @@ export default async function ServersPage() {
   // 0003_servers_public_view.sql.
   const { data: servers } = await supabase
     .from('servers_public')
-    .select('id, name, visibility, max_slots, owner_id, created_at, has_password')
+    .select(
+      'id, name, visibility, max_slots, owner_id, created_at, has_password, is_paused'
+    )
     .order('created_at', { ascending: false });
 
   const list = (servers ?? []) as ServerRow[];
@@ -99,6 +103,7 @@ function ServerRowCard({
 }) {
   const locked = server.has_password;
   const isOwner = server.owner_id === currentUserId;
+  const paused = server.is_paused;
   return (
     <li className="flex items-center justify-between bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded px-4 py-3">
       <div>
@@ -109,19 +114,27 @@ function ServerRowCard({
           {isOwner && (
             <span className="text-xs text-[color:var(--accent)]">[owner]</span>
           )}
+          {paused && <span className="text-xs text-amber-400">[paused]</span>}
         </div>
         <div className="text-xs text-zinc-500">
           slots: {server.max_slots} • id: {server.id.slice(0, 8)}…
         </div>
       </div>
       <div className="flex items-center gap-2">
+        {isOwner && paused && <ResumeServerButton serverId={server.id} />}
         {isOwner && <DeleteServerButton serverId={server.id} />}
-        <Link
-          href={`/play/${server.id}`}
-          className="px-4 py-2 rounded border border-[color:var(--panel-border)] hover:bg-[color:var(--bg)]"
-        >
-          Join
-        </Link>
+        {paused && !isOwner ? (
+          <span className="px-4 py-2 rounded border border-[color:var(--panel-border)] text-zinc-500 text-sm">
+            Paused
+          </span>
+        ) : (
+          <Link
+            href={`/play/${server.id}`}
+            className="px-4 py-2 rounded border border-[color:var(--panel-border)] hover:bg-[color:var(--bg)]"
+          >
+            {paused && isOwner ? 'Resume' : 'Join'}
+          </Link>
+        )}
       </div>
     </li>
   );

@@ -483,6 +483,14 @@ export const ReloadWeaponMsgSchema = z.object({
   type: z.literal('reload_weapon'),
 });
 
+// Owner-only: pause the server. Server validates the requester is
+// the owner, persists state, broadcasts 'server_paused' to all
+// connections, closes them, and exits. Lobby browser shows the
+// server with a Resume button until the owner rejoins.
+export const PauseServerMsgSchema = z.object({
+  type: z.literal('pause_server'),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMsgSchema,
   InputMsgSchema,
@@ -511,6 +519,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   UseConsumableMsgSchema,
   ReloadWeaponMsgSchema,
   ChatMsgSchema,
+  PauseServerMsgSchema,
 ]);
 
 
@@ -679,8 +688,15 @@ export type ServerMessage =
       text: string;
       ts: number;
     }
+  | {
+      // Server has been paused by the owner. Clients should
+      // disconnect, optionally surface a "paused by owner" toast,
+      // and route back to the lobby. The actual ws close follows
+      // immediately so this is mostly cosmetic.
+      type: 'server_paused';
+    }
   | { type: 'error'; message: string };
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 27;
+export const PROTOCOL_VERSION = 28;

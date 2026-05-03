@@ -52,11 +52,31 @@ export async function POST(
   const admin = supabaseAdmin();
   const { data: server, error: serverErr } = await admin
     .from('servers')
-    .select('id, password_hash, max_slots, owner_id')
+    .select('id, password_hash, max_slots, owner_id, is_paused')
     .eq('id', serverId)
     .single();
   if (serverErr || !server) {
     return NextResponse.json({ error: 'server_not_found' }, { status: 404 });
+  }
+
+  // Pause gate. Owner rejoining auto-resumes; everyone else is
+  // rejected until the owner unpauses (either by joining or via
+  // /api/servers/[id]/resume).
+  if (server.is_paused) {
+    if (server.owner_id !== user.id) {
+      return NextResponse.json({ error: 'server_paused' }, { status: 403 });
+    }
+    const { error: resumeErr } = await admin
+      .from('servers')
+      .update({ is_paused: false })
+      .eq('id', server.id);
+    if (resumeErr) {
+      console.error('[join] resume_on_owner_failed', resumeErr);
+      return NextResponse.json(
+        { error: 'resume_failed', detail: resumeErr.message },
+        { status: 500 }
+      );
+    }
   }
 
   let body: Body = {};
@@ -157,5 +177,6 @@ export async function POST(
     token,
     characterId,
     displayName: displayName,
+    isOwner: server.owner_id === user.id,
   });
 }
