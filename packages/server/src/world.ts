@@ -431,6 +431,7 @@ export class World {
       inputAt: 0,
       inputSprint: false,
       lastFireAt: 0,
+      reloadingUntil: 0,
       respawnAt: null,
       dirty: false,
       inventoryDirty: false,
@@ -715,6 +716,13 @@ export class World {
     if (!conn) return;
     const scene = this.scenes.get(conn.sceneId);
     scene?.handleFire(characterId, dirX, dirY);
+  }
+
+  handleReloadWeapon(characterId: string): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const scene = this.scenes.get(conn.sceneId);
+    scene?.handleReloadWeapon(characterId);
   }
 
   handleBuildRequest(

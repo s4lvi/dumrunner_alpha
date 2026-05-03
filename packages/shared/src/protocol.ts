@@ -466,6 +466,15 @@ export const UseConsumableMsgSchema = z.object({
   slot: slotIndex,
 });
 
+// Reload the currently-equipped (selected hotbar slot) weapon. Server
+// validates the slot is a ranged weapon, the magazine has space, and
+// the player has reserve ammo. Reload takes RangedWeaponStats.reloadMs;
+// fire is locked out until completion. Server broadcasts
+// 'weapon_reloaded' on completion.
+export const ReloadWeaponMsgSchema = z.object({
+  type: z.literal('reload_weapon'),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMsgSchema,
   InputMsgSchema,
@@ -492,6 +501,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   DetachSuitAffixMsgSchema,
   TierUpWeaponMsgSchema,
   UseConsumableMsgSchema,
+  ReloadWeaponMsgSchema,
 ]);
 
 
@@ -633,8 +643,23 @@ export type ServerMessage =
       type: 'blueprints_changed';
       knownBlueprints: string[];
     }
+  | {
+      // Reload started: client locks fire input + plays the reload SFX.
+      // Server emits this on accepted reload_weapon; the matching
+      // weapon_reloaded fires once reloadMs has elapsed.
+      type: 'reload_started';
+      characterId: string;
+      durationMs: number;
+    }
+  | {
+      // Reload finished. Server has already filled the weapon's mag and
+      // decremented reserve ammo (broadcast in inventory_changed).
+      type: 'weapon_reloaded';
+      characterId: string;
+      magazineRemaining: number;
+    }
   | { type: 'error'; message: string };
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 25;
+export const PROTOCOL_VERSION = 26;

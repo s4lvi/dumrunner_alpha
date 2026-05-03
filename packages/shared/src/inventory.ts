@@ -143,21 +143,41 @@ export type WeaponMod = {
   id: string;
 };
 
-// A weapon instance carries the base id + its rolled affixes/mods. Two
-// pistols of the same family but different tiers/affixes are distinct
-// items. Slotted into the inventory as `{ kind: 'weapon', weapon }`.
+// A weapon instance carries the base id + its rolled affixes/mods,
+// plus a per-instance magazine count. Two pistols of the same family
+// but different tiers/affixes/mag state are distinct items. Slotted
+// into the inventory as `{ kind: 'weapon', weapon }`.
 export type WeaponItem = {
   weaponId: WeaponKind;
   tier: WeaponTier;
   pieces: WeaponPieces;
   mods: WeaponMod[];
+  // Bullets currently loaded. Optional only so existing saves without
+  // the field deserialize cleanly; treat undefined as "freshly
+  // crafted, full mag" at use time. Melee weapons leave it undefined.
+  magazineRemaining?: number;
+};
+
+// Initial magazine size on a freshly-crafted weapon. Mirrors
+// `WEAPON_STATS[family].magazineSize` on the server but lives here so
+// shared callers (starter inventory, recipe output) can stamp the
+// right starting count without taking a server-only dep.
+const INITIAL_MAGAZINE: Record<WeaponFamily, number> = {
+  pistol: 12,
+  smg: 30,
+  shotgun: 6,
+  rifle: 10,
+  melee: 0,
 };
 
 export function makeWeapon(
   weaponId: WeaponKind,
   tier: WeaponTier = 1
 ): WeaponItem {
-  return { weaponId, tier, pieces: {}, mods: [] };
+  const family = WEAPON_FAMILY[weaponId];
+  const magazineRemaining =
+    family === 'melee' ? undefined : INITIAL_MAGAZINE[family];
+  return { weaponId, tier, pieces: {}, mods: [], magazineRemaining };
 }
 
 export function weaponFamily(weaponId: WeaponKind): WeaponFamily {

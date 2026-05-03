@@ -13,10 +13,27 @@ export type RangedWeaponStats = {
   projectileTtlMs: number;
   projectileRadius: number;
   pelletCount: number;
+  // Pellet pattern spread (per-pellet for shotguns); not affected by
+  // accuracy. Single-pellet weapons leave this 0.
   spreadRad: number;
   color: number;
   ammoKind: AmmoKind;
+  // Accuracy [0..1]. 1.0 = perfectly on the aim ray. Lower values
+  // sample a uniform angle offset from [-(1-acc) * MAX_INACC_RAD,
+  // +(1-acc) * MAX_INACC_RAD] and rotate the aim direction by it on
+  // each fire. Independent of `spreadRad` (pellet pattern), so a
+  // shotgun can have wide pellets AND tight aim, or vice-versa.
+  accuracy: number;
+  // Magazine size: how many shots a fresh weapon holds before needing
+  // a reload. Reserve ammo lives in inventory and is only consumed
+  // during reload, not per-shot.
+  magazineSize: number;
+  // Time-to-reload in ms. Locks fire while in progress.
+  reloadMs: number;
 };
+
+// Maximum half-cone (in radians) when accuracy = 0. Roughly ±4°.
+export const MAX_INACCURACY_RAD = 0.07;
 
 export const WEAPON_STATS: Record<
   Exclude<WeaponFamily, 'melee'>,
@@ -32,6 +49,9 @@ export const WEAPON_STATS: Record<
     spreadRad: 0,
     color: 0xfafafa,
     ammoKind: 'pistol_basic',
+    accuracy: 0.95,
+    magazineSize: 12,
+    reloadMs: 1200,
   },
   smg: {
     damage: 12,
@@ -43,6 +63,9 @@ export const WEAPON_STATS: Record<
     spreadRad: 0.07,
     color: 0xffe066,
     ammoKind: 'smg_basic',
+    accuracy: 0.78,
+    magazineSize: 30,
+    reloadMs: 1600,
   },
   shotgun: {
     damage: 14, // per pellet; 6 pellets ≈ 84 dmg burst at point-blank
@@ -54,6 +77,9 @@ export const WEAPON_STATS: Record<
     spreadRad: 0.35,
     color: 0xff8a3d,
     ammoKind: 'shotgun_shells',
+    accuracy: 0.92,
+    magazineSize: 6,
+    reloadMs: 2200,
   },
   rifle: {
     damage: 60,
@@ -65,6 +91,9 @@ export const WEAPON_STATS: Record<
     spreadRad: 0,
     color: 0x7dd3fc,
     ammoKind: 'rifle_rounds',
+    accuracy: 0.98,
+    magazineSize: 10,
+    reloadMs: 1800,
   },
 };
 

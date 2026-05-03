@@ -40,10 +40,16 @@ import {
   computeWeaponEffect,
   consumeAmmo,
   consumePlaceable,
+  countAmmo,
   isStationKind,
   weaponFamily,
 } from '@dumrunner/shared';
-import { COMBAT, WEAPON_STATS, TURRET_VARIANTS } from './combat.js';
+import {
+  COMBAT,
+  MAX_INACCURACY_RAD,
+  TURRET_VARIANTS,
+  WEAPON_STATS,
+} from './combat.js';
 import { TEMPLATES, SURFACE_SPAWNS } from './ai/templates.js';
 import {
   instantiateEnemy,
@@ -116,6 +122,9 @@ export interface SceneConnection {
   inventoryDirty: boolean;
   // Scene mutates these to schedule respawn / fire-rate gating + stamina/shield broadcast throttle.
   lastFireAt: number;
+  // Epoch ms at which an in-progress reload completes. 0 = not
+  // reloading. Fire is locked while now < reloadingUntil.
+  reloadingUntil: number;
   respawnAt: number | null;
   lastStaminaSentAt: number;
   lastShieldSentAt: number;
@@ -621,12 +630,15 @@ export class Scene {
     const projectileSpeed = stats.projectileSpeed + eff.projectileSpeedAdd;
     const spreadRad = stats.spreadRad * eff.spreadMult;
     const now = Date.now();
+    // Reload lock-out: can't fire while a reload is in progress.
+    if (now < conn.reloadingUntil) return;
     if (now - conn.lastFireAt < fireInterval) return;
 
-    // Ammo gate. One trigger pull = one ammo unit, regardless of pellet
-    // count — shotgun shells fan out from a single shell.
-    const ok = consumeAmmo(conn.inventory, stats.ammoKind, 1);
-    if (!ok) return;
+    // Magazine gate: pull from the weapon's loaded mag instead of the
+    // reserve. Reserve is only consumed during reload.
+    const mag = slot.weapon.magazineRemaining ?? stats.magazineSize;
+    if (mag <= 0) return;
+    slot.weapon.magazineRemaining = mag - 1;
     conn.inventoryDirty = true;
     this.bindings.send(conn.characterId, {
       type: 'inventory_changed',
@@ -635,16 +647,28 @@ export class Scene {
 
     conn.lastFireAt = now;
 
-    // Spread cone. Pellets fan out evenly around the aim line; for
-    // pelletCount=1 the offsets list is just [0] so the math stays simple.
+    // Per-shot accuracy: rotate the aim ray by a uniform random angle
+    // in [-(1-acc) * MAX_INACC, +(1-acc) * MAX_INACC]. This is
+    // independent of the pellet pattern below.
+    const inaccHalf = (1 - stats.accuracy) * MAX_INACCURACY_RAD;
+    const aimJitter = inaccHalf > 0
+      ? (Math.random() * 2 - 1) * inaccHalf
+      : 0;
+    const ja = Math.cos(aimJitter);
+    const jb = Math.sin(aimJitter);
+    const ax = nx * ja - ny * jb;
+    const ay = nx * jb + ny * ja;
+
+    // Pellet pattern. Pellets fan out evenly around the (now jittered)
+    // aim line; pelletCount=1 collapses to a single shot.
     const pellets = Math.max(1, stats.pelletCount);
     for (let i = 0; i < pellets; i++) {
       const t = pellets === 1 ? 0 : i / (pellets - 1) - 0.5; // [-0.5, 0.5]
       const angle = t * spreadRad;
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
-      const dx = nx * cos - ny * sin;
-      const dy = nx * sin + ny * cos;
+      const dx = ax * cos - ay * sin;
+      const dy = ax * sin + ay * cos;
       this.spawnProjectile({
         ownerKind: 'player',
         ownerId: conn.characterId,
@@ -658,6 +682,70 @@ export class Scene {
         radius: stats.projectileRadius,
         color: stats.color,
       });
+    }
+  }
+
+  // Player pressed R: refill the equipped weapon's magazine from
+  // reserve ammo. Returns success; on success the scene starts the
+  // reload timer and the World/Scene tick fires weapon_reloaded once
+  // it elapses.
+  handleReloadWeapon(characterId: string): void {
+    const conn = this.bindings.connection(characterId);
+    if (!conn || !conn.alive) return;
+    const slot = conn.inventory[conn.hotbarSelection];
+    if (!slot || slot.kind !== 'weapon') return;
+    const family = weaponFamily(slot.weapon.weaponId);
+    if (family === 'melee') return;
+    const stats = WEAPON_STATS[family];
+    const now = Date.now();
+    if (now < conn.reloadingUntil) return; // already reloading
+    const mag = slot.weapon.magazineRemaining ?? stats.magazineSize;
+    if (mag >= stats.magazineSize) return; // already full
+    if (countAmmo(conn.inventory, stats.ammoKind) <= 0) return;
+
+    conn.reloadingUntil = now + stats.reloadMs;
+    this.broadcast({
+      type: 'reload_started',
+      characterId: conn.characterId,
+      durationMs: stats.reloadMs,
+    });
+  }
+
+  // Tick reloads to completion. Called from the world loop.
+  tickReloads(now: number): void {
+    for (const id of this.members) {
+      const conn = this.bindings.connection(id);
+      if (!conn) continue;
+      if (conn.reloadingUntil === 0) continue;
+      if (now < conn.reloadingUntil) continue;
+      // Reload just finished — refill the equipped weapon's mag from
+      // reserve. If the player swapped slots mid-reload, no-op.
+      const completedAt = conn.reloadingUntil;
+      conn.reloadingUntil = 0;
+      const slot = conn.inventory[conn.hotbarSelection];
+      if (!slot || slot.kind !== 'weapon') continue;
+      const family = weaponFamily(slot.weapon.weaponId);
+      if (family === 'melee') continue;
+      const stats = WEAPON_STATS[family];
+      const mag = slot.weapon.magazineRemaining ?? stats.magazineSize;
+      const need = stats.magazineSize - mag;
+      if (need <= 0) continue;
+      const have = countAmmo(conn.inventory, stats.ammoKind);
+      const take = Math.min(need, have);
+      if (take <= 0) continue;
+      consumeAmmo(conn.inventory, stats.ammoKind, take);
+      slot.weapon.magazineRemaining = mag + take;
+      conn.inventoryDirty = true;
+      this.bindings.send(conn.characterId, {
+        type: 'inventory_changed',
+        inventory: conn.inventory,
+      });
+      this.broadcast({
+        type: 'weapon_reloaded',
+        characterId: conn.characterId,
+        magazineRemaining: slot.weapon.magazineRemaining,
+      });
+      void completedAt; // reserved for future reload telemetry
     }
   }
 
@@ -700,6 +788,7 @@ export class Scene {
     this.simulatePlayerMovement(dt, now);
     this.runEnemyAi(dt, now);
     this.tickTurrets(now);
+    this.tickReloads(now);
     this.advanceProjectiles(dt, now);
     this.handlePickupsAndLootExpiry(now);
     this.handleCorpsePickups();

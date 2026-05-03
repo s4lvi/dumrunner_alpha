@@ -17,6 +17,7 @@ import {
   HOTBAR_SIZE,
   partDisplayName,
   TIER_COLORS_HEX,
+  WEAPON_FAMILY,
   KEY_ARTIFACT_COST,
   listBlueprints,
   listRecipes,
@@ -68,6 +69,9 @@ export function Game({ serverId }: { serverId: string }) {
   const [equipment, setEquipment] = useState<Equipment>(() => emptyEquipment());
   const [hotbarSelection, setHotbarSelection] = useState(0);
   const [sceneId, setSceneId] = useState<string>('surface');
+  // Epoch ms when an in-progress reload completes; null = not reloading.
+  // Set on reload_started for the local player; cleared on weapon_reloaded.
+  const [reloadEndsAt, setReloadEndsAt] = useState<number | null>(null);
   const [showInventory, setShowInventory] = useState(false);
   const [slotMenu, setSlotMenu] = useState<{
     slot: number;
@@ -529,6 +533,16 @@ export function Game({ serverId }: { serverId: string }) {
           msg.dirY
         );
         break;
+      case 'reload_started':
+        if (msg.characterId === selfIdRef.current) {
+          setReloadEndsAt(Date.now() + msg.durationMs);
+        }
+        break;
+      case 'weapon_reloaded':
+        if (msg.characterId === selfIdRef.current) {
+          setReloadEndsAt(null);
+        }
+        break;
       case 'scene_changed':
         setSceneId(msg.sceneId);
         setEquipment(msg.equipment);
@@ -949,6 +963,12 @@ export function Game({ serverId }: { serverId: string }) {
         }
         return;
       }
+      // R reloads the equipped weapon. Server validates (slot is a
+      // ranged weapon, mag isn't full, reserve ammo > 0).
+      if (e.key === 'r' || e.key === 'R') {
+        sendOnLiveWs({ type: 'reload_weapon' });
+        return;
+      }
       // Hotbar selection: 1-9 maps to slots 0-8.
       const n = parseInt(e.key, 10);
       if (!Number.isNaN(n) && n >= 1 && n <= HOTBAR_SIZE) {
@@ -998,6 +1018,11 @@ export function Game({ serverId }: { serverId: string }) {
         />
         {worldClock && <WorldClockHud clock={worldClock} />}
         <PowerHud state={powerState} />
+        <AmmoHud
+          inventory={inventory}
+          hotbarSelection={hotbarSelection}
+          reloadEndsAt={reloadEndsAt}
+        />
         {nearInteractable && (
           <InteractPrompt label={nearInteractable.label} />
         )}
@@ -1426,6 +1451,93 @@ function PowerHud({
     </div>
   );
 }
+
+// Magazine readout for the equipped weapon. Sits bottom-right of the
+// canvas; reads `loaded / mag-size  •  reserve`. Hidden when nothing
+// rangedis selected. Also shows a "RELOADING" pip while the timer is
+// counting down, with progress driven directly off Date.now().
+function AmmoHud({
+  inventory,
+  hotbarSelection,
+  reloadEndsAt,
+}: {
+  inventory: Inventory;
+  hotbarSelection: number;
+  reloadEndsAt: number | null;
+}) {
+  const slot = inventory[hotbarSelection];
+  // rAF-driven reload bar — re-render this component every frame so
+  // the progress fill animates without re-rendering the entire HUD.
+  const barRef = useRef<HTMLDivElement>(null);
+  const labelRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (reloadEndsAt === null) {
+      if (barRef.current) barRef.current.style.width = '0%';
+      if (labelRef.current) labelRef.current.textContent = '';
+      return;
+    }
+    const startedAt = Date.now();
+    const total = Math.max(1, reloadEndsAt - startedAt);
+    let raf = 0;
+    const tick = () => {
+      const remaining = Math.max(0, reloadEndsAt - Date.now());
+      const t = 1 - remaining / total;
+      if (barRef.current) {
+        barRef.current.style.width = `${(t * 100).toFixed(2)}%`;
+      }
+      if (labelRef.current) {
+        labelRef.current.textContent = `RELOADING ${(remaining / 1000).toFixed(1)}s`;
+      }
+      if (remaining > 0) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [reloadEndsAt]);
+
+  if (!slot || slot.kind !== 'weapon') return null;
+  const family = WEAPON_FAMILY[slot.weapon.weaponId];
+  if (family === 'melee') return null;
+  const mag = slot.weapon.magazineRemaining;
+  const ammoKind = AMMO_KIND_BY_FAMILY[family];
+  const reserve = ammoKind ? countAmmo(inventory, ammoKind) : 0;
+  return (
+    <div className="absolute bottom-4 right-4 pointer-events-none select-none">
+      <div className="flex flex-col items-end gap-1">
+        <div className="flex items-baseline gap-2 px-3 py-1.5 rounded bg-[color:var(--panel)]/90 border border-[color:var(--panel-border)]">
+          <span className="text-[10px] uppercase tracking-wider text-zinc-400">
+            {slot.weapon.weaponId}
+          </span>
+          <span className="text-2xl font-bold text-zinc-100 tabular-nums leading-none">
+            {mag ?? 0}
+          </span>
+          <span className="text-zinc-500 text-sm tabular-nums">
+            / {reserve}
+          </span>
+        </div>
+        {reloadEndsAt !== null && (
+          <div className="w-44 px-2 py-1 rounded bg-[color:var(--panel)]/90 border border-amber-700">
+            <div className="flex justify-between items-center">
+              <span ref={labelRef} className="text-[10px] tracking-wider text-amber-200">
+                RELOADING
+              </span>
+            </div>
+            <div className="h-1 mt-1 rounded bg-black/40 overflow-hidden">
+              <div ref={barRef} className="h-full bg-amber-400" style={{ width: '0%' }} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const AMMO_KIND_BY_FAMILY: Record<string, 'pistol_basic' | 'smg_basic' | 'shotgun_shells' | 'rifle_rounds' | null> = {
+  pistol: 'pistol_basic',
+  smg: 'smg_basic',
+  shotgun: 'shotgun_shells',
+  rifle: 'rifle_rounds',
+  melee: null,
+};
 
 function WorldClockHud({
   clock,

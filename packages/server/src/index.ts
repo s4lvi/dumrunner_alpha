@@ -71,6 +71,7 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
     w.handleDetachSuitAffix(c, m.suitSlot, m.attachmentIndex),
   tier_up_weapon: (w, c, m) => w.handleTierUpWeapon(c, m.weaponInventoryIdx),
   use_consumable: (w, c, m) => w.handleUseConsumable(c, m.slot),
+  reload_weapon: (w, c) => w.handleReloadWeapon(c),
 };
 
 const wss = new WebSocketServer({ port: env.port, host: env.host });
