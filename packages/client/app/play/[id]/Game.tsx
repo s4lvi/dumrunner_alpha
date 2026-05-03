@@ -1733,7 +1733,7 @@ function ChatPanel({
         }}
         placeholder="Press Enter to chat…"
         maxLength={280}
-        className="pointer-events-auto px-2 py-1 text-xs rounded bg-[color:var(--panel)]/80 border border-[color:var(--panel-border)] text-zinc-100 placeholder:text-zinc-500 outline-none focus:border-[color:var(--accent)]"
+        className="pointer-events-auto px-2 py-1 text-xs rounded bg-[color:var(--panel)] border border-[color:var(--panel-border)] text-zinc-100 placeholder:text-zinc-500 outline-none focus:border-[color:var(--accent)]"
       />
     </div>
   );
