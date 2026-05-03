@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DUM RUNNER Asset Viewer</title>
+    <link rel="stylesheet" href="/viewer/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">DUM RUNNER</p>
+          <h1>Asset Animation Viewer</h1>
+        </div>
+        <div class="auth">
+          <input id="tokenInput" type="password" autocomplete="off" placeholder="service token" />
+          <button id="loadButton" type="button">Load Assets</button>
+        </div>
+      </section>
+
+      <section class="layout">
+        <aside class="panel list-panel">
+          <div class="panel-head">
+            <h2>Assets</h2>
+            <span id="assetCount">0</span>
+          </div>
+          <input id="filterInput" type="search" placeholder="filter by id, action, family" />
+          <select id="assetSelect" size="16"></select>
+        </aside>
+
+        <section class="stage-panel">
+          <div class="stage-wrap">
+            <canvas id="stageCanvas" width="512" height="512"></canvas>
+          </div>
+
+          <div class="controls panel">
+            <button id="playButton" type="button">Pause</button>
+            <button id="prevButton" type="button">Prev</button>
+            <button id="nextButton" type="button">Next</button>
+            <label class="slider">
+              <span>FPS</span>
+              <input id="fpsSlider" type="range" min="1" max="24" value="8" />
+              <strong id="fpsValue">8</strong>
+            </label>
+            <label class="check">
+              <input id="overlayToggle" type="checkbox" checked />
+              <span>Overlays</span>
+            </label>
+          </div>
+        </section>
+
+        <aside class="panel detail-panel">
+          <div class="panel-head">
+            <h2>Details</h2>
+            <span id="frameLabel">-</span>
+          </div>
+          <dl id="details"></dl>
+          <div class="base-preview">
+            <h3>Base Sprite</h3>
+            <canvas id="baseCanvas" width="160" height="160"></canvas>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="/viewer/viewer.js"></script>
+  </body>
+</html>

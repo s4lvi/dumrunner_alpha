@@ -35,9 +35,12 @@ import {
   addPart,
   addPlaceable,
   addWeapon,
+  buildingHordePriority,
+  buildingMaxHp,
   computeWeaponEffect,
   consumeAmmo,
   consumePlaceable,
+  isStationKind,
   weaponFamily,
 } from '@dumrunner/shared';
 import { COMBAT, WEAPON_STATS, TURRET_VARIANTS } from './combat.js';
@@ -50,6 +53,11 @@ import {
 } from './ai/fsm.js';
 import type { EnemyRuntime } from './ai/runtime.js';
 import { rollDropsForKill, killTierBiasFromHp } from './loot.js';
+import {
+  ensureBuildingAsset,
+  ensureEnemyAsset,
+  ensureMaterialAsset,
+} from './assetGenClient.js';
 import { isInsideAny, segmentInsideWalkables } from '@dumrunner/shared';
 import {
   type InitialDoor,
@@ -150,59 +158,11 @@ type BuildingRuntime = BuildingState & {
 // placeables collapse, so 8 is generous.
 const STATION_OUTPUT_SLOTS = 8;
 
-// Set of building kinds that act as crafting stations.
-const STATION_KINDS = new Set<BuildingKind>([
-  'workbench',
-  'forge',
-  'electronics_bench',
-  'weapon_bench',
-]);
-
 function emptyOutputBuffer(): import('@dumrunner/shared').InventorySlot[] {
   return Array.from({ length: STATION_OUTPUT_SLOTS }, () => ({ kind: 'empty' as const }));
 }
 
 const CORPSE_PICKUP_RADIUS = COMBAT.LOOT_PICKUP_RADIUS;
-
-// HP per building kind. Material cost lives in the crafting recipes — by
-// the time a player places a wall they already crafted (and consumed
-// scrap for) the wall item.
-const BUILDING_STATS: Record<BuildingKind, { maxHp: number }> = {
-  wall: { maxHp: 200 },
-  turret: { maxHp: 120 },
-  turret_smg: { maxHp: 120 },
-  turret_shotgun: { maxHp: 140 },
-  turret_rifle: { maxHp: 120 },
-  workbench: { maxHp: 150 },
-  forge: { maxHp: 220 },
-  electronics_bench: { maxHp: 130 },
-  weapon_bench: { maxHp: 160 },
-  artifact_uplink: { maxHp: 200 },
-  power_link: { maxHp: 800 },
-  // Doors are conceptually indestructible — only opened, not broken.
-  // Server skips enemy melee damage on this kind. HP is high so any
-  // accidental hit (e.g. from a stray projectile path) doesn't kill it.
-  door: { maxHp: 9999 },
-};
-
-// Horde-mode target priority. Higher = picked first by enemy AI when
-// multiple buildings are in sense range. Power Link is the headline
-// objective; turrets next because killing them silences ranged defence;
-// then crafting infrastructure; walls last since they're the natural
-// soak that leads enemies to higher-value targets.
-const BUILDING_TARGET_PRIORITY: Partial<Record<BuildingKind, number>> = {
-  power_link: 100,
-  turret: 50,
-  turret_smg: 50,
-  turret_shotgun: 50,
-  turret_rifle: 50,
-  workbench: 25,
-  forge: 25,
-  electronics_bench: 25,
-  weapon_bench: 25,
-  artifact_uplink: 25,
-  wall: 10,
-};
 const EMPTY_BUILDING_TARGETS: AiBuildingTarget[] = [];
 
 export type SceneKind = 'surface' | 'dungeon_floor';
@@ -316,7 +276,7 @@ export class Scene {
   }
 
   private populateDoors(doors: InitialDoor[]): void {
-    const stats = BUILDING_STATS.door;
+    const doorMaxHp = buildingMaxHp('door');
     for (const d of doors) {
       const id = `b${this.nextBuildingId++}`;
       this.buildings.set(id, {
@@ -326,8 +286,8 @@ export class Scene {
         tileY: d.tileY,
         width: 1,
         height: 1,
-        hp: stats.maxHp,
-        maxHp: stats.maxHp,
+        hp: doorMaxHp,
+        maxHp: doorMaxHp,
         lastFireAt: 0,
         output: [],
       });
@@ -461,7 +421,7 @@ export class Scene {
         this.buildings.set(saved.id, {
           ...saved,
           lastFireAt: 0,
-          output: STATION_KINDS.has(saved.kind) ? emptyOutputBuffer() : [],
+          output: isStationKind(saved.kind) ? emptyOutputBuffer() : [],
         });
       }
     }
@@ -568,7 +528,7 @@ export class Scene {
       }
     }
 
-    const stats = BUILDING_STATS[kind];
+    const maxHp = buildingMaxHp(kind);
 
     // Item cost: placement consumes one wall item (or whatever the
     // matching placeable kind is) from the player's inventory. The crafting
@@ -589,14 +549,15 @@ export class Scene {
       tileY,
       width: 1,
       height: 1,
-      hp: stats.maxHp,
-      maxHp: stats.maxHp,
+      hp: maxHp,
+      maxHp,
       lastFireAt: 0,
-      output: STATION_KINDS.has(kind) ? emptyOutputBuffer() : [],
+      output: isStationKind(kind) ? emptyOutputBuffer() : [],
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
     this.bindings.onBuildingsChanged();
+    ensureBuildingAsset(kind);
   }
 
   handleDemolishRequest(characterId: string, buildingId: string): void {
@@ -890,6 +851,7 @@ export class Scene {
       const enemy = instantiateEnemy(id, tpl, x, y);
       this.enemies.set(id, enemy);
       this.broadcast({ type: 'enemy_spawned', enemy: toEnemyState(enemy) });
+      ensureEnemyAsset(tpl);
     }
   }
 
@@ -1398,8 +1360,9 @@ export class Scene {
     const out: AiBuildingTarget[] = [];
     for (const b of this.buildings.values()) {
       if (b.hp <= 0) continue;
-      const priority = BUILDING_TARGET_PRIORITY[b.kind];
-      if (priority === undefined) continue;
+      const priority = buildingHordePriority(b.kind);
+      // 0 = ignored by horde pathing (e.g. doors).
+      if (priority <= 0) continue;
       out.push({
         buildingId: b.id,
         x: (b.tileX + b.width / 2) * tileSize,
@@ -1668,6 +1631,7 @@ export class Scene {
         row.min + Math.floor(Math.random() * (row.max - row.min + 1));
       if (count <= 0) continue;
       const id = `lm${nextLootCounter()}`;
+      ensureMaterialAsset(row.materialId as MaterialKind);
       const lr: LootRuntime = {
         id,
         content: {
@@ -1937,7 +1901,7 @@ export class Scene {
     for (const b of this.buildings.values()) {
       if (b.kind === 'power_link') return b;
     }
-    const stats = BUILDING_STATS.power_link;
+    const linkMaxHp = buildingMaxHp('power_link');
     const id = `b${this.nextBuildingId++}`;
     const building: BuildingRuntime = {
       id,
@@ -1946,8 +1910,8 @@ export class Scene {
       tileY,
       width,
       height,
-      hp: stats.maxHp,
-      maxHp: stats.maxHp,
+      hp: linkMaxHp,
+      maxHp: linkMaxHp,
       lastFireAt: 0,
       output: [],
     };
@@ -2021,6 +1985,7 @@ export class Scene {
       }
       const id = `e${this.nextEnemyId++}`;
       this.enemies.set(id, instantiateEnemy(id, tpl, spawn.x, spawn.y));
+      ensureEnemyAsset(tpl);
     }
   }
 
@@ -2033,6 +1998,7 @@ export class Scene {
       }
       const id = `e${this.nextEnemyId++}`;
       this.enemies.set(id, instantiateEnemy(id, tpl, spawn.x, spawn.y));
+      ensureEnemyAsset(tpl);
     }
   }
 

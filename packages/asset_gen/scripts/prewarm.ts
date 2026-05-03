@@ -1,5 +1,5 @@
-import type { BuildingKind, PartSlot, PartTier, WeaponClass } from '@dumrunner/shared';
-import { MATERIALS } from '@dumrunner/shared/inventory';
+import type { PartSlot, PartTier, WeaponClass } from '@dumrunner/shared';
+import { BUILDING_KINDS, MATERIALS } from '@dumrunner/shared';
 import { TEMPLATES } from '../../server/src/ai/templates.js';
 import {
   buildingAssetRequest,
@@ -108,6 +108,10 @@ function labelForEnemy(templateId: string): string {
       return 'frosted shooter drone';
     case 'brute_chaser':
       return 'sun-bleached armored brute';
+    case 'swarmer':
+      return 'swarming insectoid mutant';
+    case 'armored':
+      return 'heavy-plate armored juggernaut';
     default:
       return templateId.replaceAll('_', ' ');
   }
@@ -116,16 +120,6 @@ function labelForEnemy(templateId: string): string {
 function numberColorToHex(color: number): string {
   return `#${color.toString(16).padStart(6, '0')}`;
 }
-
-const BUILDING_KINDS: BuildingKind[] = [
-  'wall',
-  'turret',
-  'workbench',
-  'forge',
-  'electronics_bench',
-  'artifact_uplink',
-  'power_link',
-];
 
 const SUIT_SLOTS: PartSlot[] = [
   'chassis',

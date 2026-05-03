@@ -77,14 +77,16 @@ export async function POST(
     }
   }
 
-  // Capacity check (count existing characters in this server).
+  // Capacity check — count *active* characters (last_seen_at within
+  // the heartbeat-window) instead of every character ever created.
+  // The game server stamps last_seen_at at ws auth + every 30s while
+  // connected; we use a 60s grace window to forgive single-tick gaps.
+  const activeCutoff = new Date(Date.now() - 60_000).toISOString();
   const { count: occupancy } = await admin
     .from('characters')
     .select('id', { count: 'exact', head: true })
-    .eq('server_id', server.id);
-  // Note: occupancy here counts characters ever created on this server.
-  // For a more accurate live-occupancy check we'd track active connections in the
-  // game-server registry; deferred to next pass.
+    .eq('server_id', server.id)
+    .gt('last_seen_at', activeCutoff);
 
   // Get-or-create character row for this (account, server).
   const { data: existing } = await admin

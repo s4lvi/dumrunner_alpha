@@ -15,4 +15,12 @@ export const env = {
   supabaseUrl: required('NEXT_PUBLIC_SUPABASE_URL'),
   supabaseServiceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
   joinTokenSecret: required('JOIN_TOKEN_SECRET'),
+  // Optional asset_gen base URL. When set, the game server fires a
+  // single fire-and-forget /v1/assets/prewarm bundle at boot for every
+  // entity it knows about; asset_gen's cache key dedups, so anything
+  // already generated is a no-op. Unset → no asset gen integration.
+  assetGenUrl: process.env.ASSET_GEN_URL ?? null,
+  // Optional bearer token for the asset_gen service. Required only if
+  // the asset_gen instance has ASSET_GEN_SERVICE_TOKEN set.
+  assetGenServiceToken: process.env.ASSET_GEN_SERVICE_TOKEN ?? null,
 };

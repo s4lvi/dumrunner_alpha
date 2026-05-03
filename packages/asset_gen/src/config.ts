@@ -7,6 +7,10 @@ export type AssetGenConfig = {
   imageModel: string;
   imageQuality: 'low' | 'medium' | 'high' | 'auto';
   imageSize: string;
+  // Canvas size used for animation sheet (multi-pose) generation. Wider
+  // than imageSize so a horizontal strip has room. Defaults to the
+  // widest gpt-image landscape size.
+  animationSheetSize: string;
   serviceToken: string | null;
 };
 
@@ -29,6 +33,8 @@ export function loadConfig(): AssetGenConfig {
     imageModel: process.env.ASSET_GEN_IMAGE_MODEL ?? 'gpt-image-1.5',
     imageQuality,
     imageSize: process.env.ASSET_GEN_IMAGE_SIZE ?? '1024x1024',
+    animationSheetSize:
+      process.env.ASSET_GEN_ANIMATION_SHEET_SIZE ?? '1536x1024',
     serviceToken: process.env.ASSET_GEN_SERVICE_TOKEN ?? null,
   };
 }

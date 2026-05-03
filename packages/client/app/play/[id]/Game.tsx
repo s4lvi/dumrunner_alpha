@@ -10,9 +10,11 @@ import {
   AFFIX_DEFS,
   computeSuitStats,
   ATTACHMENT_DEFS,
+  BUILDING_REGISTRY,
   CONSUMABLES,
   HOTBAR_SIZE,
   partDisplayName,
+  TIER_COLORS_HEX,
   KEY_ARTIFACT_COST,
   listBlueprints,
   listRecipes,
@@ -33,7 +35,6 @@ import {
   type Equipment,
   type Inventory,
   type InventorySlot,
-  type PartTier,
   type Recipe,
   type ServerMessage,
   type SuitSlotKind,
@@ -41,6 +42,7 @@ import {
 import { runGame, type GameHandle } from '@/lib/game/pixi';
 import { runFpsGame } from '@/lib/game/fps';
 import { audio } from '@/lib/audio';
+import { loadAssetIndex, type AssetIndex } from '@/lib/assetGen';
 
 type JoinResponse = {
   wsUrl: string;
@@ -201,6 +203,10 @@ export function Game({ serverId }: { serverId: string }) {
   // and need the latest values at fire time).
   const inventoryRef = useRef<Inventory>(emptyInventory());
   const hotbarSelectionRef = useRef<number>(0);
+  // Asset index from asset_gen. Loaded once at mount; the renderer
+  // queries this via getEnemyTexture below to swap procedural shapes
+  // for AI sprites when available.
+  const assetIndexRef = useRef<AssetIndex | null>(null);
 
   function sendOnLiveWs(msg: ClientMessage) {
     const ws = wsForHotbar.current;
@@ -429,6 +435,8 @@ export function Game({ serverId }: { serverId: string }) {
             corpses: msg.corpses,
             buildings: msg.buildings,
             layout: msg.layout,
+            getEnemyTexture: (kind) =>
+              assetIndexRef.current?.getEnemyTexture(kind) ?? null,
             ...cb,
           });
         });
@@ -711,6 +719,21 @@ export function Game({ serverId }: { serverId: string }) {
     };
   }, []);
 
+  // Load the asset_gen index once at mount. Stays a ref because the
+  // renderer queries it lazily on first sight of each enemy kind; it
+  // doesn't need to trigger re-renders.
+  useEffect(() => {
+    let cancelled = false;
+    void loadAssetIndex(process.env.NEXT_PUBLIC_ASSET_GEN_URL).then(
+      (idx) => {
+        if (!cancelled) assetIndexRef.current = idx;
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Background music tracks scene id. Surface = defense theme,
   // dungeon = dungeon theme, anything else (loading) = silent.
   // Cleanup stops music on unmount so it doesn't leak into the
@@ -802,6 +825,8 @@ export function Game({ serverId }: { serverId: string }) {
       corpses: snapshot.corpses,
       buildings: snapshot.buildings,
       layout: snapshot.layout,
+      getEnemyTexture: (kind) =>
+        assetIndexRef.current?.getEnemyTexture(kind) ?? null,
       ...cb,
     });
     // Reapply build/weapon mode against the new renderer so the equipped
@@ -1494,13 +1519,10 @@ const SLOT_LABELS: Record<string, string> = {
   cargo_grid: 'Cargo Grid',
 };
 
-const TIER_HEX: Record<PartTier, string> = {
-  Mk1: '#9ca3af',
-  Mk2: '#22c55e',
-  Mk3: '#3b82f6',
-  Mk4: '#a855f7',
-  Alien: '#f97316',
-};
+// Aliased import — TIER_HEX is the legacy local name, TIER_COLORS_HEX
+// is the shared single-source-of-truth. Both renderers + this file
+// pull from the same table.
+const TIER_HEX = TIER_COLORS_HEX;
 
 function InventoryPanel({
   inventory,
@@ -1965,14 +1987,8 @@ function WorkstationModal({
   // (1 per station for now; visible to the player as "Slots: N/M").
   const totalSlots = stationsOfKind.length;
   const usedSlots = jobsAtStation.length;
-
-  // Tick a render token every 250ms so progress bars advance smoothly.
-  const [, forceRender] = useState(0);
-  useEffect(() => {
-    if (jobsAtStation.length === 0) return;
-    const t = setInterval(() => forceRender((x) => x + 1), 250);
-    return () => clearInterval(t);
-  }, [jobsAtStation.length]);
+  // Progress-bar updates run inside CraftJobRow via rAF + direct DOM
+  // mutation, so the modal itself never re-renders during job progress.
   // useMemo so the recipes array reference is stable while kind +
   // knownBlueprints are unchanged. Otherwise the effect below sees
   // a fresh reference every render and triggers spurious work that
@@ -2561,27 +2577,52 @@ function outputSlotLabel(slot: InventorySlot): string {
   return '?';
 }
 
-// One row in the "In Progress" queue — recipe name, progress bar, and
-// remaining time. Re-renders are driven by the modal's interval ticker.
+// One row in the "In Progress" queue. Progress bar + seconds counter
+// update via rAF + direct DOM mutation — React never re-renders this
+// row during job progress, and the parent modal stays still.
 function CraftJobRow({ job }: { job: CraftJobState }) {
   const recipe = listRecipes().find((r) => r.id === job.recipeId);
-  const total = job.completesAt - job.startedAt;
-  const remaining = Math.max(0, job.completesAt - Date.now());
-  const t = total > 0 ? 1 - remaining / total : 1;
-  const seconds = Math.ceil(remaining / 1000);
+  const fillRef = useRef<HTMLDivElement>(null);
+  const secondsRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const total = job.completesAt - job.startedAt;
+    let raf = 0;
+    let lastSeconds = -1;
+    const tick = () => {
+      const remaining = Math.max(0, job.completesAt - Date.now());
+      const t = total > 0 ? 1 - remaining / total : 1;
+      if (fillRef.current) {
+        fillRef.current.style.width = `${(t * 100).toFixed(2)}%`;
+      }
+      const s = Math.ceil(remaining / 1000);
+      if (s !== lastSeconds && secondsRef.current) {
+        secondsRef.current.textContent = `${s}s`;
+        lastSeconds = s;
+      }
+      if (remaining > 0) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [job.startedAt, job.completesAt]);
+
+  // Initial seconds is the worst-case (job just started); rAF tick
+  // overwrites within ~16ms.
+  const initialSeconds = Math.ceil(
+    Math.max(0, job.completesAt - Date.now()) / 1000
+  );
   return (
     <div className="flex items-center gap-3 text-xs">
       <span className="w-32 text-zinc-200 truncate">
         {recipe?.name ?? job.recipeId}
       </span>
       <div className="flex-1 h-2 rounded bg-black/40 border border-[color:var(--panel-border)] overflow-hidden">
-        <div
-          className="h-full bg-cyan-400"
-          style={{ width: `${Math.round(t * 100)}%` }}
-        />
+        <div ref={fillRef} className="h-full bg-cyan-400" style={{ width: '0%' }} />
       </div>
-      <span className="w-10 text-right text-zinc-500 tabular-nums">
-        {seconds}s
+      <span
+        ref={secondsRef}
+        className="w-10 text-right text-zinc-500 tabular-nums"
+      >
+        {initialSeconds}s
       </span>
     </div>
   );
@@ -2735,20 +2776,11 @@ function formatRecipeOutput(out: Recipe['output']): string {
   return out.weaponId.replace(/_/g, ' ');
 }
 
-const STATION_LABEL: Record<BuildingKind, string> = {
-  wall: 'wall',
-  turret: 'turret',
-  turret_smg: 'SMG turret',
-  turret_shotgun: 'shotgun turret',
-  turret_rifle: 'rifle turret',
-  workbench: 'Workbench',
-  forge: 'Forge',
-  electronics_bench: 'Electronics Bench',
-  weapon_bench: 'Weapon Bench',
-  artifact_uplink: 'Artifact Uplink',
-  power_link: 'Power Link',
-  door: 'Door',
-};
+// STATION_LABEL is now derived from BUILDING_REGISTRY in shared so the
+// server, client, and asset_gen prewarm all read identical labels.
+const STATION_LABEL: Record<BuildingKind, string> = Object.fromEntries(
+  Object.entries(BUILDING_REGISTRY).map(([k, v]) => [k, v.label])
+) as Record<BuildingKind, string>;
 
 function CraftRow({
   recipe,

@@ -28,33 +28,29 @@ import {
   sortBag,
   isSuitPart,
   findEmptySlot,
-  addAmmo,
   addAttachment,
   addMaterial,
-  addPlaceable,
-  addWeapon,
-  addConsumable,
-  consumeConsumable,
+  addRecipeOutputToInventory,
   ATTACHMENT_DEFS,
+  BLUEPRINT_CATALOG,
+  buildingParallelSlots,
+  computeSuitStats,
   CONSUMABLES,
   consumeAttachment,
-  makeWeapon,
-  weaponFamily as weaponFamilyOf,
-  TIER_PIECE_SLOTS,
+  consumeConsumable,
+  consumeMaterial,
+  consumeRecipeInput,
+  countMaterial,
+  hasRecipeInput,
+  KEY_ARTIFACT_COST,
+  recipeOutputToSlot,
+  RECIPES,
   TIER_MOD_SLOTS,
+  TIER_PIECE_SLOTS,
+  weaponFamily as weaponFamilyOf,
   type MaterialKind,
   type WeaponPieceKind,
   type WeaponTier,
-  BLUEPRINT_CATALOG,
-  computeSuitStats,
-  consumeAmmo,
-  consumeMaterial,
-  consumeWeapons,
-  countAmmo,
-  countMaterial,
-  countWeapons,
-  KEY_ARTIFACT_COST,
-  RECIPES,
 } from '@dumrunner/shared';
 import { supabase } from './supabase.js';
 import { COMBAT } from './combat.js';
@@ -151,12 +147,9 @@ const DUNGEON_SCENE_PREFIX = 'dungeon:';
 const TRANSITION_COOLDOWN_MS = 800;
 // Per-kind parallel craft job capacity. Defaults to 1; mirror what the
 // scene stores. Higher tiers / upgrades raise this later.
-const STATION_PARALLEL_SLOTS: Partial<Record<BuildingKind, number>> = {
-  workbench: 1,
-  forge: 1,
-  electronics_bench: 1,
-  weapon_bench: 1,
-};
+// Per-station parallel craft job capacity comes from the BUILDING_REGISTRY.
+// Reading at use-time (instead of caching here) keeps the table in shared
+// as the single source of truth.
 
 // Materials consumed when tier-upping a weapon. Index by current tier
 // (e.g. TIER_UP_COSTS[1] is the cost to go from T1 → T2). T4 is the
@@ -818,7 +811,7 @@ export class World {
       // Each station has a parallel-slot budget. Find one with a free
       // slot; if every station of this kind nearby is saturated, reject.
       const slotsPerStation =
-        STATION_PARALLEL_SLOTS[recipe.workstation] ?? 1;
+        buildingParallelSlots(recipe.workstation) || 1;
       for (const station of nearby) {
         let used = 0;
         for (const job of this.activeCraftJobs.values()) {
@@ -850,13 +843,7 @@ export class World {
 
     // Check inputs first; only commit if everything's there.
     for (const input of recipe.inputs) {
-      if (input.kind === 'material') {
-        if (countMaterial(conn.inventory, input.materialId) < input.count) return;
-      } else if (input.kind === 'ammo') {
-        if (countAmmo(conn.inventory, input.ammoId) < input.count) return;
-      } else {
-        if (countWeapons(conn.inventory, input.weaponId) < input.count) return;
-      }
+      if (!hasRecipeInput(conn.inventory, input)) return;
     }
 
     const craftTimeMs = recipe.craftTimeMs ?? 0;
@@ -879,13 +866,7 @@ export class World {
 
     // Deduct inputs.
     for (const input of recipe.inputs) {
-      if (input.kind === 'material') {
-        consumeMaterial(conn.inventory, input.materialId, input.count);
-      } else if (input.kind === 'ammo') {
-        consumeAmmo(conn.inventory, input.ammoId, input.count);
-      } else {
-        consumeWeapons(conn.inventory, input.weaponId, input.count);
-      }
+      consumeRecipeInput(conn.inventory, input);
     }
 
     if (isAsync) {
@@ -919,18 +900,7 @@ export class World {
     }
 
     // Instant craft (basics + any recipe without craftTimeMs).
-    const out = recipe.output;
-    if (out.kind === 'placeable') {
-      addPlaceable(conn.inventory, out.buildingKind, out.count);
-    } else if (out.kind === 'ammo') {
-      addAmmo(conn.inventory, out.ammoId, out.count);
-    } else if (out.kind === 'weapon') {
-      addWeapon(conn.inventory, makeWeapon(out.weaponId));
-    } else if (out.kind === 'attachment') {
-      addAttachment(conn.inventory, out.defId, out.count);
-    } else {
-      addConsumable(conn.inventory, out.consumableId, out.count);
-    }
+    addRecipeOutputToInventory(conn.inventory, recipe.output);
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
@@ -956,46 +926,18 @@ export class World {
       const recipe = RECIPES[job.recipeId];
       if (!recipe) continue;
 
-      // Build the output as an InventorySlot so we can route either to
-      // the station's output buffer (preferred) or directly to the
-      // player's inventory (fallback when the station was destroyed
-      // mid-craft or its buffer is full).
-      const out = recipe.output;
-      const outputSlot: import('@dumrunner/shared').InventorySlot =
-        out.kind === 'placeable'
-          ? { kind: 'placeable', buildingKind: out.buildingKind, count: out.count }
-          : out.kind === 'ammo'
-          ? { kind: 'ammo', ammoId: out.ammoId, count: out.count }
-          : out.kind === 'weapon'
-          ? { kind: 'weapon', weapon: makeWeapon(out.weaponId) }
-          : out.kind === 'attachment'
-          ? { kind: 'attachment', defId: out.defId, count: out.count }
-          : {
-              kind: 'consumable',
-              consumableId: out.consumableId,
-              count: out.count,
-            };
-
+      // Try to deposit to the station's output buffer; fall back to
+      // direct-to-inventory if the station was destroyed mid-craft or
+      // its buffer is saturated. Both routes go through the shared
+      // recipe-output dispatch helpers.
+      const outputSlot = recipeOutputToSlot(recipe.output);
       const surface = this.scenes.get(SURFACE_SCENE_ID);
       const deposited = surface?.depositToStationOutput(
         job.stationBuildingId,
         outputSlot
       );
       if (!deposited) {
-        // Fallback: station gone or its buffer is saturated. Drop the
-        // output straight into the player's inventory so the craft
-        // doesn't silently disappear.
-        if (out.kind === 'placeable') {
-          addPlaceable(conn.inventory, out.buildingKind, out.count);
-        } else if (out.kind === 'ammo') {
-          addAmmo(conn.inventory, out.ammoId, out.count);
-        } else if (out.kind === 'weapon') {
-          addWeapon(conn.inventory, makeWeapon(out.weaponId));
-        } else if (out.kind === 'attachment') {
-          addAttachment(conn.inventory, out.defId, out.count);
-        } else {
-          addConsumable(conn.inventory, out.consumableId, out.count);
-        }
+        addRecipeOutputToInventory(conn.inventory, recipe.output);
         conn.inventoryDirty = true;
         this.sendDirect(conn.ws, {
           type: 'inventory_changed',

@@ -95,6 +95,9 @@ Generate specific reference-guided animation cycles:
 - `enemy_animation` jobs produce horizontal PNG spritesheets with frame
   metadata. This is intended for short 2-4 frame cycles, not rich full-motion
   animation.
+- Animation assembly normalizes non-reference frames toward frame 0's visible
+  pixel palette before sheet output, which reduces model-induced hue shifts
+  between generated poses.
 - Approved assets carry `family` metadata so base sprites and generated cycles
   can be grouped by identity source, variant type, action, and source model.
 - Animation verification now measures alpha-mask overlap, palette drift,

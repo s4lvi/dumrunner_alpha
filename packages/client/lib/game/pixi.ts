@@ -1,17 +1,20 @@
 'use client';
 
-import { Application, Container, Graphics, Text } from 'pixi.js';
+import { Application, Assets, Container, Graphics, Sprite, Text, type Texture } from 'pixi.js';
 import {
   circleFits,
+  enemyVisualFor,
   isInsideAny,
+  materialTint,
   segmentInsideWalkables,
+  TIER_COLORS_NUM,
   type BuildingKind,
   type BuildingState,
   type CorpseState,
   type EnemyState,
+  type EnemyVisual,
   type Interactable,
   type LootState,
-  type PartTier,
   type Player,
   type Rect,
   type SceneLayout,
@@ -58,6 +61,11 @@ export type GameInit = {
     nearest: BuildingKind | null;
     nearestDoorId: string | null;
   }) => void;
+  // Optional asset_gen-backed sprite resolver. Renderer asks the host
+  // for a PNG url keyed by enemy template id; returning null falls back
+  // to the procedural shape. Stays optional so the game runs cleanly
+  // without an asset_gen service.
+  getEnemyTexture?: (kind: string) => string | null;
 };
 
 // Subset of state we need to apply when the player transitions between scenes
@@ -111,13 +119,10 @@ export type GameHandle = {
   destroy(): void;
 };
 
-export const TIER_COLORS: Record<PartTier, number> = {
-  Mk1: 0x9ca3af,
-  Mk2: 0x22c55e,
-  Mk3: 0x3b82f6,
-  Mk4: 0xa855f7,
-  Alien: 0xf97316,
-};
+// Re-export shared part-tier colors for any external pixi.ts imports.
+// New code should import directly from @dumrunner/shared.
+export { TIER_COLORS_NUM as TIER_COLORS } from '@dumrunner/shared';
+export { TIER_COLORS_NUM };
 
 // Room floor palette. One entry per "theme bucket"; rooms hash to a
 // bucket via their xy origin so the same room always reads the same
@@ -141,39 +146,11 @@ function roomFloorColor(r: Rect): number {
   return ROOM_FLOOR_PALETTE[h % ROOM_FLOOR_PALETTE.length];
 }
 
-// Per-material colour for ground-loot rendering. Mirrors MATERIALS in
-// shared/inventory.ts; out-of-band ids fall through to white.
-const MATERIAL_TINT: Record<string, number> = {
-  scrap: 0xc2410c,
-  wire: 0xeab308,
-  alloy: 0x94a3b8,
-  circuit: 0x10b981,
-  biotic: 0xa855f7,
-  crystal: 0x06b6d4,
-  artifact: 0xf472b6,
-  key: 0xfacc15,
-};
-
-// Client-side visual lookup keyed by EnemyKind (the server template id).
-// Add an entry per template you author server-side. Unknown kinds fall back
-// to the dummy_target visual.
-type EnemyVisual = {
-  shape: 'square' | 'circle' | 'triangle';
-  color: number;
-  size: number;
-};
-
-const ENEMY_VISUALS: Record<string, EnemyVisual> = {
-  dummy_target:  { shape: 'square',   color: 0xef4444, size: 18 },
-  chaser_melee:  { shape: 'triangle', color: 0xa855f7, size: 16 },
-  shooter_drone: { shape: 'circle',   color: 0x60a5fa, size: 14 },
-  brute_chaser:  { shape: 'square',   color: 0xb45309, size: 26 },
-};
-const FALLBACK_ENEMY_VISUAL = ENEMY_VISUALS.dummy_target;
-
-function visualFor(kind: string): EnemyVisual {
-  return ENEMY_VISUALS[kind] ?? FALLBACK_ENEMY_VISUAL;
-}
+// Per-material color, per-tier color, and enemy visuals all come from
+// shared so the FPS view + this top-down view + the inventory UI never
+// drift. The `materialTint`, `enemyVisualFor`, and `EnemyVisual` types
+// come from @dumrunner/shared/visuals.
+const visualFor = enemyVisualFor;
 
 const SELF_COLOR = 0xf97316;     // dûm orange
 const OTHER_COLOR = 0x4dd0e1;
@@ -203,6 +180,12 @@ type RenderedEnemy = {
   // Hit-flash overlay (alpha-tweened white square / circle covering the body).
   flashOverlay: Graphics;
   flashUntil: number;
+  // The procedural shape, kept around so we can hide it once the AI
+  // sprite finishes async-loading (and re-show it if the load fails).
+  body: Graphics;
+  // Optional AI-generated sprite. Loaded async on first sight of this
+  // enemy kind; texture swaps in when ready.
+  sprite?: Sprite;
 };
 
 type RenderedProjectile = {
@@ -300,6 +283,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // Active scene layout. Drives wall rendering and visual line-of-sight.
   // Updated on init (welcome) and on swapScene (scene_changed).
   let currentLayout: SceneLayout | null = init.layout;
+  // Versions used by the fog cache. Bump these whenever the underlying
+  // data the fog scan reads changes.
+  let layoutVersion = 0;
+  let buildingsVersion = 0;
 
   // Generic particle list (damage numbers, death bursts, muzzle flashes).
   type Particle = {
@@ -1017,10 +1004,61 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       targetY: e.y,
       flashOverlay,
       flashUntil: 0,
+      body,
     };
     drawEnemyHpBar(re);
     enemies.set(e.id, re);
+
+    // If the host has an asset_gen-backed sprite for this enemy kind,
+    // load it lazily and swap once ready. Procedural body stays
+    // visible until then so the player sees something immediately.
+    void resolveEnemySprite(re, e.kind);
     return re;
+  }
+
+  // Per-kind texture cache so we only ever load each PNG once. The
+  // promise is cached during in-flight loads to dedupe concurrent
+  // first-spawns of the same kind.
+  const enemyTextureCache = new Map<string, Promise<Texture | null>>();
+
+  async function resolveEnemySprite(
+    re: RenderedEnemy,
+    kind: string
+  ): Promise<void> {
+    if (!init.getEnemyTexture) return;
+    const url = init.getEnemyTexture(kind);
+    if (!url) return;
+    let pending = enemyTextureCache.get(url);
+    if (!pending) {
+      pending = Assets.load(url)
+        .then((tex) => (tex ? (tex as Texture) : null))
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn(`[asset_gen] texture load failed for ${kind}`, url, err);
+          return null;
+        });
+      enemyTextureCache.set(url, pending);
+    }
+    const texture = await pending;
+    if (!texture) return;
+    // Renderer might have torn down between async start and resolve
+    // (player swapped scenes). Bail if so.
+    if (re.container.destroyed) return;
+    const visual = visualFor(kind);
+    const sprite = new Sprite(texture);
+    // The procedural shapes are sized in radius-style units; doubling
+    // gives a tile-comparable footprint.
+    const target = visual.size * 2.4;
+    const aspect =
+      texture.height > 0 ? texture.width / texture.height : 1;
+    sprite.width = aspect >= 1 ? target : target * aspect;
+    sprite.height = aspect >= 1 ? target / aspect : target;
+    sprite.anchor.set(0.5, 0.5);
+    // Insert below the flash overlay + hp bar so hit feedback still
+    // pops on top of the sprite.
+    re.container.addChildAt(sprite, 1);
+    re.body.visible = false;
+    re.sprite = sprite;
   }
 
   function drawEnemyShape(g: Graphics, v: EnemyVisual) {
@@ -1263,6 +1301,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const rb: RenderedBuilding = { data: { ...b }, container, hpFill };
     drawBuildingHpBar(rb);
     buildings.set(b.id, rb);
+    buildingsVersion++;
   }
 
   function drawBuildingHpBar(rb: RenderedBuilding) {
@@ -1322,7 +1361,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
     if (l.content.kind === 'part') {
       // Diamond, color-graded by part tier.
-      const color = TIER_COLORS[l.content.part.tier] ?? 0xffffff;
+      const color = TIER_COLORS_NUM[l.content.part.tier] ?? 0xffffff;
       const s = 9;
       body
         .moveTo(0, -s)
@@ -1340,7 +1379,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     } else {
       // Material pile — squarish nugget tinted by material color, count
       // shown as a small label so 1 vs 12 reads at a glance.
-      const def = MATERIAL_TINT[l.content.materialId] ?? 0xffffff;
+      const def = materialTint(l.content.materialId);
       body
         .rect(-7, -7, 14, 14)
         .fill({ color: def })
@@ -1416,19 +1455,31 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     return false;
   }
 
+  // Fog cache: avoid the per-tile LoS scan on every frame by skipping
+  // the recompute when the player hasn't changed tile, the layout
+  // hasn't swapped, and no building has been added/removed/destroyed.
+  // The graphics object retains the last fill so visuals are unchanged
+  // until invalidated.
+  let lastFogKey = '';
   function updateFog() {
-    fogGraphics.clear();
-
     const layout = currentLayout;
     if (!layout || layout.walkables.length === 0 || layout.tileSize <= 0) {
+      if (lastFogKey !== '__empty') {
+        fogGraphics.clear();
+        lastFogKey = '__empty';
+      }
       return;
     }
-
     const tileSize = layout.tileSize;
-    const VIEW_RADIUS_TILES = 13;
-    const radiusSq = VIEW_RADIUS_TILES * VIEW_RADIUS_TILES;
     const playerTileX = Math.floor(selfX / tileSize);
     const playerTileY = Math.floor(selfY / tileSize);
+    const key = `${playerTileX},${playerTileY}|${layoutVersion}|${buildingsVersion}`;
+    if (key === lastFogKey) return;
+    lastFogKey = key;
+    fogGraphics.clear();
+
+    const VIEW_RADIUS_TILES = 13;
+    const radiusSq = VIEW_RADIUS_TILES * VIEW_RADIUS_TILES;
     const walkables = layout.walkables;
 
     // Walk every tile inside any walkable rect. Visible tiles (within view
@@ -1716,6 +1767,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
   function renderLayout(layout: SceneLayout | null) {
     currentLayout = layout;
+    layoutVersion++;
     clearLayoutAndInteractables();
 
     if (!layout || layout.walkables.length === 0) {
@@ -2122,6 +2174,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       buildingsLayer.removeChild(b.container);
       b.container.destroy({ children: true });
       buildings.delete(id);
+      buildingsVersion++;
     },
     setBuildMode(kind: BuildingKind | null) {
       buildKind = kind;

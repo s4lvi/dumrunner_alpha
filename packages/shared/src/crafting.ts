@@ -15,11 +15,25 @@
 //                   perihelion; legendary blueprints persist on the
 //                   character (handled at storage layer, not here).
 
-import type {
-  AmmoKind,
-  ConsumableKind,
-  MaterialKind,
-  WeaponKind,
+import {
+  addAmmo,
+  addAttachment,
+  addConsumable,
+  addPlaceable,
+  addWeapon,
+  consumeAmmo,
+  consumeMaterial,
+  consumeWeapons,
+  countAmmo,
+  countMaterial,
+  countWeapons,
+  makeWeapon,
+  type AmmoKind,
+  type ConsumableKind,
+  type Inventory,
+  type InventorySlot,
+  type MaterialKind,
+  type WeaponKind,
 } from './inventory';
 import type { BuildingKind, WorkstationKind } from './protocol';
 
@@ -382,6 +396,82 @@ export const RECIPES: Record<string, Recipe> = {
 
 export function listRecipes(): Recipe[] {
   return Object.values(RECIPES);
+}
+
+// ---------- recipe IO dispatch helpers ----------
+//
+// The server's craft handlers used to repeat the same N-branch if/else
+// for every kind of input/output. These helpers collapse the dispatch
+// into one place per phase so adding a new RecipeInput/RecipeOutput
+// variant is a single edit instead of four.
+
+// True iff the inventory holds at least the recipe input's count.
+export function hasRecipeInput(inv: Inventory, input: RecipeInput): boolean {
+  switch (input.kind) {
+    case 'material':
+      return countMaterial(inv, input.materialId) >= input.count;
+    case 'ammo':
+      return countAmmo(inv, input.ammoId) >= input.count;
+    case 'weapon':
+      return countWeapons(inv, input.weaponId) >= input.count;
+  }
+}
+
+// Consume the recipe input from inventory. Caller must check
+// hasRecipeInput first; this helper does not roll back partial
+// consumption on failure.
+export function consumeRecipeInput(inv: Inventory, input: RecipeInput): void {
+  switch (input.kind) {
+    case 'material':
+      consumeMaterial(inv, input.materialId, input.count);
+      return;
+    case 'ammo':
+      consumeAmmo(inv, input.ammoId, input.count);
+      return;
+    case 'weapon':
+      consumeWeapons(inv, input.weaponId, input.count);
+      return;
+  }
+}
+
+// Convert a recipe output into the InventorySlot shape used by
+// station output buffers. Used by the async craft job pipeline when
+// depositing finished work to a station's output cells.
+export function recipeOutputToSlot(out: RecipeOutput): InventorySlot {
+  switch (out.kind) {
+    case 'placeable':
+      return { kind: 'placeable', buildingKind: out.buildingKind, count: out.count };
+    case 'ammo':
+      return { kind: 'ammo', ammoId: out.ammoId, count: out.count };
+    case 'weapon':
+      return { kind: 'weapon', weapon: makeWeapon(out.weaponId) };
+    case 'attachment':
+      return { kind: 'attachment', defId: out.defId, count: out.count };
+    case 'consumable':
+      return { kind: 'consumable', consumableId: out.consumableId, count: out.count };
+  }
+}
+
+// Add a recipe output directly to the player's inventory. Used for
+// instant crafts and as a fallback when a station's output buffer is
+// saturated or the station was destroyed mid-job. Returns true on
+// success; false only when the bag is full and the output couldn't fit.
+export function addRecipeOutputToInventory(
+  inv: Inventory,
+  out: RecipeOutput
+): boolean {
+  switch (out.kind) {
+    case 'placeable':
+      return addPlaceable(inv, out.buildingKind, out.count) === 0;
+    case 'ammo':
+      return addAmmo(inv, out.ammoId, out.count) === 0;
+    case 'weapon':
+      return addWeapon(inv, makeWeapon(out.weaponId));
+    case 'attachment':
+      return addAttachment(inv, out.defId, out.count);
+    case 'consumable':
+      return addConsumable(inv, out.consumableId, out.count);
+  }
 }
 
 // ---------- blueprint catalog (artifact uplink trade store) ----------

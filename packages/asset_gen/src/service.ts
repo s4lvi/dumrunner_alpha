@@ -1,8 +1,12 @@
-import { assembleAnimationSheet, type AnimationFrameInput } from './animation.js';
+import {
+  assembleAnimationSheet,
+  sliceSheetIntoFrames,
+  type AnimationFrameInput,
+} from './animation.js';
 import { cleanImage } from './cleanup.js';
 import { assetFamilyFor } from './family.js';
 import { makeCacheKey, newId } from './hash.js';
-import { compileAnimationFramePrompt, compileAssetPrompt } from './prompt.js';
+import { compileAnimationSheetPrompt, compileAssetPrompt } from './prompt.js';
 import type { ImageGenerator } from './providers/types.js';
 import type {
   AssetGenerateRequest,
@@ -36,6 +40,10 @@ export class AssetGenerationService {
       verifier: AssetVerifier;
       maxConcurrentJobs: number;
       imageSize: string;
+      // Wider canvas used by the single-call animation sheet pipeline.
+      // Default '1536x1024' — gives 4-frame strips ~384px wide each
+      // before per-frame downsize.
+      animationSheetSize: string;
       imageQuality: 'low' | 'medium' | 'high' | 'auto';
       supportsTransparentBackground: boolean;
       sourceModel: string;
@@ -202,7 +210,7 @@ export class AssetGenerationService {
       let correction: string | undefined;
       let sheet = null;
       for (let attempt = 0; attempt < 2; attempt++) {
-        const frames = await this.generateAnimationFrames(job, baseAsset, correction);
+        const frames = await this.generateAnimationSheet(job, baseAsset, correction);
         if ('error' in frames) {
           correction = correctionForReasons([frames.error]);
           if (attempt === 0) continue;
@@ -253,53 +261,80 @@ export class AssetGenerationService {
     }
   }
 
-  private async generateAnimationFrames(
+  // Single-call sheet generation. ONE image generation produces the full
+  // N-frame strip; we slice it into per-frame buffers and run each through
+  // the static cleanImage pipeline (anchor, opaqueBounds, transparency
+  // check). Per-frame coherence is far better than the legacy multi-call
+  // path because the model preserves identity within a single generation.
+  private async generateAnimationSheet(
     job: AssetJob,
     baseAsset: Buffer | null,
     correction: string | undefined
   ): Promise<{ frames: AnimationFrameInput[] } | { error: string }> {
     if (!job.request.animation) return { error: 'animation request missing animation spec' };
-    const frames: AnimationFrameInput[] = [];
-    for (let frameIndex = 0; frameIndex < job.request.animation.frameCount; frameIndex++) {
-      await this.updateJob(job, { status: 'generating' });
-      const prompt = compileAnimationFramePrompt(job.request, frameIndex, correction);
-      const generated = baseAsset
-        ? await this.deps.imageGenerator.edit({
-            prompt,
-            size: this.deps.imageSize,
-            quality: this.deps.imageQuality,
-            background: this.imageBackground(job.request),
-            inputFidelity: 'high',
-            referenceImages: [{
+    const action = job.request.animation.action;
+    const frameCount = job.request.animation.frameCount;
+
+    await this.updateJob(job, { status: 'generating' });
+    const prompt = compileAnimationSheetPrompt(job.request, correction);
+
+    // Wide canvas so frames have horizontal headroom. gpt-image
+    // supports 1536x1024 (wide) — preferred for a horizontal strip.
+    // The static path's imageSize (typically 1024x1024) is overridden
+    // here; cleanImage absorbs the per-frame downsizing later.
+    const sheetSize = this.deps.animationSheetSize;
+    const generated = baseAsset
+      ? await this.deps.imageGenerator.edit({
+          prompt,
+          size: sheetSize,
+          quality: this.deps.imageQuality,
+          background: this.imageBackground(job.request),
+          inputFidelity: 'high',
+          referenceImages: [
+            {
               filename: `${job.request.animation.baseAssetId}.png`,
               mimeType: 'image/png',
               bytes: baseAsset,
-            }],
-          })
-        : await this.deps.imageGenerator.generate({
-            prompt,
-            size: this.deps.imageSize,
-            quality: this.deps.imageQuality,
-            background: this.imageBackground(job.request),
-          });
+            },
+          ],
+        })
+      : await this.deps.imageGenerator.generate({
+          prompt,
+          size: sheetSize,
+          quality: this.deps.imageQuality,
+          background: this.imageBackground(job.request),
+        });
 
-      await this.updateJob(job, { status: 'cleaning' });
-      const cleaned = await cleanImage(job.request, generated);
+    await this.updateJob(job, { status: 'cleaning' });
+    const sliced = await sliceSheetIntoFrames(generated.bytes, frameCount);
+    if ('error' in sliced) return { error: sliced.error };
 
-      await this.updateJob(job, { status: 'verifying' });
-      const verification = await this.deps.verifier.verify({
-        request: job.request,
-        metadata: cleaned.metadata,
-        pngBytes: cleaned.bytes,
+    // Per-slice cleaning only. The static-asset verifier (with its
+    // maxOpaqueBoundsRatio / safe-margin rules) is the wrong fit for
+    // sheet cells — frames are tightly packed within their cells by
+    // design. Cross-frame coherence is checked by assembleAnimationSheet
+    // below. We do a minimum sanity check (has visible pixels, is
+    // transparent) and bail to the retry loop if a frame is broken.
+    await this.updateJob(job, { status: 'verifying' });
+    const frames: AnimationFrameInput[] = [];
+    for (let i = 0; i < sliced.slices.length; i++) {
+      const cleaned = await cleanImage(job.request, {
+        mimeType: 'image/png',
+        bytes: sliced.slices[i],
+        revisedPrompt: generated.revisedPrompt,
+        providerRequestId: generated.providerRequestId,
       });
-      if (verification.verdict !== 'pass') {
-        return {
-          error: `${frameName(job.request.animation.action, frameIndex)}: ${verification.reasons.join('; ') || verification.summary}`,
-        };
+      if (cleaned.metadata.opaqueBounds.w === 0 || cleaned.metadata.opaqueBounds.h === 0) {
+        return { error: `${frameName(action, i)}: no visible pixels in slice` };
       }
-
+      if (
+        job.request.style.transparentBackground &&
+        !cleaned.metadata.transparent
+      ) {
+        return { error: `${frameName(action, i)}: transparent background missing` };
+      }
       frames.push({
-        name: frameName(job.request.animation.action, frameIndex),
+        name: frameName(action, i),
         bytes: cleaned.bytes,
         metadata: cleaned.metadata,
       });
@@ -332,7 +367,7 @@ function correctionForReasons(reasons: string[]): string {
     corrections.add('reduce pose amplitude and preserve the reference silhouette more closely');
   }
   if (joined.includes('palette distance')) {
-    corrections.add('match the reference palette exactly and avoid new accent colors');
+    corrections.add('match the reference palette exactly, preserve hue and saturation, and avoid new accent colors');
   }
   if (joined.includes('visible area ratio')) {
     corrections.add('keep the sprite at the same scale and do not add or remove bulk');

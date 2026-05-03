@@ -5,12 +5,15 @@ const token = process.env.ASSET_GEN_SERVICE_TOKEN;
 const mode = process.argv.includes('--animation') ? 'animation' : 'static';
 const animationAction = readOption('action') ?? 'idle';
 const animationFrames = readFrameCount(animationAction, readOption('frames'));
+const nonce = readOption('nonce');
+const baseNonce = readOption('base-nonce');
 const headers = {
   'content-type': 'application/json',
   ...(token ? { authorization: `Bearer ${token}` } : {}),
 };
 
 const baseEnemyRequest: AssetGenerateRequest = {
+  requestId: baseNonce ? `smoke:enemy:chaser_melee:${baseNonce}` : undefined,
   assetKind: 'enemy',
   renderTarget: 'world_sprite',
   size: 64,
@@ -76,7 +79,11 @@ const staticRequests: AssetGenerateRequest[] = [
 function animationRequest(baseAssetId: string): AssetGenerateRequest {
   return {
     ...baseEnemyRequest,
-    requestId: `smoke:enemy_animation:chaser_melee_${animationAction}_${animationFrames}:${baseAssetId}`,
+    requestId: [
+      `smoke:enemy_animation:chaser_melee_${animationAction}_${animationFrames}`,
+      baseAssetId,
+      nonce,
+    ].filter(Boolean).join(':'),
     assetKind: 'enemy_animation',
     gameObject: {
       id: `chaser_melee_${animationAction}`,

@@ -484,6 +484,8 @@ For `enemy_animation`:
 
 - Use 2-4 frames.
 - Generate and clean each frame independently.
+- Normalize generated frame palettes against frame 0 before composing the
+  spritesheet so material hues remain stable across the cycle.
 - Assemble a horizontal spritesheet: `frameWidth = size`, `sheetWidth = size * frameCount`.
 - Keep the same anchor for every frame.
 - Reject cycles whose frame centers drift farther than `maxFrameDriftPx`.

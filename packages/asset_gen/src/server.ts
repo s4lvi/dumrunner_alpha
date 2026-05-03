@@ -26,12 +26,25 @@ const service = new AssetGenerationService({
   verifier: new HeuristicAssetVerifier(),
   maxConcurrentJobs: config.maxConcurrentJobs,
   imageSize: config.imageSize,
+  animationSheetSize: config.animationSheetSize,
   imageQuality: config.imageQuality,
   supportsTransparentBackground: supportsTransparentBackground(config.imageModel),
   sourceModel: config.openaiApiKey ? config.imageModel : 'placeholder',
 });
 
-const server = createServer(async (req, res) => {
+const server = createServer({ maxHeaderSize: 64 * 1024 }, async (req, res) => {
+  // Permissive CORS for dev. The game client (Next.js dev on :3000,
+  // Vercel in prod) fetches /v1/assets/index and PNG bytes from this
+  // service cross-origin. Read-only endpoints have no auth, write
+  // endpoints stay token-gated.
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type, x-asset-gen-token');
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
   try {
     await route(req, res);
   } catch (error) {
@@ -53,8 +66,23 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return;
   }
 
+  if (req.method === 'GET' && (url.pathname === '/viewer' || url.pathname.startsWith('/viewer/'))) {
+    await serveViewer(url.pathname, res);
+    return;
+  }
+
   if (url.pathname.startsWith('/assets/')) {
     await serveAsset(url.pathname, res);
+    return;
+  }
+
+  // Public read-only index. Lists approved asset metadata (incl. PNG
+  // URLs). Game clients fetch this at boot to build a kind→texture map
+  // without needing to hold the service token.
+  if (req.method === 'GET' && url.pathname === '/v1/assets/index') {
+    sendJson(res, 200, {
+      assets: await service.listApprovedAssets(),
+    });
     return;
   }
 
@@ -85,13 +113,6 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const request = AssetPrewarmRequestSchema.parse(body);
     const result = await service.prewarm(request);
     sendJson(res, 202, result);
-    return;
-  }
-
-  if (req.method === 'GET' && url.pathname === '/v1/assets/index') {
-    sendJson(res, 200, {
-      assets: await service.listApprovedAssets(),
-    });
     return;
   }
 
@@ -164,6 +185,34 @@ async function serveAsset(pathname: string, res: ServerResponse): Promise<void> 
   }
   res.writeHead(200, { 'content-type': 'image/png' });
   createReadStream(path).pipe(res);
+}
+
+async function serveViewer(pathname: string, res: ServerResponse): Promise<void> {
+  const filename = pathname === '/viewer'
+    ? 'index.html'
+    : basename(pathname);
+  const contentType = viewerContentType(filename);
+  if (!contentType) {
+    sendJson(res, 404, { error: 'viewer asset not found' });
+    return;
+  }
+
+  const path = join(process.cwd(), 'public', 'viewer', filename);
+  try {
+    await readFile(path);
+  } catch {
+    sendJson(res, 404, { error: 'viewer asset not found' });
+    return;
+  }
+  res.writeHead(200, { 'content-type': contentType });
+  createReadStream(path).pipe(res);
+}
+
+function viewerContentType(filename: string): string | null {
+  if (filename === 'index.html') return 'text/html; charset=utf-8';
+  if (filename.endsWith('.css')) return 'text/css; charset=utf-8';
+  if (filename.endsWith('.js')) return 'text/javascript; charset=utf-8';
+  return null;
 }
 
 process.on('SIGINT', () => shutdown());

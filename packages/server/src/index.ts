@@ -5,6 +5,7 @@ import {
   emptyEquipment,
   emptyInventory,
   addPart as invAddPart,
+  type ClientMessage,
   type Equipment,
   type Inventory,
   type ServerMessage,
@@ -15,6 +16,62 @@ import { buildStarterInventory } from './starter.js';
 import { env } from './env.js';
 import { supabase } from './supabase.js';
 import { registry } from './registry.js';
+import type { World } from './world.js';
+
+// Typed dispatch map for inbound client messages. Each key is a
+// ClientMessage['type']; each value handles ONLY that type (TS narrows
+// `m` via the Extract<> in the value signature). Adding a new message
+// type is one entry here plus the protocol schema entry. Keeps the
+// route handler at the bottom of the file three lines long.
+type ClientMessageHandlers = {
+  [K in Exclude<ClientMessage['type'], 'auth'>]: (
+    world: World,
+    characterId: string,
+    msg: Extract<ClientMessage, { type: K }>
+  ) => void;
+};
+
+const MESSAGE_HANDLERS: ClientMessageHandlers = {
+  input: (w, c, m) => w.handleInput(c, m.moveX, m.moveY, m.sprint),
+  fire: (w, c, m) => w.handleFire(c, m.dirX, m.dirY),
+  build_request: (w, c, m) =>
+    w.handleBuildRequest(c, m.kind, m.tileX, m.tileY),
+  demolish_request: (w, c, m) => w.handleDemolishRequest(c, m.buildingId),
+  select_hotbar: (w, c, m) => w.handleSelectHotbar(c, m.slot),
+  inventory_swap: (w, c, m) => w.handleInventorySwap(c, m.from, m.to),
+  inventory_discard: (w, c, m) => w.handleInventoryDiscard(c, m.slot, m.all),
+  inventory_sort: (w, c) => w.handleInventorySort(c),
+  equip_request: (w, c, m) =>
+    w.handleEquipRequest(c, m.fromInventoryIdx, m.suitSlot),
+  unequip_request: (w, c, m) =>
+    w.handleUnequipRequest(c, m.suitSlot, m.toInventoryIdx),
+  interact: (w, c, m) => w.handleInteract(c, m.interactableId),
+  craft_request: (w, c, m) => w.handleCraftRequest(c, m.recipeId),
+  purchase_blueprint: (w, c, m) => w.handlePurchaseBlueprint(c, m.blueprintId),
+  purchase_key: (w, c, m) => w.handlePurchaseKey(c, m.count),
+  pickup_station_outputs: (w, c, m) =>
+    w.handlePickupStationOutputs(c, m.kind),
+  open_door: (w, c, m) => w.handleOpenDoor(c, m.buildingId),
+  attach_weapon_affix: (w, c, m) =>
+    w.handleAttachWeaponAffix(
+      c,
+      m.weaponInventoryIdx,
+      m.pieceKind,
+      m.attachmentDefId
+    ),
+  detach_weapon_affix: (w, c, m) =>
+    w.handleDetachWeaponAffix(c, m.weaponInventoryIdx, m.pieceKind),
+  attach_weapon_mod: (w, c, m) =>
+    w.handleAttachWeaponMod(c, m.weaponInventoryIdx, m.attachmentDefId),
+  detach_weapon_mod: (w, c, m) =>
+    w.handleDetachWeaponMod(c, m.weaponInventoryIdx, m.modIndex),
+  attach_suit_affix: (w, c, m) =>
+    w.handleAttachSuitAffix(c, m.suitSlot, m.attachmentDefId),
+  detach_suit_affix: (w, c, m) =>
+    w.handleDetachSuitAffix(c, m.suitSlot, m.attachmentIndex),
+  tier_up_weapon: (w, c, m) => w.handleTierUpWeapon(c, m.weaponInventoryIdx),
+  use_consumable: (w, c, m) => w.handleUseConsumable(c, m.slot),
+};
 
 const wss = new WebSocketServer({ port: env.port, host: env.host });
 
@@ -32,6 +89,7 @@ wss.on('connection', (ws: WebSocket) => {
   // with a valid signed JoinToken. Anything else is a protocol violation.
   let player: Player | null = null;
   let serverId: string | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   // Disconnect if the client doesn't auth within 5 seconds.
   const authTimer = setTimeout(() => {
@@ -125,6 +183,16 @@ wss.on('connection', (ws: WebSocket) => {
         world.handleSelectHotbar(player.characterId, loaded.hotbarSelection);
       }
 
+      // Stamp last_seen_at + start a heartbeat. The Next.js join route
+      // counts characters with last_seen_at in the past 60s as
+      // "occupying a slot"; without this heartbeat, a character that
+      // joined an hour ago and never disconnected would appear idle.
+      void touchLastSeen(characterId);
+      heartbeatTimer = setInterval(
+        () => touchLastSeen(characterId),
+        30_000
+      );
+
       console.log(
         `[ws] ${displayName} (${characterId}) joined server ${serverId} (world size: ${world.playerCount})`
       );
@@ -133,171 +201,28 @@ wss.on('connection', (ws: WebSocket) => {
 
     // Post-auth: route by message type. Zod has already guaranteed shape +
     // finite numbers; the room handlers do their own domain clamps.
-    switch (msg.type) {
-      case 'input': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleInput(player.characterId, msg.moveX, msg.moveY, msg.sprint);
-        break;
-      }
-      case 'fire': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleFire(player.characterId, msg.dirX, msg.dirY);
-        break;
-      }
-      case 'build_request': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleBuildRequest(player.characterId, msg.kind, msg.tileX, msg.tileY);
-        break;
-      }
-      case 'demolish_request': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleDemolishRequest(player.characterId, msg.buildingId);
-        break;
-      }
-      case 'select_hotbar': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleSelectHotbar(player.characterId, msg.slot);
-        break;
-      }
-      case 'inventory_swap': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleInventorySwap(player.characterId, msg.from, msg.to);
-        break;
-      }
-      case 'inventory_discard': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleInventoryDiscard(player.characterId, msg.slot, msg.all);
-        break;
-      }
-      case 'inventory_sort': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleInventorySort(player.characterId);
-        break;
-      }
-      case 'equip_request': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleEquipRequest(
-          player.characterId,
-          msg.fromInventoryIdx,
-          msg.suitSlot
-        );
-        break;
-      }
-      case 'unequip_request': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleUnequipRequest(
-          player.characterId,
-          msg.suitSlot,
-          msg.toInventoryIdx
-        );
-        break;
-      }
-      case 'interact': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleInteract(player.characterId, msg.interactableId);
-        break;
-      }
-      case 'craft_request': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleCraftRequest(player.characterId, msg.recipeId);
-        break;
-      }
-      case 'purchase_blueprint': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handlePurchaseBlueprint(player.characterId, msg.blueprintId);
-        break;
-      }
-      case 'purchase_key': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handlePurchaseKey(player.characterId, msg.count);
-        break;
-      }
-      case 'pickup_station_outputs': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handlePickupStationOutputs(player.characterId, msg.kind);
-        break;
-      }
-      case 'open_door': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleOpenDoor(player.characterId, msg.buildingId);
-        break;
-      }
-      case 'attach_weapon_affix': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleAttachWeaponAffix(
-          player.characterId,
-          msg.weaponInventoryIdx,
-          msg.pieceKind,
-          msg.attachmentDefId
-        );
-        break;
-      }
-      case 'detach_weapon_affix': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleDetachWeaponAffix(
-          player.characterId,
-          msg.weaponInventoryIdx,
-          msg.pieceKind
-        );
-        break;
-      }
-      case 'attach_weapon_mod': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleAttachWeaponMod(
-          player.characterId,
-          msg.weaponInventoryIdx,
-          msg.attachmentDefId
-        );
-        break;
-      }
-      case 'detach_weapon_mod': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleDetachWeaponMod(
-          player.characterId,
-          msg.weaponInventoryIdx,
-          msg.modIndex
-        );
-        break;
-      }
-      case 'attach_suit_affix': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleAttachSuitAffix(
-          player.characterId,
-          msg.suitSlot,
-          msg.attachmentDefId
-        );
-        break;
-      }
-      case 'detach_suit_affix': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleDetachSuitAffix(
-          player.characterId,
-          msg.suitSlot,
-          msg.attachmentIndex
-        );
-        break;
-      }
-      case 'tier_up_weapon': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleTierUpWeapon(player.characterId, msg.weaponInventoryIdx);
-        break;
-      }
-      case 'use_consumable': {
-        const world = serverId ? registry.get(serverId) : undefined;
-        world?.handleUseConsumable(player.characterId, msg.slot);
-        break;
-      }
-      case 'auth':
-        sendError(ws, 'already_authed');
-        break;
+    if (msg.type === 'auth') {
+      sendError(ws, 'already_authed');
+      return;
     }
+    const world = serverId ? registry.get(serverId) : undefined;
+    if (!world) return;
+    const handler = MESSAGE_HANDLERS[msg.type] as
+      | ((w: World, cid: string, m: ClientMessage) => void)
+      | undefined;
+    if (handler) handler(world, player.characterId, msg);
   });
 
   ws.on('close', () => {
     clearTimeout(authTimer);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (player && serverId) {
       const world = registry.get(serverId);
       world?.remove(player.characterId, ws);
+      // Push last_seen_at back into the past so the next join route
+      // call sees this seat as freed without waiting the full 60s
+      // window. Best-effort; silent on failure.
+      void clearLastSeen(player.characterId);
       console.log(
         `[ws] ${player.displayName} (${player.characterId}) left server ${serverId}`
       );
@@ -313,6 +238,30 @@ function sendError(ws: WebSocket, message: string): void {
   if (ws.readyState !== ws.OPEN) return;
   const msg: ServerMessage = { type: 'error', message };
   ws.send(JSON.stringify(msg));
+}
+
+// Heartbeat: stamp characters.last_seen_at so the join route's
+// active-occupancy check sees this slot as live. Best-effort —
+// silent on error since a transient DB blip shouldn't kick the player.
+async function touchLastSeen(characterId: string): Promise<void> {
+  const { error } = await supabase
+    .from('characters')
+    .update({ last_seen_at: new Date().toISOString() })
+    .eq('id', characterId);
+  if (error) {
+    console.warn('[ws] touchLastSeen failed:', error.message);
+  }
+}
+
+// On clean disconnect, push last_seen_at into the past so the next
+// join route call frees the slot immediately rather than waiting the
+// full 60s grace window.
+async function clearLastSeen(characterId: string): Promise<void> {
+  const past = new Date(Date.now() - 5 * 60_000).toISOString();
+  await supabase
+    .from('characters')
+    .update({ last_seen_at: past })
+    .eq('id', characterId);
 }
 
 // Inventory loader supporting the historical schema versions:

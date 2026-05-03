@@ -32,7 +32,12 @@ import type {
   ProjectileState,
   SceneLayout,
 } from '@dumrunner/shared';
-import { isInsideAny } from '@dumrunner/shared';
+import {
+  enemyVisualFor,
+  isInsideAny,
+  materialTint,
+  TIER_COLORS_NUM,
+} from '@dumrunner/shared';
 import type { GameHandle, GameInit, SceneState } from './pixi';
 
 // ---------- tuning ----------
@@ -92,38 +97,15 @@ const BUILD_REACH_TILES = 1.5;
 const BUILD_GHOST_VALID_COLOR = 0x22c55e;
 const BUILD_GHOST_INVALID_COLOR = 0xef4444;
 
-// ---------- entity visuals (Phase 2) ----------
-// Mirrors ENEMY_VISUALS in pixi.ts. Kept inline to avoid a coupling import.
-type EnemyVisual = { color: number; size: number };
-const ENEMY_VISUALS: Record<string, EnemyVisual> = {
-  dummy_target: { color: 0xef4444, size: 18 },
-  chaser_melee: { color: 0xa855f7, size: 16 },
-  shooter_drone: { color: 0x60a5fa, size: 14 },
-  brute_chaser: { color: 0xb45309, size: 26 },
-};
-const FALLBACK_ENEMY_VISUAL: EnemyVisual = ENEMY_VISUALS.dummy_target;
+// Player + corpse + projectile billboard sizes/colors live here. All
+// other render constants (enemy visuals, material tint, part tier
+// colors) come from @dumrunner/shared/visuals so the FPS view stays
+// in sync with the top-down view.
 const PLAYER_OTHER_COLOR = 0x4dd0e1;
 const PLAYER_SIZE = 14;
 const CORPSE_COLOR = 0x4a1d1d;
 const CORPSE_SIZE = 14;
 const PROJECTILE_DEFAULT_COLOR = 0xfde047;
-const MATERIAL_TINT: Record<string, number> = {
-  scrap: 0xc2410c,
-  wire: 0xeab308,
-  alloy: 0x94a3b8,
-  circuit: 0x10b981,
-  biotic: 0xa855f7,
-  crystal: 0x06b6d4,
-  artifact: 0xf472b6,
-  key: 0xfacc15,
-};
-const PART_TIER_COLOR: Record<string, number> = {
-  Mk1: 0x9ca3af,
-  Mk2: 0x22c55e,
-  Mk3: 0x3b82f6,
-  Mk4: 0xa855f7,
-  Alien: 0xf97316,
-};
 
 export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const app = new Application();
@@ -843,7 +825,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     }
     const flashWindow = 90;
     for (const e of enemies.values()) {
-      const v = ENEMY_VISUALS[e.kind] ?? FALLBACK_ENEMY_VISUAL;
+      const v = enemyVisualFor(e.kind);
       // White hit-flash for ~90ms on damage. Sprite is the same shape; just
       // tinted toward white.
       const hitAt = enemyHitAt.get(e.id) ?? 0;
@@ -860,8 +842,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     for (const l of loot.values()) {
       const color =
         l.content.kind === 'material'
-          ? (MATERIAL_TINT[l.content.materialId] ?? 0xffffff)
-          : (PART_TIER_COLOR[l.content.part.tier] ?? 0xffffff);
+          ? materialTint(l.content.materialId)
+          : (TIER_COLORS_NUM[l.content.part.tier] ?? 0xffffff);
       // Loot sits on the floor — small height.
       pushSprite(l.x, l.y, color, 14);
     }
