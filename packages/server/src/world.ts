@@ -1277,6 +1277,19 @@ export class World {
     if (def.healHp > 0) {
       conn.hp = Math.min(conn.maxHp, conn.hp + def.healHp);
       conn.dirty = true;
+      // The client only updates its hp readout off `player_damaged`
+      // messages — without an explicit broadcast here the heal
+      // happens server-side but the player sees their bar unchanged.
+      // Reused message shape rather than inventing player_healed.
+      const scene = this.scenes.get(conn.sceneId);
+      scene?.broadcast({
+        type: 'player_damaged',
+        characterId: conn.characterId,
+        hp: conn.hp,
+        maxHp: conn.maxHp,
+        shield: conn.shield,
+        maxShield: conn.maxShield,
+      });
     }
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
