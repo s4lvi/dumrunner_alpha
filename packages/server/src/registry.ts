@@ -34,6 +34,16 @@ class Registry {
   get(serverId: string): World | undefined {
     return this.worlds.get(serverId);
   }
+
+  // Drop the cached World so the next getOrCreate spins up a fresh
+  // hydrate. Used after a pause: the World tore down its timers +
+  // cleared connections, so reusing the same instance leaves it in a
+  // permanently-broken state ("pausing" stays true, timers are null).
+  evict(serverId: string): void {
+    if (this.worlds.delete(serverId)) {
+      console.log(`[registry] evicted world for server ${serverId}`);
+    }
+  }
 }
 
 export const registry = new Registry();

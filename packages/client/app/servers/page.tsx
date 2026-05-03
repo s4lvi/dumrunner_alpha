@@ -4,7 +4,6 @@ import { supabaseServer } from '@/lib/supabase/server';
 import { AppNav } from '@/app/components/AppNav';
 import { JoinByIdForm } from './JoinByIdForm';
 import { DeleteServerButton } from './DeleteServerButton';
-import { ResumeServerButton } from './ResumeServerButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +18,20 @@ type ServerRow = {
   is_paused: boolean;
 };
 
-export default async function ServersPage() {
+const NOTICE_MESSAGES: Record<string, string> = {
+  server_paused:
+    'The server you were on was paused by its owner. Rejoin (as owner) or wait for them to resume.',
+};
+
+export default async function ServersPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
+  const noticeKey = typeof sp.notice === 'string' ? sp.notice : null;
+  const notice = noticeKey ? NOTICE_MESSAGES[noticeKey] ?? null : null;
+
   const supabase = await supabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect('/login');
@@ -43,6 +55,11 @@ export default async function ServersPage() {
     <>
       <AppNav />
       <main className="min-h-screen px-6 py-10 max-w-5xl mx-auto">
+        {notice && (
+          <div className="mb-6 text-sm text-amber-300 border border-amber-700/40 bg-amber-900/20 rounded px-4 py-3">
+            {notice}
+          </div>
+        )}
         <header className="flex items-center justify-between mb-10">
           <div>
             <h1 className="text-3xl font-bold">Servers</h1>
@@ -121,7 +138,6 @@ function ServerRowCard({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        {isOwner && paused && <ResumeServerButton serverId={server.id} />}
         {isOwner && <DeleteServerButton serverId={server.id} />}
         {paused && !isOwner ? (
           <span className="px-4 py-2 rounded border border-[color:var(--panel-border)] text-zinc-500 text-sm">

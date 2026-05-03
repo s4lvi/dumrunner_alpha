@@ -1957,6 +1957,12 @@ export class World {
     }
     this.connections.clear();
     this.stopTimers();
+    // Evict from the registry so the next join (post-resume) gets a
+    // fresh World with timers + state hydrated from scratch. Reusing
+    // this instance leaves `pausing` permanently true and never
+    // restarts the tick loop, which broke the second pause.
+    const { registry } = await import('./registry.js');
+    registry.evict(this.serverId);
   }
 
   // Polls servers.is_paused so a lobby pause (owner not connected,

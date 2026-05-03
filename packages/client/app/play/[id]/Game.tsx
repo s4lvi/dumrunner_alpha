@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   countAmmo,
@@ -79,6 +80,11 @@ type ChatEntry = {
 };
 
 export function Game({ serverId }: { serverId: string }) {
+  const router = useRouter();
+  // Set when the server sends 'server_paused' so the subsequent
+  // ws.onclose can route to the lobby with a friendly banner
+  // instead of showing a generic disconnect error.
+  const pausedRedirectRef = useRef(false);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [password, setPassword] = useState('');
   const [inventory, setInventory] = useState<Inventory>(() => emptyInventory());
@@ -374,6 +380,13 @@ export function Game({ serverId }: { serverId: string }) {
             gameRef.current.destroy();
             gameRef.current = null;
           }
+          // Pause-driven close (server_paused message arrived first,
+          // OR the close came in with code 4090). Route to lobby
+          // with a banner instead of a disconnect error.
+          if (pausedRedirectRef.current || event.code === 4090) {
+            router.replace('/servers?notice=server_paused');
+            return;
+          }
           setStatus({
             kind: 'error',
             message: `Disconnected${event.reason ? `: ${event.reason}` : '.'}`,
@@ -573,12 +586,10 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'server_paused':
         // Owner triggered a pause. Server will close the WS right
-        // after this message; we just route the user back to the
-        // lobby with a friendly status.
-        setStatus({
-          kind: 'error',
-          message: 'Server paused by owner. Owner can resume from the server browser.',
-        });
+        // after this message; the close handler reads this flag and
+        // redirects to /servers with a banner instead of showing a
+        // disconnect error.
+        pausedRedirectRef.current = true;
         break;
       case 'chat': {
         const entry: ChatEntry = {
@@ -1149,21 +1160,9 @@ export function Game({ serverId }: { serverId: string }) {
         </Link>
         <div className="flex items-center gap-3">
           {status.kind === 'connected' && status.resp.isOwner && (
-            <button
-              type="button"
-              onClick={() => {
-                if (
-                  confirm(
-                    'Pause the server? Everyone will be kicked and progress is saved.'
-                  )
-                ) {
-                  sendOnLiveWs({ type: 'pause_server' });
-                }
-              }}
-              className="px-3 py-1.5 rounded text-xs border border-amber-900 text-amber-300 hover:bg-amber-900/20"
-            >
-              Pause Server
-            </button>
+            <PauseServerControl
+              onPause={() => sendOnLiveWs({ type: 'pause_server' })}
+            />
           )}
           <div className="text-sm text-zinc-400">
             server {serverId.slice(0, 8)}…
@@ -2987,6 +2986,51 @@ function WeaponEditor({
         </button>
       </div>
     </div>
+  );
+}
+
+// Two-click pause confirm. The native `confirm()` dialog is blocked
+// inside Discord's Activity iframe, so we use a click → "Confirm?"
+// → click flow instead.
+function PauseServerControl({ onPause }: { onPause: () => void }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  if (armed) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-amber-300">Pause? Kicks everyone.</span>
+        <button
+          type="button"
+          onClick={() => {
+            setArmed(false);
+            onPause();
+          }}
+          className="px-3 py-1.5 rounded text-xs bg-amber-900 text-amber-100 hover:bg-amber-800"
+        >
+          Yes, pause
+        </button>
+        <button
+          type="button"
+          onClick={() => setArmed(false)}
+          className="px-3 py-1.5 rounded text-xs border border-[color:var(--panel-border)] text-zinc-400 hover:bg-[color:var(--bg)]"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setArmed(true)}
+      className="px-3 py-1.5 rounded text-xs border border-amber-900 text-amber-300 hover:bg-amber-900/20"
+    >
+      Pause Server
+    </button>
   );
 }
 
