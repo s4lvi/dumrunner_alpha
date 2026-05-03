@@ -2,7 +2,37 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { supabaseServer } from '@/lib/supabase/server';
 
-export default async function Landing() {
+type SearchParams = Record<string, string | string[] | undefined>;
+
+// Discord Activity URL Mappings serve the proxy at `/`, so the
+// iframe lands here. Detect the launch by `frame_id` (Discord
+// always injects it) and bounce to `/discord` preserving every
+// query param — the embedded SDK reads them when constructing
+// `new DiscordSDK(...)`.
+function isDiscordActivityLaunch(sp: SearchParams): boolean {
+  return typeof sp.frame_id === 'string' && sp.frame_id.length > 0;
+}
+
+function buildQueryString(sp: SearchParams): string {
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (Array.isArray(v)) v.forEach((vv) => usp.append(k, vv));
+    else if (typeof v === 'string') usp.set(k, v);
+  }
+  const s = usp.toString();
+  return s ? `?${s}` : '';
+}
+
+export default async function Landing({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const sp = await searchParams;
+  if (isDiscordActivityLaunch(sp)) {
+    redirect(`/discord${buildQueryString(sp)}`);
+  }
+
   const supabase = await supabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
 
