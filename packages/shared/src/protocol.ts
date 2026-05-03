@@ -115,6 +115,11 @@ export type Interactable = {
 // Recipes whose Recipe.craftTimeMs > 0 don't materialize instantly — they
 // queue as a CraftJob at a workstation. Server holds the truth; client
 // renders progress bars from these.
+//
+// `completesAt > 0` means the job is active (currently being worked).
+// `completesAt === 0` means it's queued behind another job at the same
+// station; the server promotes the oldest queued job when an active
+// one finishes.
 export type CraftJobState = {
   id: string;
   recipeId: string;
@@ -126,9 +131,13 @@ export type CraftJobState = {
   // own parallel-slot budget; jobs are bound to the building so multiple
   // stations of the same kind work as parallel queues.
   stationBuildingId: string;
-  // Epoch ms.
+  // Epoch ms. 0 if the job is queued (not yet started).
   startedAt: number;
+  // Epoch ms. 0 if the job is queued.
   completesAt: number;
+  // FIFO order across queued jobs at the same station. Newer jobs get
+  // a higher value. Set on enqueue; doesn't change on promote.
+  queueIndex?: number;
 };
 
 // ---------- Buildings (player-placed structures) ----------

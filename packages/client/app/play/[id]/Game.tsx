@@ -703,7 +703,16 @@ export function Game({ serverId }: { serverId: string }) {
         });
         break;
       case 'craft_job_started':
-        setCraftJobs((jobs) => [...jobs, msg.job]);
+        // Server emits this both when a new job is enqueued (which
+        // may be queued, completesAt=0) AND when a queued job
+        // promotes to active. Match by id to update in place.
+        setCraftJobs((jobs) => {
+          const idx = jobs.findIndex((j) => j.id === msg.job.id);
+          if (idx === -1) return [...jobs, msg.job];
+          const next = jobs.slice();
+          next[idx] = msg.job;
+          return next;
+        });
         break;
       case 'craft_job_completed':
         setCraftJobs((jobs) => jobs.filter((j) => j.id !== msg.jobId));
@@ -1520,10 +1529,14 @@ function friendlyErrorMessage(code: string): string {
   switch (code) {
     case 'station_busy':
       return 'Station is busy — wait for the current job or build another station.';
+    case 'station_queue_full':
+      return 'Station queue is full — wait for a job to finish or build another station.';
     case 'insufficient_power':
       return 'Not enough power. Push deeper into the dungeon to raise capacity.';
     case 'power_link_offline':
       return 'Power Link is destroyed. Wait for the next perihelion to rebuild.';
+    case 'pause_owner_only':
+      return 'Only the server owner can pause.';
     default:
       return code.replace(/_/g, ' ');
   }
@@ -1535,8 +1548,10 @@ function friendlyErrorMessage(code: string): string {
 function isExpectedServerError(code: string): boolean {
   return (
     code === 'station_busy' ||
+    code === 'station_queue_full' ||
     code === 'insufficient_power' ||
-    code === 'power_link_offline'
+    code === 'power_link_offline' ||
+    code === 'pause_owner_only'
   );
 }
 
@@ -2280,7 +2295,16 @@ function WorkstationModal({
   onTierUpWeapon: (weaponIdx: number) => void;
 }) {
   // Jobs running at THIS station kind so the queue stays scoped.
-  const jobsAtStation = craftJobs.filter((j) => j.stationKind === kind);
+  // Sort active first (so the timer is visible at the top), then
+  // queued in FIFO order (queueIndex ascending).
+  const jobsAtStation = craftJobs
+    .filter((j) => j.stationKind === kind)
+    .sort((a, b) => {
+      const aActive = a.completesAt > 0;
+      const bActive = b.completesAt > 0;
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      return (a.queueIndex ?? 0) - (b.queueIndex ?? 0);
+    });
   // Aggregate every output slot across every nearby station of this
   // kind. Server enforces proximity at pickup, but client uses raw
   // building list since it doesn't know exactly which are in range —
@@ -2931,7 +2955,9 @@ function CraftJobRow({ job }: { job: CraftJobState }) {
   const recipe = listRecipes().find((r) => r.id === job.recipeId);
   const fillRef = useRef<HTMLDivElement>(null);
   const secondsRef = useRef<HTMLSpanElement>(null);
+  const isQueued = job.completesAt === 0;
   useEffect(() => {
+    if (isQueued) return; // Static render for queued jobs.
     const total = job.completesAt - job.startedAt;
     let raf = 0;
     let lastSeconds = -1;
@@ -2950,10 +2976,20 @@ function CraftJobRow({ job }: { job: CraftJobState }) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [job.startedAt, job.completesAt]);
+  }, [job.startedAt, job.completesAt, isQueued]);
 
-  // Initial seconds is the worst-case (job just started); rAF tick
-  // overwrites within ~16ms.
+  if (isQueued) {
+    return (
+      <div className="flex items-center gap-3 text-xs opacity-60">
+        <span className="w-32 text-zinc-300 truncate">
+          {recipe?.name ?? job.recipeId}
+        </span>
+        <div className="flex-1 h-2 rounded bg-black/40 border border-dashed border-[color:var(--panel-border)]" />
+        <span className="w-10 text-right text-zinc-500 italic">queued</span>
+      </div>
+    );
+  }
+
   const initialSeconds = Math.ceil(
     Math.max(0, job.completesAt - Date.now()) / 1000
   );

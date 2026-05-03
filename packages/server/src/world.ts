@@ -180,6 +180,12 @@ const TIER_UP_COSTS: Record<number, { materialId: MaterialKind; count: number }[
 // is the baseline weapon every run starts with.
 const STARTER_BLUEPRINTS: string[] = ['bp_pistol'];
 
+// Per-station ceiling on jobs (active + queued). When every nearby
+// station of the requested kind hits this depth, the request gets
+// rejected with `station_queue_full`. Active slot count is the
+// per-kind parallelSlots (currently 1).
+const MAX_QUEUE_PER_STATION = 5;
+
 function dungeonSceneId(floorIndex: number): string {
   return `${DUNGEON_SCENE_PREFIX}${floorIndex}`;
 }
@@ -228,6 +234,10 @@ export class World {
   };
   // Owner accountId from the servers row. Pause is gated to this id.
   private ownerAccountId: string | null = null;
+  // Monotonic FIFO counter for craft-job queue ordering. Bumped on
+  // every enqueue; queued jobs at the same station promote in
+  // ascending queueIndex order.
+  private nextQueueIndex = 1;
   // Last poll of `servers.is_paused`. Used to detect lobby-side pauses
   // when the owner isn't connected (poll runs every PAUSE_POLL_MS).
   private lastPauseCheckAt = 0;
@@ -828,6 +838,11 @@ export class World {
     // Workstation gate: if the recipe requires a station, the player must be
     // on the surface and within range of a built one of that kind. Stations
     // only place on surface, so dungeon-side crafts are rejected outright.
+    //
+    // If every nearby station of the right kind is at queue depth, reject.
+    // Otherwise pick the station with the shortest queue (active + queued)
+    // so a player tap-spamming the craft button spreads load across all
+    // their stations of that kind.
     let chosenStationId: string | null = null;
     if (recipe.workstation !== null) {
       if (conn.sceneId !== SURFACE_SCENE_ID) return;
@@ -840,27 +855,29 @@ export class World {
         COMBAT.CRAFT_STATION_RANGE_PX
       );
       if (nearby.length === 0) return;
-      // Each station has a parallel-slot budget. Find one with a free
-      // slot; if every station of this kind nearby is saturated, reject.
-      const slotsPerStation =
-        buildingParallelSlots(recipe.workstation) || 1;
+      let bestStation: string | null = null;
+      let bestQueueDepth = Infinity;
       for (const station of nearby) {
-        let used = 0;
+        let depth = 0;
         for (const job of this.activeCraftJobs.values()) {
-          if (job.stationBuildingId === station.id) used++;
+          if (job.stationBuildingId === station.id) depth++;
         }
-        if (used < slotsPerStation) {
-          chosenStationId = station.id;
-          break;
+        if (depth < bestQueueDepth) {
+          bestQueueDepth = depth;
+          bestStation = station.id;
         }
       }
-      if (chosenStationId === null) {
+      if (
+        bestStation === null ||
+        bestQueueDepth >= MAX_QUEUE_PER_STATION
+      ) {
         this.sendDirect(conn.ws, {
           type: 'error',
-          message: 'station_busy',
+          message: 'station_queue_full',
         });
         return;
       }
+      chosenStationId = bestStation;
     }
 
     // Blueprint gate. The recipe's blueprintId must be in either the
@@ -881,43 +898,46 @@ export class World {
     const craftTimeMs = recipe.craftTimeMs ?? 0;
     const isAsync = craftTimeMs > 0 && recipe.workstation !== null;
 
-    if (isAsync) {
-      // Power budget gate: a queued craft job costs 1 power for its
-      // duration. Reject if it would exceed the Link's capacity.
-      if (
-        this.powerDraw + COMBAT.POWER_DRAW_CRAFT_JOB >
-        this.powerCapacity
-      ) {
-        this.sendDirect(conn.ws, {
-          type: 'error',
-          message: 'insufficient_power',
-        });
-        return;
-      }
-    }
-
-    // Deduct inputs.
+    // Deduct inputs upfront — even queued jobs consume materials at
+    // request time so a player can't game the queue with a single
+    // material stack.
     for (const input of recipe.inputs) {
       consumeRecipeInput(conn.inventory, input);
     }
 
     if (isAsync) {
-      // Queue an async job. Output materializes when completesAt elapses
-      // (see tickCraftJobs in the world tick loop).
       const now = Date.now();
       const jobId = `cj${this.nextCraftJobId++}`;
-      const job = {
+      const stationKind = recipe.workstation as
+        | 'workbench'
+        | 'forge'
+        | 'electronics_bench'
+        | 'weapon_bench';
+      const stationId = chosenStationId!;
+
+      // Can we start it immediately? Yes if (a) station has a free
+      // active slot and (b) power can fit the new draw.
+      const slotsPerStation = buildingParallelSlots(stationKind) || 1;
+      let activeAtStation = 0;
+      for (const job of this.activeCraftJobs.values()) {
+        if (job.stationBuildingId === stationId && job.completesAt > 0) {
+          activeAtStation++;
+        }
+      }
+      const slotFree = activeAtStation < slotsPerStation;
+      const powerFits =
+        this.powerDraw + COMBAT.POWER_DRAW_CRAFT_JOB <= this.powerCapacity;
+
+      const startNow = slotFree && powerFits;
+      const job: import('@dumrunner/shared').CraftJobState = {
         id: jobId,
         recipeId,
         characterId,
-        stationKind: recipe.workstation as
-          | 'workbench'
-          | 'forge'
-          | 'electronics_bench'
-          | 'weapon_bench',
-        stationBuildingId: chosenStationId!,
-        startedAt: now,
-        completesAt: now + craftTimeMs,
+        stationKind,
+        stationBuildingId: stationId,
+        startedAt: startNow ? now : 0,
+        completesAt: startNow ? now + craftTimeMs : 0,
+        queueIndex: this.nextQueueIndex++,
       };
       this.activeCraftJobs.set(jobId, job);
       this.sendDirect(conn.ws, { type: 'craft_job_started', job });
@@ -925,9 +945,9 @@ export class World {
         type: 'inventory_changed',
         inventory: conn.inventory,
       });
-      // Job draw counts toward capacity so subsequent power-budget
-      // checks see the new total.
-      this.recomputePowerState();
+      if (startNow) {
+        this.recomputePowerState();
+      }
       return;
     }
 
@@ -941,44 +961,122 @@ export class World {
   }
 
   // Run each tick. Materializes finished craft jobs into the requesting
-  // player's inventory and removes them from the active map.
+  // player's inventory and removes them from the active map. Promotes
+  // the oldest queued job at the same station whenever an active one
+  // finishes (or whenever power frees up).
   private tickCraftJobs(now: number): void {
     if (this.activeCraftJobs.size === 0) return;
+
+    // Find any active jobs whose timer elapsed.
     const finished: string[] = [];
     for (const job of this.activeCraftJobs.values()) {
-      if (job.completesAt <= now) finished.push(job.id);
-    }
-    if (finished.length === 0) return;
-    for (const jobId of finished) {
-      const job = this.activeCraftJobs.get(jobId);
-      if (!job) continue;
-      this.activeCraftJobs.delete(jobId);
-      const conn = this.connections.get(job.characterId);
-      if (!conn) continue; // owner dropped — output silently lost
-      const recipe = RECIPES[job.recipeId];
-      if (!recipe) continue;
-
-      // Try to deposit to the station's output buffer; fall back to
-      // direct-to-inventory if the station was destroyed mid-craft or
-      // its buffer is saturated. Both routes go through the shared
-      // recipe-output dispatch helpers.
-      const outputSlot = recipeOutputToSlot(recipe.output);
-      const surface = this.scenes.get(SURFACE_SCENE_ID);
-      const deposited = surface?.depositToStationOutput(
-        job.stationBuildingId,
-        outputSlot
-      );
-      if (!deposited) {
-        addRecipeOutputToInventory(conn.inventory, recipe.output);
-        conn.inventoryDirty = true;
-        this.sendDirect(conn.ws, {
-          type: 'inventory_changed',
-          inventory: conn.inventory,
-        });
+      if (job.completesAt > 0 && job.completesAt <= now) {
+        finished.push(job.id);
       }
-      this.sendDirect(conn.ws, { type: 'craft_job_completed', jobId });
     }
-    this.recomputePowerState();
+    let stateChanged = false;
+    if (finished.length > 0) {
+      stateChanged = true;
+      for (const jobId of finished) {
+        const job = this.activeCraftJobs.get(jobId);
+        if (!job) continue;
+        this.activeCraftJobs.delete(jobId);
+        const conn = this.connections.get(job.characterId);
+        if (!conn) continue; // owner dropped — output silently lost
+        const recipe = RECIPES[job.recipeId];
+        if (!recipe) continue;
+
+        const outputSlot = recipeOutputToSlot(recipe.output);
+        const surface = this.scenes.get(SURFACE_SCENE_ID);
+        const deposited = surface?.depositToStationOutput(
+          job.stationBuildingId,
+          outputSlot
+        );
+        if (!deposited) {
+          addRecipeOutputToInventory(conn.inventory, recipe.output);
+          conn.inventoryDirty = true;
+          this.sendDirect(conn.ws, {
+            type: 'inventory_changed',
+            inventory: conn.inventory,
+          });
+        }
+        this.sendDirect(conn.ws, { type: 'craft_job_completed', jobId });
+      }
+    }
+
+    // Promote queued jobs into active slots — both for stations whose
+    // active job just completed, and for any station that was waiting
+    // on power capacity to free up.
+    if (this.tryPromoteQueuedJobs(now)) {
+      stateChanged = true;
+    }
+
+    if (stateChanged) {
+      this.recomputePowerState();
+    }
+  }
+
+  // Walk every station that has at least one queued job and try to
+  // start it. Returns true if any job was promoted (caller recomputes
+  // power). Promotion is FIFO by queueIndex within a station; across
+  // stations we walk in arbitrary order.
+  private tryPromoteQueuedJobs(now: number): boolean {
+    if (this.activeCraftJobs.size === 0) return false;
+
+    // Group by station.
+    const byStation = new Map<string, import('@dumrunner/shared').CraftJobState[]>();
+    for (const job of this.activeCraftJobs.values()) {
+      let arr = byStation.get(job.stationBuildingId);
+      if (!arr) {
+        arr = [];
+        byStation.set(job.stationBuildingId, arr);
+      }
+      arr.push(job);
+    }
+
+    let promoted = false;
+    for (const [stationId, jobs] of byStation) {
+      // Active first, queued sorted oldest-first.
+      const active = jobs.filter((j) => j.completesAt > 0);
+      const queued = jobs
+        .filter((j) => j.completesAt === 0)
+        .sort((a, b) => (a.queueIndex ?? 0) - (b.queueIndex ?? 0));
+      if (queued.length === 0) continue;
+
+      const slotsPerStation =
+        buildingParallelSlots(jobs[0].stationKind) || 1;
+      let freeSlots = slotsPerStation - active.length;
+      while (freeSlots > 0 && queued.length > 0) {
+        // Recompute power headroom each iteration since promotions
+        // mutate the active set we're using to size the next check.
+        const newActiveCount =
+          [...this.activeCraftJobs.values()].filter((j) => j.completesAt > 0)
+            .length + 1;
+        const projectedDraw =
+          (this.powerDraw - active.length * COMBAT.POWER_DRAW_CRAFT_JOB) +
+          newActiveCount * COMBAT.POWER_DRAW_CRAFT_JOB;
+        if (projectedDraw > this.powerCapacity) break;
+
+        const next = queued.shift()!;
+        const recipe = RECIPES[next.recipeId];
+        const dur = recipe?.craftTimeMs ?? 0;
+        if (dur <= 0) {
+          // Defensive: should never queue an instant recipe.
+          this.activeCraftJobs.delete(next.id);
+          continue;
+        }
+        next.startedAt = now;
+        next.completesAt = now + dur;
+        promoted = true;
+        freeSlots--;
+        const conn = this.connections.get(next.characterId);
+        if (conn) {
+          this.sendDirect(conn.ws, { type: 'craft_job_started', job: next });
+        }
+      }
+      void stationId;
+    }
+    return promoted;
   }
 
   // Player taps "Take All" at a workstation modal. Server validates
@@ -1568,9 +1666,13 @@ export class World {
         'turret_shotgun',
         'turret_rifle',
       ]) ?? [];
+    let activeCraftCount = 0;
+    for (const job of this.activeCraftJobs.values()) {
+      if (job.completesAt > 0) activeCraftCount++;
+    }
     this.powerDraw =
       consumers.length * COMBAT.POWER_DRAW_TURRET +
-      this.activeCraftJobs.size * COMBAT.POWER_DRAW_CRAFT_JOB;
+      activeCraftCount * COMBAT.POWER_DRAW_CRAFT_JOB;
 
     this.poweredBuildings.clear();
     let remaining = this.powerCapacity;
