@@ -1,6 +1,15 @@
-# Discord integration plan (deferred)
+# Discord integration plan
 
-Status: **deferred** — pick this back up after the inflight bug list lands.
+Status:
+- **Phase A (web OAuth login) — shipped** via the synthetic-email path
+  (see "Implementation: chosen path" below).
+- **Phase B (Activity SDK + instance ↔ game-server linkage) — shipped.**
+- **Phase C (game-server token kind plumbing) — not needed** with the
+  synthetic-email path; Activity users land in Supabase auth like
+  anyone else, so the existing JoinToken flow works unchanged.
+- **Phase D (Developer Portal config) — manual, see below.**
+- **Phase E (URL routing) — `/discord` page is the Activity launch
+  target.**
 
 Two separate things the user wants, on the same Discord app credentials:
 
@@ -34,6 +43,57 @@ The user wants real Discord OAuth login on the web, so the JWT approach is proba
 it cleanly handles both Activity and non-Activity Discord users.
 
 ---
+
+## Implementation: chosen path
+
+Shipped the **synthetic-email** path for v1, not the self-issued JWT.
+Reason: the existing app keys off Supabase sessions everywhere
+(`/api/servers/[id]/join`, RLS policies, the server browser server
+component, middleware). Going JWT meant rewiring all of that for an
+alpha-stage feature. Synthetic-email keeps Discord users on the same
+code path as email users; the synthetic email is never user-visible.
+
+What's actually in the tree:
+- `supabase/migrations/0006_accounts_discord_provider.sql` — adds
+  `discord_sub`, `discord_username`, `discord_avatar` to `accounts`.
+- `packages/client/lib/discord/auth.ts` — code exchange,
+  `/users/@me` fetch, `provisionDiscordSession()` upserts both
+  `auth.users` (via service-role admin) and `public.accounts`,
+  returns deterministic synthetic creds the route then signs in with.
+- `packages/client/app/api/auth/discord/start/route.ts` — sets a
+  short-lived state cookie, redirects to Discord's authorize URL.
+- `packages/client/app/api/auth/discord/callback/route.ts` —
+  validates state, exchanges code, provisions, signs the Supabase
+  session in, redirects to `/servers`. Errors round-trip back to
+  `/login?discord_error=<code>`.
+- `app/login/page.tsx` + `app/register/page.tsx` — "Continue with
+  Discord" button (only renders when `NEXT_PUBLIC_DISCORD_CLIENT_ID`
+  is set).
+
+If we later want clean separation, swap `provisionDiscordSession` +
+`signInWithPassword` for the JWT path described below — all the
+calling code stays the same.
+
+### Phase B (Activity flow) additions
+
+- `supabase/migrations/0007_servers_discord_instance.sql` — adds
+  `servers.discord_instance_id` + unique partial index.
+- `supabase/migrations/0008_servers_public_hide_discord.sql` —
+  rebuilds `servers_public` view to exclude Activity-bound rooms.
+- `packages/client/lib/discord/sdk.ts` — lazy dynamic-import wrapper
+  around `@discord/embedded-app-sdk` (kept out of the main bundle).
+- `packages/client/app/api/auth/discord/exchange/route.ts` — POST
+  `{code}` → exchanges with `flow: 'activity'` (omits
+  `redirect_uri`), provisions, signs Supabase session in via cookies,
+  returns `accessToken` so the client can call
+  `sdk.commands.authenticate({access_token})`.
+- `packages/client/app/api/discord/instance/route.ts` — POST
+  `{instance_id}` → returns `{ server_id }`. First caller in the
+  call creates the server (visibility public, no password,
+  `discord_instance_id` set, owner = current user); subsequent
+  callers rejoin the same row. Race-safe via 23505 fallback.
+- `packages/client/app/discord/page.tsx` — Activity entry point.
+  boot → authorize → exchange → authenticate → instance → router.replace(`/play/${id}`).
 
 ## Phase A — Auth plumbing (no game changes)
 
@@ -121,12 +181,22 @@ instance, but belt-and-suspenders for multi-shard play.
 
 User must do this once:
 
-1. Create a Discord application at https://discord.com/developers/applications
+1. Create a Discord application at https://discord.com/developers/applications.
 2. **OAuth2 → Redirects**: add `https://dumrunner.app/api/auth/discord/callback`
-3. **OAuth2 → Scopes**: `identify` (and optionally `guilds` for channel-name lookups)
-4. **Activities → URL Mappings**: root `/` → `<vercel-domain>/discord` (Activity-only path)
-5. **Activities → Install Link**: enable so the app appears in the Apps menu
-6. Copy `Client ID` / `Client Secret` into Vercel + Fly env
+   (and `http://localhost:3000/api/auth/discord/callback` for local dev).
+3. **OAuth2 → Scopes (web button)**: `identify`.
+4. **Activities → Activity URL Mappings**: this is the proxy that
+   lets the iframe reach our origin. Set:
+   - **Target**: `dumrunner.app` (or your Vercel/preview origin)
+   - **Prefix**: `/`
+   That way `https://<client_id>.discordsays.com/` proxies our `/`,
+   and the Activity launches at `/discord` (set Activity URL to
+   `/discord` so Discord opens that path inside the proxy).
+5. **Activities → Install Link**: enable so the app appears in the
+   Apps menu of your Discord app.
+6. Copy `Client ID` / `Client Secret` into Vercel env
+   (`NEXT_PUBLIC_DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+   `DISCORD_REDIRECT_URI`). Game server doesn't need them.
 
 ---
 

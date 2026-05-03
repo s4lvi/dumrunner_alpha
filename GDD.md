@@ -39,15 +39,24 @@ Tactical extraction-shooter feel. Slower and more deliberate than arcade twin-st
 - **Per-template enemy stuns.** Hits briefly stun the enemy (200ms typical, 80ms for brutes who shrug it off), so kiting and burst windows are real.
 - **Player-vs-player is off** in the alpha. All servers are co-op only.
 
-**Weapon classes that ship in the alpha:** pistol (semi-auto, 4 shots/sec, ammo-gated) and knife (melee arc swing). The full part-driven assembly system lands later — see [Items & Procedural Generation](#items--procedural-generation) for the design intent.
+**Weapon classes that ship in the alpha:** four ranged families — **Pistol** (balanced baseline), **SMG** (high RoF, low damage), **Shotgun** (6-pellet pattern, short range), **Rifle** (high single-shot damage, slower cadence) — plus a **Knife** (melee arc swing). Each ranged weapon carries a per-family stat sheet:
+
+- `damage` / `fireIntervalMs` / `projectileSpeed` / `projectileTtlMs`.
+- `pelletCount` + `spreadRad` (the shotgun's pattern; pellet count = 1 collapses to a single shot).
+- `accuracy` ∈ [0..1] — per-shot uniform jitter offset within `(1 - acc) × MAX_INACCURACY_RAD`. Independent of pellet pattern; a tight shotgun can have wide pellets.
+- `magazineSize` + `reloadMs`. Reserve ammo lives in inventory; only consumed during reload, not per shot. **R** triggers a reload; fire is locked while reloading.
+- `ammoKind` per family (`pistol_basic`, `smg_basic`, `shotgun_shells`, `rifle_rounds`).
+
+Mods + piece-affix attachments scale these stats per weapon instance via `computeWeaponEffect` (damage / fire-interval / spread / projectile-speed multipliers stack from every attached piece + mod). The full part-driven assembly described in [Items & Procedural Generation](#items--procedural-generation) is the long-term direction; today's mods + affixes are the alpha foundation of that system.
 
 ## Multiplayer
 
 - **Server size:** 5–10 players per server.
 - **Server types:** public or private, created by registered users.
-- **Authentication & account data:** Supabase.
+- **Authentication & account data:** Supabase. Discord OAuth + Discord Activity flows are planned (see `docs/discord-integration.md`); v1 ships email/password.
 - **Dungeon model:** **shared co-op dungeon with async entry/exit.** All players on a server occupy the same dungeon instance, but can dive, retreat to base, and rejoin parties asynchronously.
 - **Rejoining a party in progress:** you spawn at the dungeon entrance and must traverse down to reach your party's current floor. Extract teleporter pads only return upward to the surface base — there is no fast-travel down. Going deeper means finding the stairs on each floor and walking down them, level by level. This is a real time cost, not a free teleport (though shallow floors are typically picked clean, so transit is fast).
+- **In-game chat:** top-left panel, always visible. Press **Enter** to focus, type, **Enter** to send, **Esc** to cancel. Server-wide channel — every connected player sees every message. Server emits italic system lines on player joins, leaves, and deaths. Player chat is rate-limited (~1.6 msg/sec) and capped at 280 chars.
 
 ## Dungeon
 
@@ -230,19 +239,57 @@ Affixes are bonus stat lines drawn from a per-slot pool. Each affix is one of:
 
 #### Affix System — Alpha Implementation
 
-The alpha ships a **suit-affix-only** version of the system as the foundation. Five affix kinds are live, all usable on any suit slot:
+The alpha ships **two parallel affix paths** plus a unified attachment system that bridges them:
 
-| Affix id | Effect | Roll range (Mk1 base × tier mult) |
-|----------|--------|-----------------------------------|
-| `add_hp` | +N max HP | 4–10 |
-| `add_shield` | +N max shield | 3–9 |
-| `add_stamina_max` | +N max stamina | 3–8 |
-| `add_stamina_regen` | +N stamina/sec | 0.5–2 |
-| `add_move_speed` | +N% move speed | +1–4% |
+**1. Rolled affixes on dropped suit parts.** Five affix kinds live in `AFFIX_DEFS`, all usable on any suit slot. They roll *automatically* on dropped `CarriedPart` instances — the player doesn't craft them. Each has a flavored display name shown alongside the technical effect:
 
-Tier multiplier curve: Mk1 ×1, Mk2 ×2.2, Mk3 ×4, Mk4 ×7, Alien ×12. So a Mk4 chassis can roll a `+70 max HP` affix on top of its primary stat. Affixes stack with the slot's primary stat into a single suit-stats accumulator, applied to the player's effective max values.
+| Affix id | Flavor name | Effect | Roll range (Mk1 base × tier mult) |
+|----------|-------------|--------|-----------------------------------|
+| `add_hp` | Adrenal Surge | +N max HP | 4–10 |
+| `add_shield` | Pulsewall Aegis | +N max shield | 3–9 |
+| `add_stamina_max` | Lung Augment | +N max stamina | 3–8 |
+| `add_stamina_regen` | Aerobic Conditioning | +N stamina/sec | 0.5–2 |
+| `add_move_speed` | Lightfoot | +N% move speed | +1–4% |
 
-Adding a new affix is **one entry in `AFFIX_DEFS`** with `label` / `apply` / roll range / valid slots — no other code touched. Weapon affixes drop into the same registry once weapon assembly ships.
+Tier multiplier curve: Mk1 ×1, Mk2 ×2.2, Mk3 ×4, Mk4 ×7, Alien ×12.
+
+**2. Crafted attachments via the `ATTACHMENT_DEFS` registry.** Three attachment kinds (`weapon_mod`, `weapon_affix`, `suit_affix`) live in one registry. Each carries a fixed effect, a `description`, a clean `displayName`, and a Borderlands-style `adjective` that gets stitched into a weapon's name when equipped. Players craft attachments at the Weapon Bench (weapon mods/affixes) or Electronics Bench (suit affixes), then attach via the bench UI. Attached mods/affixes are removable — detaching returns the attachment to inventory.
+
+**Weapon affixes** are piece-bound: each weapon has up to four piece slots (`frame`, `grip`, `magazine`, `barrel`), with the slot count gated by tier (T1 unlocks frame; +1 piece per tier-up). At most one affix per piece. **Weapon mods** sit in a separate slot list, also tier-gated (T1 = 0 mod slots, T4 = 3). **Suit affixes** attach to equipped suit parts via the Suit Affix panel in the inventory; they need an Electronics Bench in range to attach/detach.
+
+**Stat composition.** `computeWeaponEffect(weapon)` walks every piece affix + mod and returns one resolved multiplier set (damage / fire-interval / spread / projectile-speed). Server's fire path applies them; client's tooltip shows the resulting "effective" stats so the player sees real numbers, not the bare baseline. Suit affix effects fold into `computeSuitStats` the same way alongside primary slot stats and rolled affixes.
+
+Adding a new attachment is **one entry in `ATTACHMENT_DEFS`** + a recipe + a blueprint catalog row.
+
+### Item Naming
+
+Three different naming rules for three different categories — the words "Junk" and "Razorback" both happen, but never in the same item.
+
+**1. Weapons — Borderlands-style adjective stack from attachments.**
+
+```
+{TierLabel} {adj1} {adj2} … {Family}
+```
+
+- Tier labels for weapons (1..4): **Junk → Rusty → Standard → Precision**.
+- Bare base reads as "Junk Pistol", "Standard Shotgun".
+- Each attached mod / piece affix contributes one adjective from `ATTACHMENT_DEFS[id].adjective`. Order: piece order (frame → grip → magazine → barrel) then mod order. Capped at 3 adjectives so a fully-built rifle stays readable.
+- Example: a Standard Shotgun with a Foregrip + Compensator + Reinforced Frame → **"Standard Brutal Steady Vented Shotgun"**.
+
+**2. Dropped CarriedParts — cyberpunk Diablo-style flavor.**
+
+```
+{cyberpunk prefix?} {TierLabel} {weaponClass?} {coreNoun}
+```
+
+- Tier labels for parts (Mk1..Alien): **Junk → Rusty → Standard → Precision → Military**.
+- Junk-tier (Mk1) drops *skip* the prefix and read as plain scrap: "Junk Carapace Frame".
+- Higher tiers wear a cyberpunk prefix from a deterministic 28-entry pool keyed on `part.id` (Razorback, Synth, Pulse, Chrome, Quantum, Ion, Vector, Subwave, Crypto, Nullshade, Photon, Rad-Hardened, Servo, Glasswire, Voltaic, Static, Tachyon, Magnetar, Recursive, Splinter, Daemon, Threnodic, Greywire, Carbonyte, Phaseborn, Driftcore, Ferrosynth, Plasmaforged).
+- Same `part.id` always reads as the same name across sessions / clients — names are descriptive, not random per session.
+
+**3. Blueprints + crafted attachments — bare nouns, no flavor.**
+
+The shop lists "Pistol", "Shotgun", "Reinforced Frame", "Foregrip" — no `Vorpal Reinforced Frame of Storms` wrapper. Crafted attachments are fungible stackable items, not unique drops; flavoring them would mislead. The crafted *weapon's* name comes from the weapon namer above and includes whatever's attached.
 
 ### Components & Materials
 
@@ -250,13 +297,14 @@ Crafting consumes typed component stacks scavenged from the world. Each enemy te
 
 | Material | Tier | Source | Use |
 |----------|------|--------|-----|
-| **Scrap** | 1 | Every enemy, every floor | Universal ingredient — walls, basic stations, ammo |
-| **Wire** | 1 | Drones, dungeon scatter | Electronics tier recipes |
-| **Alloy Plate** | 2 | Brutes, mid+ floors | Heavy-tier defenses + turrets |
-| **Circuit Board** | 2 | Drones, mid+ floors | Electronics bench + turret core |
-| **Biotic Tissue** | 2 | Chasers (rare), deep floors | (Reserved for future bio-tech recipes) |
-| **Resonant Crystal** | 3 | Brutes (rare), deep floors | Artifact uplink, end-tier recipes |
-| **Artifact** | 3 | Kill-drop only (chaser 8% / drone 10% / brute 25%) | Currency at the Artifact Uplink |
+| **Scrap** | 1 | Every enemy, every floor | Universal ingredient — walls, basic stations, ammo, every weapon recipe |
+| **Wire** | 1 | Drones, dungeon scatter | Electronics tier recipes, every weapon recipe |
+| **Alloy Plate** | 2 | Brutes / armored, mid+ floors | Heavy-tier defenses, turrets, weapon mods |
+| **Circuit Board** | 2 | Drones, mid+ floors | Electronics bench, turret core, AP/overclock mods |
+| **Biotic Tissue** | 2 | Chasers (rare), deep floors | Medkits; reserved for future bio-tech recipes |
+| **Resonant Crystal** | 3 | Brutes (rare), deep floors | Artifact uplink, AP-core mod, end-tier recipes |
+| **Artifact** | 3 | Kill-drop only (chaser 4% / drone 5% / brute 12% / armored 9% / swarmer none / others rare) | Currency at the Artifact Uplink — buys blueprints + keys |
+| **Key** | 2 | Kill-drop (~2-6%) + buyable at Uplink (1 artifact each) | Opens locked dungeon doors |
 
 The registry (`MATERIALS` in shared) is one entry per material; adding a new component is one line plus loot-table tuning.
 
@@ -268,10 +316,11 @@ Crafting in the alpha is **station-driven, blueprint-gated, and (planned) time-a
 
 | Station | Tier | Crafted at | Recipes |
 |---------|------|------------|---------|
-| **Workbench** | Basic | Hand-craft (no station) | Forge, Electronics Bench, Artifact Uplink, Pistol Ammo |
-| **Forge** | Mid | Workbench | Heavy alloy items |
-| **Electronics Bench** | Mid | Workbench | Auto-Turret, future electronics gear |
-| **Artifact Uplink** | Mid | Workbench (requires 1 crystal) | Trade artifacts → blueprints |
+| **Workbench** | Basic | Hand-craft (no station) | Forge, Electronics Bench, Weapon Bench, Artifact Uplink, all base weapons (pistol/SMG/shotgun/rifle), all ammo types, medkits |
+| **Forge** | Mid | Workbench | Heavy alloy items (planned) |
+| **Electronics Bench** | Mid | Workbench | Auto-Turret + per-family turret variants, suit affix attachments (shield, speed) |
+| **Weapon Bench** | Mid | Workbench | Weapon mods + weapon-piece affixes; manage attached mods/affixes; tier-up weapons (T1→T4) |
+| **Artifact Uplink** | Mid | Workbench (requires 1 crystal) | **Vendor only** (no crafting): blueprint shop + keys shop. Tabbed UI. |
 
 **Hand-crafted basics.** Walls and the first Workbench are craftable from inventory anywhere — bootstrap so a fresh character can always build out a base.
 
@@ -366,21 +415,26 @@ Computed assembly stats = sum/composition of base stats + affixes from all slots
 
 ### Buildings (alpha set)
 
+Single-source-of-truth registry: `BUILDING_REGISTRY` in `@dumrunner/shared/buildings.ts`. Each entry carries `maxHp`, `hordePriority`, `isStation`, `isWorkstation`, `parallelSlots`, `label`. Adding a building = one registry entry; everything else (server stats, horde AI priority, station-modal eligibility, label rendering) reads from the registry.
+
 | Building | HP | Role |
 |----------|----|------|
 | **Wall** | 200 | Block enemy movement; soak attacks. Hand-craftable from scrap. |
-| **Auto-Turret** | 120 | Server-side targeting, fires at any enemy in 380px range every 750ms. Powered (see below). |
-| **Workbench** | 150 | Crafting station tier 1 — gates Forge, Electronics Bench, Uplink. |
-| **Forge** | 220 | Crafting station tier 2 — heavy/alloy recipes. |
-| **Electronics Bench** | 130 | Crafting station tier 2 — turrets and electronics. |
-| **Artifact Uplink** | 200 | Spend-artifacts-for-blueprints trade store. |
-| **Power Link** *(planned)* | 800 | Central structure that doubles as the dungeon entrance and the base's power source. See [Power System](#power-system). |
+| **Door** | 9999 | Indestructible. Opened with a key (1 key consumed per locked door). Generated by procgen on dungeon floors; not player-placeable. |
+| **Auto-Turret** *(pistol)* | 120 | 520-px range, 750ms cadence, single-shot. Powered. |
+| **Auto-Turret** *(SMG)* | 120 | 480-px range, 130ms cadence, low damage. Crafted from a built SMG + materials. |
+| **Auto-Turret** *(Shotgun)* | 140 | 320-px range, 6-pellet burst. Crafted from a built Shotgun + materials. |
+| **Auto-Turret** *(Rifle)* | 120 | 720-px range, single-shot high damage, 1.1s cadence. Crafted from a built Rifle + materials. |
+| **Workbench** | 150 | Crafting station — base weapons, ammo, medkit, gates Forge / Electronics Bench / Weapon Bench / Uplink. |
+| **Forge** | 220 | Crafting station — heavy/alloy recipes (planned content). |
+| **Electronics Bench** | 130 | Crafting station — turret variants, suit affixes. |
+| **Weapon Bench** | 160 | Crafting station — weapon mods + weapon affixes; attach/detach UI; tier-up. |
+| **Artifact Uplink** | 200 | Vendor only (no recipes): blueprint shop + key shop. |
+| **Power Link** | 800 | Central structure that doubles as the dungeon entrance and the base's power source. Auto-spawned on world boot; rebuilt at perihelion if destroyed. See [Power System](#power-system). |
 
 ## Power System
 
-*(Phases 1 + 2 land alongside the hostile-AI horde update; capacity scaling and async crafting follow.)*
-
-The Power Link is the load-bearing piece of the base — both the dungeon portal and the central power source for active defences and crafting.
+The Power Link is the load-bearing piece of the base — both the dungeon portal and the central power source for active defences and crafting. **Fully shipped.**
 
 **Power Link as the dungeon portal.** The static `stairs_down` interactable is replaced by a destructible Power Link building at the surface origin. The Link is a real building: it has HP and enemies can attack it.
 
@@ -395,11 +449,11 @@ This means coming back up to bank loot or repair the base is cheap (the portal i
 - When the Power Link is destroyed, **all turrets stop firing** and (post-async-crafting) all running craft jobs pause.
 - The Link auto-rebuilds at full HP when perihelion ends, so the cycle reset always restores defences.
 
-**Capacity scales with depth.** *(Phase 3, planned.)* The same deepest-floor counter that drives the portal target also drives power capacity: each new floor reached on the current cycle adds to the Power Link's capacity. Buildings declare a `powerDraw`; total draw across the base must stay under capacity or the lowest-priority defences shut down. Pushing deeper into the dungeon directly fuels a stronger surface base — the dive loop and the build loop are wired together.
+**Capacity scales with depth.** Capacity = `POWER_BASE_CAPACITY (2) + POWER_PER_DEPTH (1) × deepestFloorReached`. Each new floor pushed on the current cycle adds 1 to surface power capacity. Buildings declare a `powerDraw`: each turret = 1, each in-progress craft job = 1. Turrets get powered first in iteration order until capacity exhausts; over-capacity displays as overdraw on the HUD. Pushing deeper directly fuels a stronger surface base — dive loop and build loop wired together.
 
 **Destruction = reset.** When the Link goes down (during a horde or otherwise), the depth-power chain resets. The crew has to push the dungeon again to rebuild capacity. This makes defending the Link the single most important objective during perihelion.
 
-**Async crafting** *(Phase 4, planned).* Recipes gain a `craftTimeMs`. Station crafts start a job; output appears when the timer expires. Jobs draw power for their duration. Multiple jobs queue at a station. Hand-craftable basics stay instant.
+**Async crafting** is shipped: recipes carry `craftTimeMs`, station crafts queue as jobs that materialize on completion. Each station has a `parallelSlots` budget (default 1; tunable in `BUILDING_REGISTRY`). Jobs draw power for their duration. Hand-craftable basics stay instant. Output lands in the station's 8-slot output buffer; players walk up and tap **Take All** to drain.
 
 ## Perihelion & Horde
 
@@ -418,15 +472,15 @@ This means coming back up to bank loot or repair the base is cheap (the portal i
   4. Per-cycle blueprints wipe; persistent blueprints stay.
   5. The Power Link is rebuilt at full HP *(once shipped)*.
 
-### Hostile AI During Perihelion *(planned)*
+### Hostile AI During Perihelion
 
-Enemies during the horde acquire targets by priority instead of just sitting still until the player walks close:
+Enemies during the horde acquire targets by priority instead of sitting still until the player walks close. **Fully shipped** via `BUILDING_TARGET_PRIORITY` in `BUILDING_REGISTRY`:
 
 ```
-Power Link > turret > workstation > wall > player
+Power Link (100) > turret variants (50) > workstations (25) > Artifact Uplink (25) > wall (10) > player
 ```
 
-They greedy-pathfind toward the highest-priority target in range — no full A*; walls become natural choke points because melee enemies will path into them, get stuck, and start chewing through. After the horde ends, AI reverts to wander/idle (or only attacks players on sight). This is the headline change to the horde: it stops being a wave-survival timer and becomes an active **defend-the-objective** event.
+Enemies greedy-pathfind toward the highest-priority target in range — no full A*; walls become natural choke points because melee enemies will path into them, get stuck, and start chewing through. After the horde ends, AI reverts to wander/idle (or only attacks players on sight). The horde is now an active **defend-the-objective** event, not a wave-survival timer.
 
 ## Lobby & Server-Creation UX
 
@@ -529,49 +583,69 @@ The hardest risk to get out of the way was realtime sync over websockets between
 
 **Infrastructure**
 - Account & auth (Supabase): register, login, email confirmation flow with `/auth/callback`, account profile, settings page.
-- Lobby: server browser with filters, server-creation form (name, visibility, password, max slots, world seed), join-by-id, owner-only delete.
-- Game-server registry: server records in Supabase, on-demand process spin-up via Fly.io, idle shutdown + state flush, per-server character provisioning.
+- Lobby: server browser with filters, server-creation form (name, visibility, password, max slots, world seed, world tuning), join-by-id, owner-only delete.
+- Game-server registry: server records in Supabase, on-demand process spin-up via Fly.io, idle shutdown + state flush, per-server character provisioning. Active-occupancy via `last_seen_at` heartbeat (30s) — capacity check counts seats live in last 60s, not historic character rows.
 - Wire protocol: Zod schemas in `@dumrunner/shared` validate every inbound message; PROTOCOL_VERSION negotiation on auth handshake; HMAC-SHA256-signed JoinTokens.
-- Deployment: client + lobby on Vercel, game server on Fly with `auto_stop_machines=stop` so it scales to zero. Tracked via `JOIN_TOKEN_SECRET` shared across both.
+- Deployment: client + lobby on Vercel, game server on Fly with `min_machines_running = 1` so the WS proxy doesn't drop sessions during quiet menu time. Tracked via `JOIN_TOKEN_SECRET` shared across both. 25s server-side WebSocket ping/pong heartbeat keeps Fly's edge proxy from idling connections; 60-min Supabase character heartbeat tracks active occupancy.
+- CI: GitHub Actions runs `typecheck:{shared,server,client,asset_gen}` on every push + PR.
 
 **Core gameplay**
-- Server-authoritative movement with client prediction + soft reconciliation. Stamina + sprint, shield system, per-template enemy stuns.
-- Dungeon descent with procedural floor layouts, deterministic from `(worldSeed, cycle, floorIndex)`. Per-floor extract pad → surface.
-- Top-down (Pixi) renderer + 2.5D first-person renderer (raycaster with grid DDA + sprite billboards). Toggle with V.
-- 4 enemy templates (chaser_melee, shooter_drone, brute_chaser, dummy_target) with mix-and-match movement / attack profiles, FSM, line-of-sight gating.
-- Slot-based inventory (36 slots, 9 hotbar + 27 bag), drag/drop, sort, suit equipment slots.
-- Pistol + knife combat. Hold-to-fire with server-side rate limiting.
-- Naked respawn (corpse retains all loot at death position; corpse persists until perihelion or pickup).
+- Server-authoritative movement with client prediction + soft reconciliation. Stamina + sprint, shield system, per-template enemy stuns. Snap-on-jump + always-lerp client smoothing fixes invisible-attacker / rubber-band desync class.
+- Dungeon descent with procedural floor layouts, deterministic from `(worldSeed, cycle, floorIndex)`. Per-floor extract pad → surface. Locked-rooms procgen (key-gated doors, indestructible) with guaranteed-clear entrance→stairs path. LoS thickness fix prevents visibility leaking through diagonal-corner gaps.
+- Top-down (Pixi) renderer + 2.5D first-person renderer (raycaster with grid DDA + sprite billboards). Toggle with **V**. Fog visibility cache: per-tile LoS scan only re-runs on player tile / layout / buildings change.
+- 6 enemy templates (chaser_melee, shooter_drone, brute_chaser, swarmer, armored, dummy_target) with mix-and-match movement / attack profiles, FSM, line-of-sight gating.
+- Slot-based inventory (base 36 slots, hotbar 9 + bag 27), grows with cargo grid tier (Mk1 +4 ⋯ Alien +48). Drag/drop, sort, suit equipment slots.
+- **Combat**: 4 ranged weapon families (pistol/SMG/shotgun/rifle) + knife. Per-weapon stats (damage / fire rate / projectile speed / pellet count / spread / accuracy / magazine / reload). Per-shot accuracy jitter (±~8.6° max half-cone scaled by `1 - accuracy`). Magazine + **R**-key reload. Mods + piece affixes scale stats via `computeWeaponEffect`. Borderlands-style adjective-stacking weapon names. Effective stats shown in inventory tooltip.
+- Naked respawn (corpse retains all loot at death position; corpse persists until perihelion or pickup). Per-server `dropItemsOnDeath` toggle.
+- Audio: per-event SFX (player-shoot per-family, enemy-shoot, hits, footsteps, pickups, UI click/hover, modal open, reload), music with crossfade per scene. Volume + mute persisted to localStorage. **M** toggles mute.
 
 **Items & crafting**
-- 7-material component schema (`scrap`, `wire`, `alloy`, `circuit`, `biotic`, `crystal`, `artifact`).
-- Per-template enemy loot tables + dungeon scatter loot in rooms.
-- Suit equipment with **real stat effects**: chassis +HP, plating +shield, life support +stamina + regen, utility_mod +move speed. Cargo grid is reserved.
-- Affix system shipped (5 affix kinds rolling on suit parts, tier-scaled values, stacking into suit stats accumulator).
-- Workstation buildings (workbench, forge, electronics_bench) + Artifact Uplink + auto-turret.
-- Recipe schema with workstation + blueprintId fields. Per-station crafting modals (2-column UI, blueprint list left, requirements detail right). Inventory's "Field Craft" tab for hand-craftable basics.
-- Blueprint catalog + artifact trade store. Per-cycle vs persistent blueprint sets (persistent slot reserved for legendary tier).
-- Character stats panel (base + suit modifiers) + per-part hover tooltip listing each rolled affix.
+- 8-material component schema (`scrap`, `wire`, `alloy`, `circuit`, `biotic`, `crystal`, `artifact`, `key`).
+- Per-template enemy loot tables + dungeon scatter loot in rooms. Drop rates rebalanced so artifacts/keys/crystals are the rare prize and tier-rolled gear drops at ~5% per kill (down from 80%).
+- Suit equipment with **real stat effects**: chassis +HP +build radius, plating +shield, life support +stamina +regen, utility_mod +move speed, cargo grid +inventory slots +small build radius.
+- Affix system shipped — two paths under one roof:
+  - **Rolled affixes** on dropped CarriedParts (5 kinds, tier-scaled, stack into the suit stats accumulator). Each has a flavored display name (Adrenal Surge, Pulsewall Aegis, etc.).
+  - **Crafted attachments** via `ATTACHMENT_DEFS`: weapon mods, weapon affixes, suit affixes. 8 weapon mods + 2 weapon affixes + 2 suit affixes shipping. Each carries a Borderlands-style adjective for weapon name composition.
+- 4 base weapons (pistol/SMG/shotgun/rifle) craftable at Workbench, blueprint-gated. Player starts with `bp_pistol`. Tier-up at Weapon Bench (T1→T4) preserves attached mods/affixes.
+- Workstation buildings (workbench, forge, electronics_bench, **weapon_bench**) + Artifact Uplink + 4 turret variants (pistol-tier baseline + per-family with weapon-as-component recipes).
+- Recipe schema with workstation + blueprintId + 5 input/output kinds. Per-station crafting modals (2-column UI, blueprint list left, requirements detail right). Async crafting with parallel slots + 8-slot output buffer + Take All. Inventory's "Field Craft" tab for hand-craftable basics.
+- **Recipe IO dispatch helpers** in shared (`hasRecipeInput`, `consumeRecipeInput`, `recipeOutputToSlot`, `addRecipeOutputToInventory`) — single-place dispatch over material/ammo/weapon/attachment/consumable variants.
+- **`BUILDING_REGISTRY`** in shared: single source of truth for HP, horde priority, parallel slots, isStation, isWorkstation, label.
+- Blueprint catalog + artifact trade store (vendor-only Uplink with Blueprints + Keys tabs). Per-cycle vs persistent blueprint sets (persistent slot reserved for legendary tier).
+- Procedurally-named CarriedPart drops (deterministic cyberpunk prefix + class + base noun + flavored affixes).
+- Character stats panel (base + suit modifiers) + per-part hover tooltip listing each rolled affix + per-weapon hover tooltip listing effective damage / fire rate / accuracy / mag / reload / attached mods / piece affixes.
+- Medkit consumable (craftable, heals 60 HP, **F**-key from hotbar or right-click → Use).
 
 **Horde mechanic**
-- Cycle clock + perihelion countdown HUD. 15 minutes per cycle in alpha (3 days × 5 min/day).
-- Wave spawning at the surface perimeter during perihelion. Walls take damage from melee enemies. Auto-turrets fire back.
-- Cycle reset wipes corpses, drops dungeon scenes (regen on next descent), wipes per-cycle blueprints, increments cycle counter.
+- Cycle clock + perihelion countdown HUD. 15 minutes per cycle in alpha (3 days × 5 min/day, configurable per-server).
+- Wave spawning at the surface perimeter during perihelion. Walls take damage from melee enemies.
+- **Hostile AI target-priority hierarchy** (Power Link 100 > turrets 50 > workstations 25 > wall 10 > player) — enemies during the horde prioritise the Power Link, walls become natural choke points.
+- **Power Link** is shipped as the central building (HP 800, auto-spawns on world boot, rebuilds at perihelion, doubles as dungeon portal).
+- **Power capacity scales with depth** (`base 2 + 1/floor reached this cycle`). Turrets and craft jobs each draw 1.
+- **Async crafting** shipped with `craftTimeMs`, parallel slots, output buffers.
+- 4 turret variants (pistol-baseline + per-family) with their own per-variant range / damage / cadence / pellet pattern.
+- Cycle reset wipes corpses, drops dungeon scenes (regen on next descent), wipes per-cycle blueprints, rebuilds Power Link, increments cycle counter.
+
+**Communication**
+- Top-left in-game chat panel. Server-wide channel. System messages on player join / leave / death.
+
+**Discord integration**
+- "Continue with Discord" OAuth button on `/login` and `/register` (web). Server-side code exchange + synthetic-email upsert into `auth.users` and `public.accounts`, then standard Supabase session — so `/api/servers/[id]/join` and the rest of the auth-gated flow work unchanged for Discord identities.
+- Discord Activity entry point at `/discord`. Boots `@discord/embedded-app-sdk` (lazy import), authorises with `identify` scope, exchanges through `/api/auth/discord/exchange`, calls `sdk.commands.authenticate`, and binds the call's `instance_id` → a server row via `/api/discord/instance`. First caller in the call provisions the room; subsequent callers rejoin. Activity-bound rooms are hidden from the public lobby.
+
+**Asset generation pipeline (separate package)**
+- `@dumrunner/asset_gen`: HTTP service that generates sprite PNGs on demand via OpenAI's image API. Stable cache-key dedup. Live game posts `/v1/assets/generate` for entities it doesn't have yet; client fetches `/v1/assets/index` at boot to build a kind→texture map. Single-call animation sheet (one image-edit call → wide canvas → trim+slice into N frames) replaces the legacy per-frame N-call pipeline.
 
 ### Active / Next Up
 
-- **Power Link** as central structure — replaces the surface stairs with a destructible building that doubles as the dungeon portal and the power source. Phase 1.
-- **Hostile AI during perihelion** — target priority hierarchy (Power Link > turret > workstation > wall > player), greedy pathfinding. Phase 2.
-- **Power capacity scales with depth** — each floor pushed adds capacity; powered buildings draw against it; over-capacity disables low-priority defences. Phase 3.
-- **Async crafting with timers** — recipes gain `craftTimeMs`, jobs queue at stations, draw power while running. Phase 4.
+- **Hazard system** (radiation, toxic, cold, heat) — biome-specific environmental damage ticks gated by life-support resists.
+- **Discord Developer Portal config + first end-to-end test.** Code is shipped (web OAuth + Activity SDK, instance-bound rooms); waiting on Portal setup + a real Discord call to validate the flow. See `docs/discord-integration.md` for the manual steps.
 
 ### Deferred Past Alpha
 
-- Real weapon part-assembly system (frame/barrel/grip/magazine/mod). Today's combat ships a hardcoded pistol + knife.
-- Hazard system (radiation, toxic, cold, heat) and biome-specific mitigation gating.
+- Full weapon part-assembly drops (the part ontology in [Items & Procedural Generation](#items--procedural-generation)). Today's loop is mod / affix attachments + tier-up; the part-driven assembly is the long-term direction.
 - Faction champions / boss enemies + the artifact-as-Alien-tier-part path.
 - Earth tech-tree unlocks (currently the artifact uplink only trades blueprints; "Ship to Earth" + "Burn as ingredient" fates land later).
-- Cargo grid (Tetris) inventory model. Today's slot inventory is fixed at 36.
-- Pixel-art textures (the asset_gen pipeline is its own roadmap; current visuals are colored shapes / SVG icons).
-- Sound + spatial audio.
+- Cargo grid (Tetris-style) inventory model. Today's slot inventory grows linearly with cargo tier; the actual W×H grid lands later.
+- Pixel-art textures (the asset_gen pipeline ships the runtime; comprehensive coverage of all entities + animations is its own roadmap).
 - Mobile (Capacitor) + desktop (Electron) wrappers.
