@@ -3,7 +3,7 @@
 import { useActionState, useState } from 'react';
 import { createServerAction, type CreateState } from './actions';
 
-export function NewServerForm() {
+export function NewServerForm({ defaultName = '' }: { defaultName?: string }) {
   const [state, formAction, pending] = useActionState<CreateState, FormData>(
     createServerAction,
     null
@@ -21,6 +21,7 @@ export function NewServerForm() {
         type="text"
         required
         maxLength={64}
+        defaultValue={defaultName}
         placeholder="The Sunken Foundry"
       />
 

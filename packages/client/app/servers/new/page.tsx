@@ -11,6 +11,15 @@ export default async function NewServerPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect('/login');
 
+  const { data: account } = await supabase
+    .from('accounts')
+    .select('display_name')
+    .eq('id', user.id)
+    .maybeSingle();
+  const defaultName = account?.display_name
+    ? `${account.display_name}'s server`
+    : '';
+
   return (
     <>
       <AppNav />
@@ -26,7 +35,7 @@ export default async function NewServerPage() {
           Set up a world for you and up to 9 friends.
         </p>
 
-        <NewServerForm />
+        <NewServerForm defaultName={defaultName} />
       </main>
     </>
   );

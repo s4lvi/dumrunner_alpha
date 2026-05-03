@@ -2177,7 +2177,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       spawnDeathBurst(e.data.x, e.data.y, v.color);
       e.flashUntil = 0;
       e.flashOverlay.alpha = 0;
-      // Don't destroy — server may respawn the same id. Hide instead.
+      // Drop hp to 0 so the LoS-visibility loop doesn't unhide the
+      // sprite next frame (the open-scene branch keys on `hp > 0`).
+      // Without this, surface horde enemies that get despawned at
+      // perihelion-end stay visible on screen until the player
+      // changes scene.
+      e.data.hp = 0;
       e.container.visible = false;
     },
     spawnProjectile(p: ProjectileState) {

@@ -349,6 +349,9 @@ function SetupForm({
               type="text"
               required
               maxLength={64}
+              defaultValue={
+                defaultDisplayName ? `${defaultDisplayName}'s server` : ''
+              }
               placeholder="The Sunken Foundry"
             />
             <Field
