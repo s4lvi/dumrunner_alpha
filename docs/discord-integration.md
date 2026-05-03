@@ -186,12 +186,27 @@ User must do this once:
    (and `http://localhost:3000/api/auth/discord/callback` for local dev).
 3. **OAuth2 → Scopes (web button)**: `identify`.
 4. **Activities → Activity URL Mappings**: this is the proxy that
-   lets the iframe reach our origin. Set:
+   lets the iframe reach our origins. You need **two** mappings —
+   the iframe blocks any cross-origin connection that doesn't have
+   one.
+
+   Web app:
    - **Target**: `dumrunner.app` (or your Vercel/preview origin)
    - **Prefix**: `/`
-   That way `https://<client_id>.discordsays.com/` proxies our `/`,
-   and the Activity launches at `/discord` (set Activity URL to
-   `/discord` so Discord opens that path inside the proxy).
+
+   Game-server WebSocket (required, otherwise `/play/[id]` hangs at
+   "Connecting to game server…"):
+   - **Target**: `dumrunner-alpha-holy-pine-7754.fly.dev`
+     (your Fly app host — match what `NEXT_PUBLIC_GAME_SERVER_WS_URL`
+     points to, host only, no scheme/path)
+   - **Prefix**: `/game-ws`
+
+   Discord uses longest-prefix match, so `/game-ws/...` hits the Fly
+   host and everything else hits Vercel. The proxy strips the prefix
+   on forward, so the game server still sees `/` upgrades.
+
+   Activity launches at `/` (Discord opens the proxied root); our
+   landing page detects `frame_id` and bounces to `/discord`.
 5. **Activities → Install Link**: enable so the app appears in the
    Apps menu of your Discord app.
 6. Copy `Client ID` / `Client Secret` into Vercel env

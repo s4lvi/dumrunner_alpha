@@ -49,6 +49,7 @@ import { runGame, type GameHandle } from '@/lib/game/pixi';
 import { runFpsGame } from '@/lib/game/fps';
 import { audio } from '@/lib/audio';
 import { loadAssetIndex, type AssetIndex } from '@/lib/assetGen';
+import { rewriteGameWsUrl } from '@/lib/discord/sdk';
 
 type JoinResponse = {
   wsUrl: string;
@@ -329,7 +330,7 @@ export function Game({ serverId }: { serverId: string }) {
 
         setStatus({ kind: 'connecting', resp });
 
-        const ws = new WebSocket(resp.wsUrl);
+        const ws = new WebSocket(rewriteGameWsUrl(resp.wsUrl));
         session.ws = ws;
 
         ws.onopen = () => {

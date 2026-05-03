@@ -35,3 +35,29 @@ export async function getDiscordSdk(clientId: string): Promise<DiscordSDK> {
   }
   return sdkPromise;
 }
+
+// Path prefix the Activity URL Mapping forwards to the game server.
+// REQUIRED Developer Portal config (Activities → URL Mappings):
+//   Prefix: /game-ws   →   Target: <fly-app-host>
+// e.g. dumrunner-alpha-holy-pine-7754.fly.dev. The proxy strips the
+// prefix on forward, so the game server still sees `/` upgrades.
+export const ACTIVITY_GAME_WS_PREFIX = '/game-ws';
+
+// Inside a Discord Activity, every external WS / fetch must go
+// through Discord's proxy origin (`<APP_ID>.discordsays.com`).
+// Connecting directly to the Fly host hangs because the iframe
+// CSP blocks the upgrade. This rewrites a `wss://<fly-host>/...`
+// URL to `wss://<APP_ID>.discordsays.com/game-ws...`. Outside the
+// Activity it returns the URL unchanged.
+export function rewriteGameWsUrl(originalUrl: string): string {
+  if (!isInDiscordActivity()) return originalUrl;
+  if (typeof window === 'undefined') return originalUrl;
+  const original = new URL(originalUrl);
+  const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = window.location.host;
+  // Discord strips the mapping prefix on forward, so we just append
+  // the original path under our prefix. `/` becomes `/game-ws`,
+  // `/foo` becomes `/game-ws/foo`.
+  const tail = original.pathname === '/' ? '' : original.pathname;
+  return `${wsScheme}//${host}${ACTIVITY_GAME_WS_PREFIX}${tail}${original.search}`;
+}
