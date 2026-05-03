@@ -19,17 +19,26 @@ COPY package.json package-lock.json ./
 COPY tsconfig.base.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/
+# asset_gen is now a workspace dep of @dumrunner/server (server imports
+# the pure request-builder functions to call asset_gen on demand).
+# Including its package.json here keeps `npm ci` happy; the actual
+# runtime never loads the image-processing path so `sharp` stays cold.
+COPY packages/asset_gen/package.json ./packages/asset_gen/
 # Client package.json is included so npm install doesn't fail the workspace
 # resolution. We don't copy its source / build it.
 COPY packages/client/package.json ./packages/client/
 
 RUN npm ci --no-audit --no-fund \
-    -w @dumrunner/shared -w @dumrunner/server \
+    -w @dumrunner/shared \
+    -w @dumrunner/server \
+    -w @dumrunner/asset_gen \
     --include-workspace-root
 
 # Source last — invalidates only the smaller cache layer on edits.
 COPY packages/shared/ ./packages/shared/
 COPY packages/server/ ./packages/server/
+# asset_gen source for the request-builder imports the server uses.
+COPY packages/asset_gen/ ./packages/asset_gen/
 
 ENV NODE_ENV=production
 ENV NODE_OPTIONS=--max-http-header-size=65536
