@@ -58,6 +58,11 @@ export default function RegisterPage() {
         <p className="mt-6 text-sm text-zinc-400">
           Already have an account? <Link href="/login">Sign in</Link>
         </p>
+        <p className="mt-4 text-xs text-zinc-500">
+          By creating an account you agree to our{' '}
+          <Link href="/terms" className="underline">Terms of Service</Link> and{' '}
+          <Link href="/privacy" className="underline">Privacy Policy</Link>.
+        </p>
       </div>
     </main>
   );

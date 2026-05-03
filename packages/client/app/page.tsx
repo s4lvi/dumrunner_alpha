@@ -37,6 +37,11 @@ export default async function Landing() {
             Create account
           </Link>
         </div>
+        <div className="mt-12 flex gap-4 justify-center text-xs text-zinc-500">
+          <Link href="/terms" className="hover:text-zinc-300">Terms</Link>
+          <span aria-hidden>·</span>
+          <Link href="/privacy" className="hover:text-zinc-300">Privacy</Link>
+        </div>
       </div>
     </main>
   );
