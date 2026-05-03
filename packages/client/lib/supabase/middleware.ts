@@ -4,6 +4,16 @@ import { publicEnv } from '../env';
 
 type CookieToSet = { name: string; value: string; options?: CookieOptions };
 
+// See lib/supabase/server.ts for why we force these attributes.
+// Same rationale here: the middleware refreshes session cookies on
+// every request, including from inside the Discord Activity iframe
+// where the default Lax cookies get dropped.
+const IFRAME_FRIENDLY = {
+  sameSite: 'none' as const,
+  secure: true,
+  partitioned: true,
+};
+
 // Refreshes the Supabase session cookie on each request. Wired up in /middleware.ts.
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -17,7 +27,10 @@ export async function updateSession(request: NextRequest) {
         }
         response = NextResponse.next({ request });
         for (const { name, value, options } of toSet) {
-          response.cookies.set(name, value, options);
+          response.cookies.set(name, value, {
+            ...(options ?? {}),
+            ...IFRAME_FRIENDLY,
+          } as CookieOptions & { partitioned: boolean });
         }
       },
     },
