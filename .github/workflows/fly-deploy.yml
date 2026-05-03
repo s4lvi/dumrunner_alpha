@@ -1,0 +1,51 @@
+name: fly-deploy
+
+# Auto-deploy the game server to Fly on every push to main, but
+# only when something the game-server image actually contains
+# changed. Vercel handles the web/lobby deploy on its own.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/server/**'
+      - 'packages/shared/**'
+      - 'packages/asset_gen/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - 'fly.toml'
+      - '.github/workflows/fly-deploy.yml'
+  # Manual trigger from the Actions tab — useful for re-deploying
+  # the current main after a Fly-side incident, rolling a config
+  # change, or shipping a non-server commit that should still
+  # rebuild the image (rare).
+  workflow_dispatch:
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: install
+        run: npm ci
+      # Gate the deploy on the same typechecks CI runs. Cheap, and
+      # prevents a broken build from rolling out to Fly even if CI
+      # is racing.
+      - name: typecheck:shared
+        run: npm run typecheck:shared
+      - name: typecheck:server
+        run: npm run typecheck:server
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
