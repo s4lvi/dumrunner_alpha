@@ -33,7 +33,15 @@ packages/client
 GDD.md
 README.md
 *.md
-packages/asset_gen
+# asset_gen is now a workspace dep of the server (request builders).
+# Keep package.json + src; drop the heavy non-runtime extras
+# (DESIGN.md, scripts, generated assets, the viewer) so the image
+# stays lean.
+packages/asset_gen/.asset_gen
+packages/asset_gen/scripts
+packages/asset_gen/public
+packages/asset_gen/DESIGN.md
+packages/asset_gen/README.md
 supabase
 
 # Claude / agent metadata
