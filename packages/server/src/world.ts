@@ -23,6 +23,8 @@ import type {
 } from '@dumrunner/shared';
 import {
   HOTBAR_SIZE,
+  INVENTORY_SIZE,
+  resizeInventory,
   swapSlots,
   discardSlot,
   sortBag,
@@ -256,6 +258,7 @@ export class World {
       onInteractable: (id, fromSceneId, kind) =>
         this.onInteractable(id, fromSceneId, kind),
       onPlayerRespawn: (id) => this.respawnPlayerToSurface(id),
+      onPlayerDied: (id, killer) => this.notifyPlayerDied(id, killer),
       onPowerLinkDestroyed: () => this.handlePowerLinkDestroyed(),
       isPowerOnline: () => this.powerOnline,
       isPowered: (id: string) => this.poweredBuildings.has(id),
@@ -442,6 +445,7 @@ export class World {
       staminaRegenAt: 0,
       suitSpeedMult: 0,
       suitStaminaRegenBonus: 0,
+      suitBuildRadiusBonus: 0,
       // Mild grace window so the surface stairs aren't triggered the moment
       // a returning player reconnects on top of them.
       interactCooldownUntil: Date.now() + TRANSITION_COOLDOWN_MS,
@@ -468,6 +472,14 @@ export class World {
     conn.maxStamina = Math.round(COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus);
     conn.suitSpeedMult = stats.moveSpeedMult;
     conn.suitStaminaRegenBonus = stats.staminaRegenBonus;
+    conn.suitBuildRadiusBonus = Math.floor(stats.buildRadiusBonus);
+    // Cargo grid: grow/shrink the inventory bag accordingly. Server
+    // never drops items — resizeInventory keeps existing entries even
+    // if the bonus is removed (cargo unequip).
+    resizeInventory(
+      conn.inventory,
+      INVENTORY_SIZE + Math.floor(stats.inventoryBonus)
+    );
     if (conn.hp > conn.maxHp) conn.hp = conn.maxHp;
     if (conn.shield > conn.maxShield) conn.shield = conn.maxShield;
     if (conn.stamina > conn.maxStamina) conn.stamina = conn.maxStamina;
@@ -499,6 +511,7 @@ export class World {
       { type: 'player_joined', player: toPlayer(conn) },
       player.characterId
     );
+    this.systemChat(`${conn.displayName} joined the server.`);
 
     // Sync any in-flight craft jobs the player owns so the workstation
     // modal can render their progress bars on reconnect / mid-cycle join.
@@ -526,9 +539,11 @@ export class World {
     const conn = this.connections.get(characterId);
     if (!conn) return;
     if (conn.ws !== ws) return;
+    const departingName = conn.displayName;
     this.connections.delete(characterId);
     this.removeFromCurrentScene(conn);
     void this.persistConnection(conn);
+    this.systemChat(`${departingName} left the server.`);
 
     if (this.connections.size === 0) {
       // Last player out: take a final snapshot before timers stop. This is
@@ -1439,6 +1454,21 @@ export class World {
     conn.maxStamina = Math.round(COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus);
     conn.suitSpeedMult = stats.moveSpeedMult;
     conn.suitStaminaRegenBonus = stats.staminaRegenBonus;
+    conn.suitBuildRadiusBonus = Math.floor(stats.buildRadiusBonus);
+    // Resize the bag to match the new cargo bonus. The helper
+    // refuses to shrink below the highest non-empty slot, so
+    // unequipping a cargo grid is safe.
+    resizeInventory(
+      conn.inventory,
+      INVENTORY_SIZE + Math.floor(stats.inventoryBonus)
+    );
+    // After resize, broadcast the new inventory shape so the client
+    // re-renders the bag at the right size.
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
     // Clamp current values to the new caps. Unequipping a chassis doesn't
     // damage the player, but it does cap their hp at the new (lower) max.
     if (conn.hp > conn.maxHp) conn.hp = conn.maxHp;
@@ -1700,6 +1730,54 @@ export class World {
         conn.ws.send(data);
       }
     }
+  }
+
+  // Server-issued chat (joins, leaves, deaths, perihelion). The
+  // 'system' kind lets the client render these distinctly from
+  // player-typed messages.
+  private systemChat(text: string): void {
+    this.broadcastAll({
+      type: 'chat',
+      kind: 'system',
+      characterId: null,
+      displayName: 'system',
+      text,
+      ts: Date.now(),
+    });
+  }
+
+  // Player-typed chat. Caller (index.ts dispatch) has already passed
+  // the Zod-validated text. World rate-limits per character to keep
+  // shouting bots from drowning the channel.
+  handleChat(characterId: string, text: string): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const now = Date.now();
+    const last = this.lastChatAt.get(characterId) ?? 0;
+    if (now - last < 600) return; // ~1.6 messages/sec
+    this.lastChatAt.set(characterId, now);
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return;
+    this.broadcastAll({
+      type: 'chat',
+      kind: 'player',
+      characterId,
+      displayName: conn.displayName,
+      text: trimmed.slice(0, 280),
+      ts: now,
+    });
+  }
+  private lastChatAt = new Map<string, number>();
+
+  // Called by Scene whenever a player dies. Posts a system chat line
+  // and lets the world do any cross-scene bookkeeping in one place.
+  notifyPlayerDied(characterId: string, killer: string | null): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const text = killer
+      ? `${conn.displayName} was killed by ${killer}.`
+      : `${conn.displayName} died.`;
+    this.systemChat(text);
   }
 
   // ---------- helpers ----------

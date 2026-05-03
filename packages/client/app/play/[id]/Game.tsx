@@ -63,6 +63,17 @@ type Status =
   | { kind: 'connected'; resp: JoinResponse }
   | { kind: 'error'; message: string };
 
+type ChatEntry = {
+  // Stable React key — `${ts}:${characterId|'system'}:${seq}`. Server
+  // ts isn't unique on its own (rapid joins/leaves can collide).
+  id: string;
+  kind: 'player' | 'system';
+  characterId: string | null;
+  displayName: string;
+  text: string;
+  ts: number;
+};
+
 export function Game({ serverId }: { serverId: string }) {
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [password, setPassword] = useState('');
@@ -73,6 +84,12 @@ export function Game({ serverId }: { serverId: string }) {
   // Epoch ms when an in-progress reload completes; null = not reloading.
   // Set on reload_started for the local player; cleared on weapon_reloaded.
   const [reloadEndsAt, setReloadEndsAt] = useState<number | null>(null);
+  // Chat log. Capped to a sliding window so old messages roll off; the
+  // visible panel always shows the most recent few. System messages
+  // (joins, leaves, deaths) and player-typed lines are stored here
+  // together, distinguished by the kind field on each entry.
+  const [chatLog, setChatLog] = useState<ChatEntry[]>([]);
+  const nextChatKeyRef = useRef(0);
   const [showInventory, setShowInventory] = useState(false);
   const [slotMenu, setSlotMenu] = useState<{
     slot: number;
@@ -534,6 +551,23 @@ export function Game({ serverId }: { serverId: string }) {
           msg.dirY
         );
         break;
+      case 'chat': {
+        const entry: ChatEntry = {
+          kind: msg.kind,
+          characterId: msg.characterId,
+          displayName: msg.displayName,
+          text: msg.text,
+          ts: msg.ts,
+          // Stable key so React doesn't reuse entries across pushes.
+          id: `${msg.ts}:${msg.characterId ?? 'system'}:${nextChatKeyRef.current++}`,
+        };
+        setChatLog((prev) => {
+          const next = [...prev, entry];
+          // Keep last ~80 messages so the buffer doesn't grow forever.
+          return next.length > 80 ? next.slice(next.length - 80) : next;
+        });
+        break;
+      }
       case 'reload_started':
         if (msg.characterId === selfIdRef.current) {
           setReloadEndsAt(Date.now() + msg.durationMs);
@@ -903,6 +937,9 @@ export function Game({ serverId }: { serverId: string }) {
     gameRef.current.setEquippedWeapon(
       slot?.kind === 'weapon' ? slot.weapon.weaponId : null
     );
+    gameRef.current.setBuildRadiusBonus(
+      Math.max(0, Math.floor(computeSuitStats(equipment).buildRadiusBonus))
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useFps]);
 
@@ -923,10 +960,30 @@ export function Game({ serverId }: { serverId: string }) {
     gameRef.current?.setEquippedWeapon(weapon);
   }, [inventory, hotbarSelection, sceneId]);
 
+  // Push the player's suit-derived build-radius bonus to the renderer
+  // whenever equipment changes, so the build-mode ring matches what
+  // the server actually accepts. Server applies the same bonus
+  // server-side using the same shared computeSuitStats.
+  useEffect(() => {
+    const stats = computeSuitStats(equipment);
+    const bonus = Math.max(0, Math.floor(stats.buildRadiusBonus));
+    gameRef.current?.setBuildRadiusBonus(bonus);
+  }, [equipment]);
+
   // Tab toggles the inventory overlay. Number keys 1-9 select the hotbar.
   // preventDefault stops the browser from moving focus around while playing.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // While the user is typing into a chat / form input, every key
+      // belongs to that input. Don't trigger movement, hotbar swap,
+      // build mode, etc. on top of it.
+      const ae = document.activeElement;
+      if (
+        ae instanceof HTMLInputElement ||
+        ae instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
       if (e.key === 'Tab') {
         e.preventDefault();
         // Tab closes any modal first; only toggles inventory when nothing
@@ -1069,6 +1126,10 @@ export function Game({ serverId }: { serverId: string }) {
           inventory={inventory}
           hotbarSelection={hotbarSelection}
           reloadEndsAt={reloadEndsAt}
+        />
+        <ChatPanel
+          log={chatLog}
+          onSend={(text) => sendOnLiveWs({ type: 'chat', text })}
         />
         {nearInteractable && (
           <InteractPrompt label={nearInteractable.label} />
@@ -1591,6 +1652,92 @@ const AMMO_KIND_BY_FAMILY: Record<string, 'pistol_basic' | 'smg_basic' | 'shotgu
   rifle: 'rifle_rounds',
   melee: null,
 };
+
+// Top-left chat. Always-visible message log + an input that activates
+// on Enter. While the input is focused, the renderer's keydown
+// listeners ignore movement keys (see isFormFocus in pixi.ts/fps.ts)
+// so typing doesn't slide the character. Esc blurs without sending.
+function ChatPanel({
+  log,
+  onSend,
+}: {
+  log: ChatEntry[];
+  onSend: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Focus chat with Enter. Blur on Esc. Mounted globally so the
+  // player can pop chat from anywhere without aiming at the input.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const ae = document.activeElement;
+      const isInChat = ae === inputRef.current;
+      if (e.key === 'Enter' && !isInChat) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      } else if (e.key === 'Escape' && isInChat) {
+        inputRef.current?.blur();
+        setDraft('');
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  // Auto-scroll the message list to the bottom when a new entry lands.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [log]);
+
+  return (
+    <div className="absolute top-3 left-3 pointer-events-none select-none flex flex-col gap-1 w-[320px] max-w-[40vw]">
+      <div
+        ref={scrollRef}
+        className="flex flex-col gap-0.5 max-h-[28vh] overflow-y-auto text-xs"
+      >
+        {log.map((m) => (
+          <div
+            key={m.id}
+            className={
+              m.kind === 'system'
+                ? 'text-zinc-500 italic'
+                : 'text-zinc-100'
+            }
+          >
+            {m.kind === 'system' ? (
+              <span>— {m.text}</span>
+            ) : (
+              <>
+                <span className="text-cyan-300">{m.displayName}:</span>{' '}
+                <span>{m.text}</span>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      <input
+        ref={inputRef}
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const text = draft.trim();
+            if (text.length > 0) onSend(text);
+            setDraft('');
+            inputRef.current?.blur();
+          }
+        }}
+        placeholder="Press Enter to chat…"
+        maxLength={280}
+        className="pointer-events-auto px-2 py-1 text-xs rounded bg-[color:var(--panel)]/80 border border-[color:var(--panel-border)] text-zinc-100 placeholder:text-zinc-500 outline-none focus:border-[color:var(--accent)]"
+      />
+    </div>
+  );
+}
 
 function WorldClockHud({
   clock,

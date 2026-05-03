@@ -138,6 +138,10 @@ export interface SceneConnection {
   // changes. Scene reads them in the simulation tick.
   suitSpeedMult: number; // additive to 1.0 (0.10 = +10%)
   suitStaminaRegenBonus: number; // per second
+  // Extra tiles of build reach granted by the equipped suit
+  // (chassis primary stat + cargo grid). Already floor()'d to whole
+  // tiles in recomputePlayerStats.
+  suitBuildRadiusBonus: number;
 }
 
 type ProjectileRuntime = ProjectileState & {
@@ -238,6 +242,10 @@ export class Scene {
   private loot = new Map<string, LootRuntime>();
   private corpses = new Map<string, CorpseRuntime>();
   private buildings = new Map<string, BuildingRuntime>();
+  // Tracks turret ids we've already logged as "no power" so the log
+  // line fires once per power-state transition rather than every
+  // tick. Cleared per-id when the turret comes back online.
+  private unpoweredLogged = new Set<string>();
   private nextEnemyId = 0;
   private nextProjectileId = 0;
   private nextCorpseId = 0;
@@ -507,7 +515,8 @@ export class Scene {
     const tileCenterX = (tileX + 0.5) * tileSize;
     const tileCenterY = (tileY + 0.5) * tileSize;
     const reach =
-      (COMBAT.BUILD_RADIUS_TILES + 0.5) * tileSize;
+      (COMBAT.BUILD_RADIUS_TILES + conn.suitBuildRadiusBonus + 0.5) *
+      tileSize;
     const dxc = tileCenterX - conn.x;
     const dyc = tileCenterY - conn.y;
     if (dxc * dxc + dyc * dyc > reach * reach) return;
@@ -806,7 +815,20 @@ export class Scene {
     for (const b of this.buildings.values()) {
       const variant = TURRET_VARIANTS[b.kind];
       if (!variant) continue;
-      if (!this.bindings.isPowered(b.id)) continue;
+      if (!this.bindings.isPowered(b.id)) {
+        // One-time-per-build log so a silent turret during a horde
+        // shows up in Fly logs and we can diagnose. Not noisy because
+        // each turret only logs once until power state changes.
+        if (!this.unpoweredLogged.has(b.id)) {
+          this.unpoweredLogged.add(b.id);
+          console.log(
+            `[scene ${this.id}] turret ${b.id} (${b.kind}) idle: no power`
+          );
+        }
+        continue;
+      } else {
+        this.unpoweredLogged.delete(b.id);
+      }
       if (now - b.lastFireAt < variant.fireIntervalMs) continue;
 
       const cx = (b.tileX + b.width / 2) * tileSize;
@@ -1782,6 +1804,10 @@ export class Scene {
       type: 'player_died',
       characterId: conn.characterId,
     });
+    // Server-wide system chat line. Killer attribution would need
+    // damage source plumbing through projectile/melee paths — leave
+    // null for now and let the chat just say "X died".
+    this.bindings.onPlayerDied(conn.characterId, null);
 
     // Drop the player's bag contents to a corpse at the death position.
     // EQUIPPED gear (chassis / plating / life-support / utility / cargo
@@ -2142,6 +2168,10 @@ export interface SceneBindings {
   // HP and transitions the player back to the surface base. The corpse
   // stays in the original scene for recovery.
   onPlayerRespawn(characterId: string): void;
+  // Triggered the moment a player's hp hits 0. World posts a system
+  // chat line; killer name is passed when known (otherwise null for
+  // environmental / generic deaths).
+  onPlayerDied(characterId: string, killer: string | null): void;
   // Triggered the moment a power_link building is destroyed. World owns
   // the cascading reset (drop dungeon scenes, evict any players in them,
   // reset deepest-floor counter, mark power offline).

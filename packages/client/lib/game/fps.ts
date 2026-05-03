@@ -88,7 +88,7 @@ const SKY_GRADIENT_STEPS = 14;
 const FLOOR_GRADIENT_STEPS = 10;
 
 // Build-mode tuning.
-const BUILD_RADIUS_TILES = 2;
+const BUILD_RADIUS_TILES = 3;
 // Distance from the camera to the build reticle along the forward vector.
 // 1.5 tiles puts the ghost just past the player so they can drop a wall
 // right in front of them; bumping it higher means farther but flakier
@@ -165,6 +165,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // Build mode: kind to place, or null when not building. Pending action is
   // resolved during the next render so a click reads the latest target tile.
   let buildKind: import('@dumrunner/shared').BuildingKind | null = null;
+  let buildRadiusBonus = 0;
   let pendingBuildAction: 'place' | 'demolish' | null = null;
 
   // ---------- lifecycle ----------
@@ -296,10 +297,18 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       Math.min(PITCH_LIMIT, pitch - e.movementY * POINTER_SENSITIVITY)
     );
   }
+  function isFormFocus(): boolean {
+    const ae = document.activeElement;
+    return (
+      ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement
+    );
+  }
   function onKeyDown(e: KeyboardEvent) {
+    if (isFormFocus()) return;
     keys.add(e.code);
   }
   function onKeyUp(e: KeyboardEvent) {
+    if (isFormFocus()) return;
     keys.delete(e.code);
   }
 
@@ -569,7 +578,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const dirX = Math.cos(yaw);
     const dirY = Math.sin(yaw);
     const camHeight = WALL_HEIGHT_WORLD / 2;
-    const maxReach = (BUILD_RADIUS_TILES + 0.5) * tileSize;
+    const maxReach = (BUILD_RADIUS_TILES + buildRadiusBonus + 0.5) * tileSize;
     let reach: number;
     if (pitch < -0.08) {
       reach = Math.min(maxReach, camHeight / Math.tan(-pitch));
@@ -586,7 +595,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // — this is just a UX cue.
     const tileCenterX = (tileX + 0.5) * tileSize;
     const tileCenterY = (tileY + 0.5) * tileSize;
-    const reachR = (BUILD_RADIUS_TILES + 0.5) * tileSize;
+    const reachR = (BUILD_RADIUS_TILES + buildRadiusBonus + 0.5) * tileSize;
     const dxc = tileCenterX - selfX;
     const dyc = tileCenterY - selfY;
     const inRange = dxc * dxc + dyc * dyc <= reachR * reachR;
@@ -1238,6 +1247,9 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // Switching out of build mode discards a queued action so a stale
       // click doesn't fire after the user just unequipped a placeable.
       if (kind === null) pendingBuildAction = null;
+    },
+    setBuildRadiusBonus(tiles: number) {
+      buildRadiusBonus = Math.max(0, Math.floor(tiles));
     },
     setEquippedWeapon(weaponId) {
       equippedWeapon = weaponId;

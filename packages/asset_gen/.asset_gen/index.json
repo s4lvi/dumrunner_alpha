@@ -2422,6 +2422,87 @@
         "reasons": []
       },
       "createdAt": "2026-05-03T02:22:11.647Z"
+    },
+    {
+      "assetId": "asset_255e83a3c40b4011b58806769de81c34",
+      "cacheKey": "1e006a6268e9fc7c3e4162f5d6e9890dddf5209f3018025142a263f93d440a65",
+      "request": {
+        "requestId": "building:wall",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "wall",
+          "label": "wall",
+          "buildingKind": "wall"
+        },
+        "visualBrief": {
+          "subject": "player-built wall",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_255e83a3c40b4011b58806769de81c34.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 8,
+          "y": 15,
+          "w": 49,
+          "h": 29
+        },
+        "averageColors": [
+          "#515051"
+        ]
+      },
+      "family": {
+        "familyId": "family_2094670174b395536fd3",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-03T02:23:18.810Z"
     }
   ],
   "jobs": [
@@ -3830,6 +3911,59 @@
       "error": null,
       "createdAt": "2026-05-03T02:21:59.148Z",
       "updatedAt": "2026-05-03T02:22:11.648Z"
+    },
+    {
+      "jobId": "job_2c7b4c97588e4815b99227c3fe14b188",
+      "status": "approved",
+      "cacheKey": "1e006a6268e9fc7c3e4162f5d6e9890dddf5209f3018025142a263f93d440a65",
+      "request": {
+        "requestId": "building:wall",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "wall",
+          "label": "wall",
+          "buildingKind": "wall"
+        },
+        "visualBrief": {
+          "subject": "player-built wall",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_255e83a3c40b4011b58806769de81c34",
+      "error": null,
+      "createdAt": "2026-05-03T02:23:09.451Z",
+      "updatedAt": "2026-05-03T02:23:18.811Z"
     }
   ]
 }

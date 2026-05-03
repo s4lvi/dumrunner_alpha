@@ -466,6 +466,14 @@ export const UseConsumableMsgSchema = z.object({
   slot: slotIndex,
 });
 
+// Player-typed chat. Server validates non-empty + length cap,
+// rate-limits, and broadcasts a 'chat' message to all members of
+// the world.
+export const ChatMsgSchema = z.object({
+  type: z.literal('chat'),
+  text: z.string().min(1).max(280),
+});
+
 // Reload the currently-equipped (selected hotbar slot) weapon. Server
 // validates the slot is a ranged weapon, the magazine has space, and
 // the player has reserve ammo. Reload takes RangedWeaponStats.reloadMs;
@@ -502,6 +510,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   TierUpWeaponMsgSchema,
   UseConsumableMsgSchema,
   ReloadWeaponMsgSchema,
+  ChatMsgSchema,
 ]);
 
 
@@ -658,8 +667,20 @@ export type ServerMessage =
       characterId: string;
       magazineRemaining: number;
     }
+  | {
+      // Chat message broadcast. `kind: 'player'` = a real player typed
+      // the message; `kind: 'system'` = server-issued (joins, leaves,
+      // deaths, perihelion notices, etc). Client renders both in the
+      // same chat window with different styling.
+      type: 'chat';
+      kind: 'player' | 'system';
+      characterId: string | null;
+      displayName: string;
+      text: string;
+      ts: number;
+    }
   | { type: 'error'; message: string };
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 26;
+export const PROTOCOL_VERSION = 27;

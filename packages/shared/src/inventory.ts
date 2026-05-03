@@ -247,6 +247,16 @@ export type SuitStats = {
   staminaRegenBonus: number; // per second
   // Multiplier applied additively to base move speed: 0.10 = +10%.
   moveSpeedMult: number;
+  // Extra tiles added to the base BUILD_RADIUS_TILES on the chassis
+  // primary stat. Higher-tier chassis lets you place buildings
+  // further from your character. Cargo grid grants a smaller bonus
+  // too (see SLOT_CONTRIBUTION below).
+  buildRadiusBonus: number;
+  // Extra inventory bag slots granted by the cargo grid. Server
+  // ensures conn.inventory.length matches INVENTORY_SIZE +
+  // inventoryBonus on equipment changes; never shrinks below the
+  // last non-empty slot to avoid item loss.
+  inventoryBonus: number;
 };
 
 // Player base stats — must mirror the server's COMBAT constants. Used by
@@ -265,6 +275,8 @@ export function emptySuitStats(): SuitStats {
     staminaMaxBonus: 0,
     staminaRegenBonus: 0,
     moveSpeedMult: 0,
+    buildRadiusBonus: 0,
+    inventoryBonus: 0,
   };
 }
 
@@ -281,8 +293,14 @@ const TIER_MULT: Record<PartTier, number> = {
 // Per-slot primary contribution at Mk1. Multiply by TIER_MULT[part.tier].
 type SlotContribution = (mult: number) => Partial<SuitStats>;
 const SLOT_CONTRIBUTION: Record<SuitSlotKind, SlotContribution> = {
-  // Chassis: bulk HP. Mk1 chassis ≈ +15hp, Alien ≈ +180hp.
-  chassis: (m) => ({ hpBonus: 15 * m }),
+  // Chassis: bulk HP + extra build reach. Mk1 ≈ +15hp +0 tiles;
+  // each tier multiplier nudges build radius by a fractional tile so
+  // a Mk2 chassis grants +0 extra (still 0.4 < 1), Mk3 grants +1,
+  // Mk4 +1, Alien +2 (after Math.floor in computeSuitStats).
+  chassis: (m) => ({
+    hpBonus: 15 * m,
+    buildRadiusBonus: 0.4 * (m - 1),
+  }),
   // Plating: shield max + a small regen rate kick.
   plating: (m) => ({ shieldBonus: 12 * m }),
   // Life support: stamina max + regen rate (max/4 per second).
@@ -292,9 +310,13 @@ const SLOT_CONTRIBUTION: Record<SuitSlotKind, SlotContribution> = {
   }),
   // Utility mod: move-speed multiplier.
   utility_mod: (m) => ({ moveSpeedMult: 0.04 * m }),
-  // Cargo grid is reserved for the future bag-size expansion. No stat
-  // contribution yet — equipping it is currently a no-op for V1.
-  cargo_grid: () => ({}),
+  // Cargo grid: extra bag slots (the primary point of the slot)
+  // plus a small build-reach bonus. Mk1 = +4 slots, Mk2 ≈ +9,
+  // Mk3 +16, Mk4 +28, Alien +48 (after Math.floor on the server).
+  cargo_grid: (m) => ({
+    inventoryBonus: 4 * m,
+    buildRadiusBonus: 0.25 * (m - 1),
+  }),
 };
 
 export function computeSuitStats(equipment: Equipment): SuitStats {
@@ -309,6 +331,8 @@ export function computeSuitStats(equipment: Equipment): SuitStats {
     stats.staminaMaxBonus += contrib.staminaMaxBonus ?? 0;
     stats.staminaRegenBonus += contrib.staminaRegenBonus ?? 0;
     stats.moveSpeedMult += contrib.moveSpeedMult ?? 0;
+    stats.buildRadiusBonus += contrib.buildRadiusBonus ?? 0;
+    stats.inventoryBonus += contrib.inventoryBonus ?? 0;
     // Stack rolled affix bonuses onto the same accumulator. Affixes use
     // the same units as the primary stat so they just add.
     for (const affix of part.affixes ?? []) {
@@ -813,6 +837,29 @@ const EMPTY: InventorySlot = { kind: 'empty' };
 
 export function emptyInventory(): Inventory {
   return Array.from({ length: INVENTORY_SIZE }, () => ({ ...EMPTY }));
+}
+
+// Resize an inventory in place. Cargo grid grants extra bag slots —
+// when equipped, target = INVENTORY_SIZE + inventoryBonus and we pad
+// with empties. When unequipped, we only shrink down to the last
+// non-empty index so items in expanded slots aren't deleted (caller
+// can re-equip a cargo grid to recover the headroom). Hotbar
+// (first HOTBAR_SIZE) is always preserved.
+export function resizeInventory(inv: Inventory, target: number): void {
+  const want = Math.max(INVENTORY_SIZE, Math.floor(target));
+  if (inv.length === want) return;
+  if (inv.length < want) {
+    while (inv.length < want) inv.push({ ...EMPTY });
+    return;
+  }
+  // Shrinking: never below INVENTORY_SIZE, never below the last
+  // non-empty slot.
+  let lastUsed = inv.length - 1;
+  while (lastUsed >= INVENTORY_SIZE && inv[lastUsed].kind === 'empty') {
+    lastUsed--;
+  }
+  const safe = Math.max(want, lastUsed + 1, INVENTORY_SIZE);
+  inv.length = safe;
 }
 
 function isEmpty(slot: InventorySlot): boolean {

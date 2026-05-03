@@ -72,6 +72,7 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
   tier_up_weapon: (w, c, m) => w.handleTierUpWeapon(c, m.weaponInventoryIdx),
   use_consumable: (w, c, m) => w.handleUseConsumable(c, m.slot),
   reload_weapon: (w, c) => w.handleReloadWeapon(c),
+  chat: (w, c, m) => w.handleChat(c, m.text),
 };
 
 const wss = new WebSocketServer({ port: env.port, host: env.host });
@@ -80,6 +81,32 @@ wss.on('listening', () => {
   const addr = wss.address();
   console.log(`[ws] DÛM RUNNER game server listening on`, addr);
 });
+
+// Heartbeat: Fly's edge proxy idles HTTP/WebSocket connections after
+// ~60s of silence, dropping the connection client-side. The 20Hz tick
+// loop fires server→client traffic constantly during play, but a
+// player standing in a quiet menu (workstation modal, lobby pause)
+// can go silent enough for the edge to close. Every 25s we ping every
+// open ws; sockets that fail to pong within the next interval are
+// dead and we tear them down.
+type HeartbeatWS = WebSocket & { isAlive?: boolean };
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const heartbeatTimer = setInterval(() => {
+  for (const client of wss.clients) {
+    const c = client as HeartbeatWS;
+    if (c.isAlive === false) {
+      c.terminate();
+      continue;
+    }
+    c.isAlive = false;
+    try {
+      c.ping();
+    } catch {
+      // socket is mid-close; next interval terminates it.
+    }
+  }
+}, HEARTBEAT_INTERVAL_MS);
+wss.on('close', () => clearInterval(heartbeatTimer));
 
 wss.on('error', (err) => {
   console.error('[ws] server error:', err);
@@ -91,6 +118,13 @@ wss.on('connection', (ws: WebSocket) => {
   let player: Player | null = null;
   let serverId: string | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  // Heartbeat liveness flag — flipped to false on each scheduler tick;
+  // the client's pong response flips it back. See top-level
+  // heartbeatTimer for the sweep.
+  (ws as HeartbeatWS).isAlive = true;
+  ws.on('pong', () => {
+    (ws as HeartbeatWS).isAlive = true;
+  });
 
   // Disconnect if the client doesn't auth within 5 seconds.
   const authTimer = setTimeout(() => {

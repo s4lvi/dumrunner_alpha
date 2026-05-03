@@ -32,9 +32,12 @@ export type TurretStats = {
 
 export const TURRET_VARIANTS: Partial<Record<BuildingKind, TurretStats>> = {
   // Original auto-turret. Kept for backward compat with already-placed
-  // buildings.
+  // buildings. Range bumped from 380 → 520 so it actually engages
+  // horde waves: enemies spawn at radius 700 from the world origin
+  // and need to walk into range. The previous range left the player
+  // watching their turret stand silent through most of perihelion.
   turret: {
-    range: 380,
+    range: 520,
     damage: 18,
     fireIntervalMs: 750,
     projectileSpeed: 700,
@@ -45,7 +48,7 @@ export const TURRET_VARIANTS: Partial<Record<BuildingKind, TurretStats>> = {
     color: 0x66ddff,
   },
   turret_smg: {
-    range: 360,
+    range: 480,
     damage: 9,
     fireIntervalMs: 130,
     projectileSpeed: 1500,
@@ -56,7 +59,7 @@ export const TURRET_VARIANTS: Partial<Record<BuildingKind, TurretStats>> = {
     color: 0xfde68a,
   },
   turret_shotgun: {
-    range: 240,
+    range: 320,
     damage: 11,
     fireIntervalMs: 1100,
     projectileSpeed: 1500,
@@ -67,7 +70,7 @@ export const TURRET_VARIANTS: Partial<Record<BuildingKind, TurretStats>> = {
     color: 0xff8a3d,
   },
   turret_rifle: {
-    range: 520,
+    range: 720,
     damage: 50,
     fireIntervalMs: 1100,
     projectileSpeed: 2400,
@@ -133,7 +136,7 @@ export const COMBAT = {
 
   // Players can only place buildings within this many tiles of their current
   // position. Server validates; client shades the same ring.
-  BUILD_RADIUS_TILES: 2,
+  BUILD_RADIUS_TILES: 3,
 
   // Day / cycle / horde clock. The GDD says cycle = 3 in-game days, ~1-2 hr
   // real-time per day. For the alpha we run 5 real minutes per day so a

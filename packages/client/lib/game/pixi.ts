@@ -26,7 +26,7 @@ import {
 const PLAYER_RADIUS = 14;
 
 // Must match server: COMBAT.BUILD_RADIUS_TILES.
-const BUILD_RADIUS_TILES = 2;
+const BUILD_RADIUS_TILES = 3;
 
 // Must match server: INTERACTABLE_RADIUS in scene.ts.
 const INTERACTABLE_RADIUS = 60;
@@ -107,6 +107,11 @@ export type GameHandle = {
   // exit. Build mode also requires the current scene to be the surface;
   // pixi enforces that via the layout.tileSize > 0 + sceneId check.
   setBuildMode(kind: BuildingKind | null): void;
+  // Suit-derived build-radius bonus (in whole tiles) for the local
+  // player. Renderer uses this when sizing the build-mode ring and
+  // checking placement validity. Server applies the same bonus
+  // server-side, so the ghost matches what's actually allowed.
+  setBuildRadiusBonus(tiles: number): void;
   // The currently-equipped weapon (selected hotbar slot if it's a weapon),
   // or null. Pixi gates fire/swing visuals + outbound fire messages on this.
   setEquippedWeapon(
@@ -364,6 +369,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // Active placeable kind, or null when build mode is off. Driven externally
   // by Game.tsx (based on the selected hotbar slot + current scene).
   let buildKind: BuildingKind | null = null;
+  let buildRadiusBonus = 0;
   // Currently equipped weapon (or null when no weapon is selected). Driven
   // externally; gates fire/swing locally so we don't show animation for
   // clicks the server will reject.
@@ -376,7 +382,16 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     | null = null;
   let pendingBuildAction: 'place' | 'demolish' | null = null;
 
+  // While focus is in a chat input / textarea, suppress movement key
+  // capture so the player's typing doesn't drive the character.
+  function isFormFocus(): boolean {
+    const ae = document.activeElement;
+    return (
+      ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement
+    );
+  }
   function onKeyDown(e: KeyboardEvent) {
+    if (isFormFocus()) return;
     const k = e.key.toLowerCase();
     keys.add(k);
     // Build mode is now driven by the selected hotbar slot, not a key
@@ -384,6 +399,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     if (k === 'escape') mouseDown = false;
   }
   function onKeyUp(e: KeyboardEvent) {
+    if (isFormFocus()) return;
     keys.delete(e.key.toLowerCase());
   }
   function onMouseMove(e: MouseEvent) {
@@ -1673,7 +1689,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     // Distance check — same formula as the server uses.
     const tileCenterX = (tileX + 0.5) * tileSize;
     const tileCenterY = (tileY + 0.5) * tileSize;
-    const reach = (BUILD_RADIUS_TILES + 0.5) * tileSize;
+    const reach = (BUILD_RADIUS_TILES + buildRadiusBonus + 0.5) * tileSize;
     const dxc = tileCenterX - selfX;
     const dyc = tileCenterY - selfY;
     const inRange = dxc * dxc + dyc * dyc <= reach * reach;
@@ -2226,6 +2242,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     setBuildMode(kind: BuildingKind | null) {
       buildKind = kind;
       if (kind !== null) mouseDown = false;
+    },
+    setBuildRadiusBonus(tiles: number) {
+      buildRadiusBonus = Math.max(0, Math.floor(tiles));
     },
     setEquippedWeapon(weaponId) {
       equippedWeapon = weaponId;
