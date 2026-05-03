@@ -27,10 +27,15 @@ GAME_SERVER_HOST = "0.0.0.0"
 [http_service]
 internal_port = 8070
 force_https = true
-# Scale to zero between sessions — alpha-friendly. Wakes on first request.
+# Keep one machine warm at all times. Fly's auto-stop heuristic is
+# request-rate based and was killing machines mid-session even with
+# active WebSocket connections (which don't count as "requests" once
+# upgraded). The 25s server-side ws ping/pong heartbeat keeps the
+# proxy from idling the connection itself; pinning min_machines_running
+# to 1 keeps the VM behind the proxy alive too.
 auto_stop_machines = "stop"
 auto_start_machines = true
-min_machines_running = 0
+min_machines_running = 1
 processes = ["app"]
 
 [[vm]]
