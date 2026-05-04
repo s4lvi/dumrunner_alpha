@@ -62,6 +62,29 @@ export type CarriedPart = {
   appliedAttachments?: string[];
 };
 
+// Active timed buff/debuff on a player. Server tracks the
+// authoritative list per connection; clients receive a `player_effects`
+// broadcast for HUD rendering of buff timers. Stims/overcharge/medkit
+// tiers are the first consumers; future hazard ticks (radiation,
+// poison) and environmental ammo (burn, slow, EMP) attach effects
+// of the same shape.
+export type PlayerEffectKind =
+  | 'speed_mult'        // multiplicative move-speed bonus, magnitude = +N (0.30 = +30%)
+  | 'stamina_regen_add' // flat stamina/sec added to regen
+  | 'shield_flat'       // flat extra max shield while active
+  | 'hp_max_flat';      // flat extra max hp while active
+
+export type PlayerEffect = {
+  // Stable id within a connection. Same id refreshes the timer
+  // instead of stacking, so back-to-back stims extend duration.
+  id: string;
+  kind: PlayerEffectKind;
+  magnitude: number;
+  expiresAt: number;
+  // Display label for HUD tooltips (e.g. 'Stim', 'Overcharge').
+  label: string;
+};
+
 // Loot on the ground. Discriminated by `content.kind`:
 //   - 'part'     : a CarriedPart (legacy enemy-drop behaviour).
 //   - 'material' : a stack of a MaterialKind (scavenged components).
@@ -748,8 +771,18 @@ export type ServerMessage =
       // immediately so this is mostly cosmetic.
       type: 'server_paused';
     }
+  | {
+      // Authoritative list of active timed effects on a player.
+      // Sent direct to the affected player; future enhancement may
+      // broadcast a stripped-down version so other players can see
+      // each other's stim halos. Empty list means "all effects
+      // expired."
+      type: 'player_effects';
+      characterId: string;
+      effects: PlayerEffect[];
+    }
   | { type: 'error'; message: string };
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 30;
+export const PROTOCOL_VERSION = 31;

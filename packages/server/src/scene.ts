@@ -21,6 +21,7 @@ import type {
   LootContent,
   LootState,
   MaterialKind,
+  PlayerEffect,
   ProjectileOwnerKind,
   ProjectileState,
   SceneLayout,
@@ -132,6 +133,13 @@ export interface SceneConnection {
   // re-killed by enemies clustered around the spawn point. Set in
   // World.respawnPlayerToSurface; checked in applyDamage.
   respawnImmunityUntil: number;
+  // Active timed status effects (stims, overcharge kits, future
+  // debuffs from environmental damage). World mutates this; Scene
+  // reads it through suitSpeedMult / suitStaminaRegenBonus already
+  // present on this struct (those fields now reflect suit + active
+  // effects after recomputePlayerStats folds them in). World expires
+  // them on each tick.
+  activeEffects: PlayerEffect[];
   lastStaminaSentAt: number;
   lastShieldSentAt: number;
   lastStaminaSent: number;

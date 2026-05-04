@@ -65,7 +65,12 @@ export type AmmoKind =
 // Consumables — single-use items the player triggers from a hotbar
 // slot to apply an effect (heal, buff, etc). New entries: add to the
 // union AND to CONSUMABLES below.
-export type ConsumableKind = 'medkit';
+export type ConsumableKind =
+  | 'medkit'
+  | 'medkit_lg'
+  | 'medkit_xl'
+  | 'stim'
+  | 'overcharge_kit';
 
 export type ConsumableDef = {
   id: ConsumableKind;
@@ -73,17 +78,86 @@ export type ConsumableDef = {
   description: string;
   // Color tint for the inventory icon.
   color: number;
-  // Hp restored when used. Future variants will add other effects.
+  // Instant HP restored on use. 0 = no instant heal.
   healHp: number;
+  // Optional timed effects applied to the user. Server attaches via
+  // World.applyPlayerEffect for each; matching id refreshes / replaces
+  // an existing effect instead of stacking. Stim ships two effects
+  // (speed + stamina regen) under different ids so each refreshes
+  // independently.
+  effects?: Array<{
+    id: string;
+    kind:
+      | 'speed_mult'
+      | 'stamina_regen_add'
+      | 'shield_flat'
+      | 'hp_max_flat';
+    magnitude: number;
+    durationMs: number;
+    label: string;
+  }>;
 };
 
 export const CONSUMABLES: Record<ConsumableKind, ConsumableDef> = {
   medkit: {
     id: 'medkit',
     name: 'Medkit',
-    description: 'Restores 60 HP. Use from hotbar.',
+    description: 'Restores 60 HP.',
     color: 0xef4444,
     healHp: 60,
+  },
+  medkit_lg: {
+    id: 'medkit_lg',
+    name: 'Medkit (Large)',
+    description: 'Restores 120 HP.',
+    color: 0xdc2626,
+    healHp: 120,
+  },
+  medkit_xl: {
+    id: 'medkit_xl',
+    name: 'Medkit (XL)',
+    description: 'Restores 220 HP.',
+    color: 0x991b1b,
+    healHp: 220,
+  },
+  stim: {
+    id: 'stim',
+    name: 'Stim',
+    description: '+30% move speed and +5/s stamina regen for 30s.',
+    color: 0x22d3ee,
+    healHp: 0,
+    effects: [
+      {
+        id: 'stim_speed',
+        kind: 'speed_mult',
+        magnitude: 0.3,
+        durationMs: 30_000,
+        label: 'Stim',
+      },
+      {
+        id: 'stim_stamina',
+        kind: 'stamina_regen_add',
+        magnitude: 5,
+        durationMs: 30_000,
+        label: 'Stim',
+      },
+    ],
+  },
+  overcharge_kit: {
+    id: 'overcharge_kit',
+    name: 'Overcharge Kit',
+    description: '+50 max shield for 60s. Refills the bar on use.',
+    color: 0xa78bfa,
+    healHp: 0,
+    effects: [
+      {
+        id: 'overcharge',
+        kind: 'shield_flat',
+        magnitude: 50,
+        durationMs: 60_000,
+        label: 'Overcharge',
+      },
+    ],
   },
 };
 export type WeaponKind = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'knife';

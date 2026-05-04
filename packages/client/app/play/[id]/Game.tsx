@@ -117,6 +117,12 @@ export function Game({ serverId }: { serverId: string }) {
     secondsToPerihelion: number;
     hordeActive: boolean;
   } | null>(null);
+  // Active timed effects on self. Server is authoritative; ticks
+  // expire entries server-side and re-broadcasts. Used by the
+  // ActiveEffectsHud beneath the AmmoHud.
+  const [activeEffects, setActiveEffects] = useState<
+    import('@dumrunner/shared').PlayerEffect[]
+  >([]);
   // Surface power state — capacity scales with deepest floor reached, draw
   // is the count of consuming buildings (turrets + Phase-4 craft jobs).
   // Powered set tells the renderer which buildings are currently online so
@@ -729,6 +735,11 @@ export function Game({ serverId }: { serverId: string }) {
           poweredBuildingIds: new Set(msg.poweredBuildingIds),
         });
         break;
+      case 'player_effects':
+        if (msg.characterId === selfIdRef.current) {
+          setActiveEffects(msg.effects);
+        }
+        break;
       case 'craft_job_started':
         // Server emits this both when a new job is enqueued (which
         // may be queued, completesAt=0) AND when a queued job
@@ -1192,6 +1203,7 @@ export function Game({ serverId }: { serverId: string }) {
         />
         {worldClock && <WorldClockHud clock={worldClock} />}
         <PowerHud state={powerState} />
+        <ActiveEffectsHud effects={activeEffects} />
         <AmmoHud
           inventory={inventory}
           hotbarSelection={hotbarSelection}
@@ -1669,6 +1681,51 @@ function Toast({ message }: { message: string; keyId: number }) {
 // Compact "Power N/M" overlay. Sits below the cycle clock so the player
 // can read both at a glance. Goes red when capacity = 0 (Power Link
 // destroyed or never alive).
+// Stack of small chips above the AmmoHud showing active timed
+// buffs/debuffs with their remaining seconds. Server pushes the
+// authoritative list via 'player_effects'; client just displays.
+// Per-effect dedup happens server-side (matching id refreshes the
+// timer rather than stacking) so the chips never duplicate.
+function ActiveEffectsHud({
+  effects,
+}: {
+  effects: import('@dumrunner/shared').PlayerEffect[];
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (effects.length === 0) return;
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [effects.length]);
+  if (effects.length === 0) return null;
+  // Group effects by label so a stim's two child entries (speed +
+  // stamina regen) render as one chip with the soonest-expiring
+  // timer. Keeps the HUD compact without dropping detail.
+  const grouped = new Map<string, { label: string; expiresAt: number }>();
+  for (const e of effects) {
+    const cur = grouped.get(e.label);
+    if (!cur || e.expiresAt < cur.expiresAt) {
+      grouped.set(e.label, { label: e.label, expiresAt: e.expiresAt });
+    }
+  }
+  return (
+    <div className="absolute top-[80px] right-3 pointer-events-none select-none flex flex-col gap-1 items-end z-30">
+      {[...grouped.values()].map((g) => {
+        const remaining = Math.max(0, Math.ceil((g.expiresAt - now) / 1000));
+        return (
+          <div
+            key={g.label}
+            className="px-2 py-1 rounded border border-cyan-700/60 bg-cyan-950/80 text-cyan-100 text-[10px] tabular-nums flex items-center gap-2"
+          >
+            <span className="uppercase tracking-wider">{g.label}</span>
+            <span className="text-cyan-300">{remaining}s</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function PowerHud({
   state,
 }: {

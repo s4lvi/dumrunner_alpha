@@ -458,6 +458,7 @@ export class World {
       reloadingUntil: 0,
       respawnAt: null,
       respawnImmunityUntil: 0,
+      activeEffects: [],
       dirty: false,
       inventoryDirty: false,
       lastStaminaSentAt: 0,
@@ -1501,17 +1502,41 @@ export class World {
     if (s.kind !== 'consumable' || s.count <= 0) return;
     const def = CONSUMABLES[s.consumableId];
     if (!def) return;
-    // No healing if already full hp — let the player keep the medkit.
-    if (def.healHp > 0 && conn.hp >= conn.maxHp) return;
+    // No-op if there's nothing useful left to grant — only checked
+    // when the consumable is *only* a heal. Effect-bearing kinds
+    // (stim, overcharge) refresh their timer regardless.
+    const hasEffects = (def.effects?.length ?? 0) > 0;
+    if (def.healHp > 0 && !hasEffects && conn.hp >= conn.maxHp) return;
     const id = consumeConsumable(conn.inventory, slot);
     if (!id) return;
+
+    // Apply each timed effect (refreshing the timer if already
+    // active). Recompute happens inside applyPlayerEffect so the
+    // shield/hp caps reflect the new totals before we top them off.
+    const now = Date.now();
+    if (def.effects) {
+      for (const e of def.effects) {
+        this.applyPlayerEffect(conn.characterId, {
+          id: e.id,
+          kind: e.kind,
+          magnitude: e.magnitude,
+          expiresAt: now + e.durationMs,
+          label: e.label,
+        });
+      }
+    }
+    // Overcharge tops off the shield bar so the +50 isn't wasted on
+    // a player who was already at full base shield. Same pattern can
+    // extend to other shield_flat effects later.
+    if (s.consumableId === 'overcharge_kit') {
+      conn.shield = conn.maxShield;
+    }
+
     if (def.healHp > 0) {
       conn.hp = Math.min(conn.maxHp, conn.hp + def.healHp);
+    }
+    if (def.healHp > 0 || s.consumableId === 'overcharge_kit') {
       conn.dirty = true;
-      // The client only updates its hp readout off `player_damaged`
-      // messages — without an explicit broadcast here the heal
-      // happens server-side but the player sees their bar unchanged.
-      // Reused message shape rather than inventing player_healed.
       const scene = this.scenes.get(conn.sceneId);
       scene?.broadcast({
         type: 'player_damaged',
@@ -1652,16 +1677,31 @@ export class World {
   // client HUD reflects the new caps.
   private recomputePlayerStats(conn: Connection): void {
     const stats = computeSuitStats(conn.equipment);
+    // Fold active timed effects in on top of suit stats. Each effect
+    // kind sums independently, then merges into the suit-derived
+    // value the same way an extra suit affix would.
+    let effectSpeedMult = 0;
+    let effectStaminaRegen = 0;
+    let effectShieldFlat = 0;
+    let effectHpFlat = 0;
+    for (const e of conn.activeEffects) {
+      if (e.kind === 'speed_mult') effectSpeedMult += e.magnitude;
+      else if (e.kind === 'stamina_regen_add') effectStaminaRegen += e.magnitude;
+      else if (e.kind === 'shield_flat') effectShieldFlat += e.magnitude;
+      else if (e.kind === 'hp_max_flat') effectHpFlat += e.magnitude;
+    }
     // Round to integers so the HUD doesn't render 15-digit floats from
     // affix rolls. HP/shield/stamina maxes are always whole numbers in
     // every UI surface.
-    conn.maxHp = Math.round(COMBAT.PLAYER_MAX_HP + stats.hpBonus);
+    conn.maxHp = Math.round(
+      COMBAT.PLAYER_MAX_HP + stats.hpBonus + effectHpFlat
+    );
     conn.maxShield = Math.round(
-      COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus
+      COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus + effectShieldFlat
     );
     conn.maxStamina = Math.round(COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus);
-    conn.suitSpeedMult = stats.moveSpeedMult;
-    conn.suitStaminaRegenBonus = stats.staminaRegenBonus;
+    conn.suitSpeedMult = stats.moveSpeedMult + effectSpeedMult;
+    conn.suitStaminaRegenBonus = stats.staminaRegenBonus + effectStaminaRegen;
     conn.suitBuildRadiusBonus = Math.floor(stats.buildRadiusBonus);
     // Resize the bag to match the new cargo bonus. The helper
     // refuses to shrink below the highest non-empty slot, so
@@ -1712,6 +1752,7 @@ export class World {
 
     this.tickHordeClock(now);
     this.tickCraftJobs(now);
+    this.tickPlayerEffects(now);
     void this.checkPausedFlag(now);
 
     for (const scene of this.scenes.values()) {
@@ -2045,6 +2086,53 @@ export class World {
 
   // Polls servers.is_paused so a lobby pause (owner not connected,
   // or kicked from a different surface) still kicks anyone here.
+  // Apply (or refresh) a timed effect on a player. Same id refreshes
+  // the timer in place rather than stacking multiple identical
+  // effects — a back-to-back stim extends duration, not concurrency.
+  // Triggers a stat recompute + 'player_effects' broadcast so the
+  // HUD timer reflects reality.
+  applyPlayerEffect(
+    characterId: string,
+    effect: import('@dumrunner/shared').PlayerEffect
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const idx = conn.activeEffects.findIndex((e) => e.id === effect.id);
+    if (idx >= 0) {
+      conn.activeEffects[idx] = effect;
+    } else {
+      conn.activeEffects.push(effect);
+    }
+    this.recomputePlayerStats(conn);
+    this.sendDirect(conn.ws, {
+      type: 'player_effects',
+      characterId,
+      effects: conn.activeEffects,
+    });
+  }
+
+  // Walk every connection and drop expired effects. Cheap; only
+  // does work when something actually expires. recomputePlayerStats
+  // is called only for connections whose effect list shrank so we
+  // don't broadcast no-op stat changes every tick.
+  private tickPlayerEffects(now: number): void {
+    for (const conn of this.connections.values()) {
+      if (conn.activeEffects.length === 0) continue;
+      const before = conn.activeEffects.length;
+      conn.activeEffects = conn.activeEffects.filter(
+        (e) => e.expiresAt > now
+      );
+      if (conn.activeEffects.length < before) {
+        this.recomputePlayerStats(conn);
+        this.sendDirect(conn.ws, {
+          type: 'player_effects',
+          characterId: conn.characterId,
+          effects: conn.activeEffects,
+        });
+      }
+    }
+  }
+
   private async checkPausedFlag(now: number): Promise<void> {
     if (this.pausing) return;
     if (now - this.lastPauseCheckAt < 5_000) return;
