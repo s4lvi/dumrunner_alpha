@@ -526,6 +526,16 @@ export const ReloadWeaponMsgSchema = z.object({
   type: z.literal('reload_weapon'),
 });
 
+// Salvage a single inventory slot at a workbench. Server validates
+// the slot is salvageable (attachment / weapon / placeable), the
+// player is in range of a workbench, and a base recipe exists for
+// the item. Returns the configured refund (~20% of recipe inputs,
+// scaled by suit-affix salvage bonuses).
+export const SalvageRequestMsgSchema = z.object({
+  type: z.literal('salvage_request'),
+  slot: slotIndex,
+});
+
 // Drop a slot's contents on the ground at the player's current
 // position. `all` = drop the whole stack; otherwise drop a single
 // unit (matches the inventory_discard semantics).
@@ -600,6 +610,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   StorageMoveMsgSchema,
   InventoryDropMsgSchema,
   GiveItemMsgSchema,
+  SalvageRequestMsgSchema,
 ]);
 
 
@@ -789,4 +800,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 32;
+export const PROTOCOL_VERSION = 33;

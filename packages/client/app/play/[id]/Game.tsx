@@ -1415,6 +1415,11 @@ export function Game({ serverId }: { serverId: string }) {
             x={slotMenu.x}
             y={slotMenu.y}
             nearbyPlayers={gameRef.current?.nearbyPlayers(96) ?? []}
+            nearWorkbench={nearWorkstations.has('workbench')}
+            onSalvage={() => {
+              sendOnLiveWs({ type: 'salvage_request', slot: slotMenu.slot });
+              setSlotMenu(null);
+            }}
             onUse={() => {
               sendOnLiveWs({ type: 'use_consumable', slot: slotMenu.slot });
               setSlotMenu(null);
@@ -1668,6 +1673,16 @@ function friendlyErrorMessage(code: string): string {
       return 'Power Link is destroyed. Wait for the next perihelion to rebuild.';
     case 'pause_owner_only':
       return 'Only the server owner can pause.';
+    case 'salvage_needs_workbench':
+      return 'Stand near a workbench to salvage.';
+    case 'salvage_unsupported_kind':
+      return 'This item can\'t be salvaged.';
+    case 'salvage_no_recipe':
+      return 'No salvage value — no known recipe.';
+    case 'give_too_far':
+      return 'Too far from the recipient.';
+    case 'recipient_inventory_full':
+      return 'Their bag is full.';
     default:
       return code.replace(/_/g, ' ');
   }
@@ -1682,7 +1697,12 @@ function isExpectedServerError(code: string): boolean {
     code === 'station_queue_full' ||
     code === 'insufficient_power' ||
     code === 'power_link_offline' ||
-    code === 'pause_owner_only'
+    code === 'pause_owner_only' ||
+    code === 'salvage_needs_workbench' ||
+    code === 'salvage_unsupported_kind' ||
+    code === 'salvage_no_recipe' ||
+    code === 'give_too_far' ||
+    code === 'recipient_inventory_full'
   );
 }
 
@@ -4154,11 +4174,13 @@ function SlotContextMenu({
   x,
   y,
   nearbyPlayers,
+  nearWorkbench,
   onUse,
   onDropOne,
   onDropAll,
   onGiveOne,
   onGiveAll,
+  onSalvage,
   onDiscardOne,
   onDiscardAll,
   onClose,
@@ -4167,15 +4189,21 @@ function SlotContextMenu({
   x: number;
   y: number;
   nearbyPlayers: { characterId: string; displayName: string }[];
+  nearWorkbench: boolean;
   onUse: () => void;
   onDropOne: () => void;
   onDropAll: () => void;
   onGiveOne: (targetCharacterId: string) => void;
   onGiveAll: (targetCharacterId: string) => void;
+  onSalvage: () => void;
   onDiscardOne: () => void;
   onDiscardAll: () => void;
   onClose: () => void;
 }) {
+  const salvageable =
+    slot.kind === 'attachment' ||
+    slot.kind === 'weapon' ||
+    slot.kind === 'placeable';
   const stackable =
     slot.kind === 'material' ||
     slot.kind === 'ammo' ||
@@ -4243,6 +4271,14 @@ function SlotContextMenu({
               </button>
             </div>
           ))}
+        {salvageable && nearWorkbench && (
+          <button
+            className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)] text-cyan-300 border-t border-[color:var(--panel-border)]"
+            onClick={onSalvage}
+          >
+            Salvage at workbench (~20%)
+          </button>
+        )}
         {stackable && count > 1 && (
           <button
             className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)] border-t border-[color:var(--panel-border)]"

@@ -87,6 +87,7 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
       m.toIdx
     ),
   inventory_drop: (w, c, m) => w.handleInventoryDrop(c, m.slot, m.all),
+  salvage_request: (w, c, m) => w.handleSalvageRequest(c, m.slot),
   give_item: (w, c, m) =>
     w.handleGiveItem(c, m.targetCharacterId, m.slot, m.all),
 };

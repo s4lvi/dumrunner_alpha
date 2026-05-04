@@ -49,6 +49,7 @@ import {
   KEY_ARTIFACT_COST,
   recipeOutputToSlot,
   RECIPES,
+  salvageRefund,
   TIER_MOD_SLOTS,
   TIER_PIECE_SLOTS,
   weaponFamily as weaponFamilyOf,
@@ -838,6 +839,73 @@ export class World {
     const conn = this.connections.get(characterId);
     if (!conn) return;
     if (!discardSlot(conn.inventory, slot, all)) return;
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Salvage an inventory slot at a workbench. Yields ~20% of the
+  // base recipe's inputs (or whatever yieldPct the player's suit
+  // is currently rolling). Empties the source slot and pushes the
+  // refund materials into the bag.
+  handleSalvageRequest(characterId: string, slot: number): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (
+      !surface?.hasBuildingNearby(
+        conn.x,
+        conn.y,
+        'workbench',
+        COMBAT.CRAFT_STATION_RANGE_PX
+      )
+    ) {
+      this.sendDirect(conn.ws, { type: 'error', message: 'salvage_needs_workbench' });
+      return;
+    }
+    if (slot < 0 || slot >= conn.inventory.length) return;
+    const src = conn.inventory[slot];
+    if (src.kind === 'empty') return;
+    if (src.kind !== 'attachment' && src.kind !== 'weapon' && src.kind !== 'placeable') {
+      this.sendDirect(conn.ws, { type: 'error', message: 'salvage_unsupported_kind' });
+      return;
+    }
+
+    // Future suit-affix `salvage_yield_pct` plugs in here. The
+    // current default (0.20) maps every recipe input to 20% of its
+    // count rounded down — small inputs round to 0, which is the
+    // correct rate-limiter for trash items.
+    const yieldPct = 0.20;
+    const refunds = salvageRefund(src, yieldPct);
+    if (refunds.length === 0) {
+      this.sendDirect(conn.ws, { type: 'error', message: 'salvage_no_recipe' });
+      return;
+    }
+
+    // Salvage placeables consumes one unit of the stack at a time
+    // (matches the discard / drop "single" path), since stacks
+    // really are N copies of the item. Attachments + weapons are
+    // already singletons so we always burn the whole slot.
+    if (src.kind === 'placeable' && src.count > 1) {
+      src.count -= 1;
+    } else {
+      conn.inventory[slot] = { kind: 'empty' };
+    }
+
+    // Pump refunds back into inventory; failures (full bag) drop
+    // the surplus on the ground at the player's feet so nothing is
+    // silently lost.
+    for (const r of refunds) {
+      const placed = addInventorySlotToInventory(conn.inventory, r);
+      if (!placed) {
+        const scene = this.scenes.get(conn.sceneId);
+        scene?.spawnDroppedSlot(conn.x, conn.y, r, conn.characterId);
+      }
+    }
+
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',

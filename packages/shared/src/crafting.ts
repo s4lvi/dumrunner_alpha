@@ -826,3 +826,72 @@ export function blueprintDisplayName(bp: BlueprintCatalogEntry): string {
 export function listBlueprints(): BlueprintCatalogEntry[] {
   return Object.values(BLUEPRINT_CATALOG);
 }
+
+// ---------- salvage ----------
+//
+// Find a recipe whose output matches the given attachment defId or
+// weapon id. Used by salvage to compute the refund. Returns null if
+// there's no recipe (manually-spawned content, debug items).
+export function findRecipeForAttachmentDefId(defId: string): Recipe | null {
+  for (const r of Object.values(RECIPES)) {
+    if (r.output.kind === 'attachment' && r.output.defId === defId) return r;
+  }
+  return null;
+}
+
+export function findRecipeForWeapon(weaponId: WeaponKind): Recipe | null {
+  for (const r of Object.values(RECIPES)) {
+    if (r.output.kind === 'weapon' && r.output.weaponId === weaponId) return r;
+  }
+  return null;
+}
+
+// Compute the salvage refund from a single inventory slot. Default
+// yield is 20%; suit affixes that grant `salvage_yield_pct` push it
+// up. Returns the refunded slots (always 'material' / 'ammo' kinds —
+// the original inputs we'd reverse-engineer back). Undefined input
+// kinds yield nothing.
+export function salvageRefund(
+  slot: InventorySlot,
+  yieldPct: number = 0.20
+): InventorySlot[] {
+  let recipe: Recipe | null = null;
+  if (slot.kind === 'attachment') {
+    recipe = findRecipeForAttachmentDefId(slot.instance.defId);
+  } else if (slot.kind === 'weapon') {
+    recipe = findRecipeForWeapon(slot.weapon.weaponId);
+  } else if (slot.kind === 'placeable') {
+    // Placeables salvage back into building recipe inputs too.
+    for (const r of Object.values(RECIPES)) {
+      if (
+        r.output.kind === 'placeable' &&
+        r.output.buildingKind === slot.buildingKind
+      ) {
+        recipe = r;
+        break;
+      }
+    }
+  }
+  if (!recipe) return [];
+
+  const refunds: InventorySlot[] = [];
+  for (const input of recipe.inputs) {
+    if (input.kind !== 'material' && input.kind !== 'ammo') continue;
+    const refund = Math.floor(input.count * yieldPct);
+    if (refund <= 0) continue;
+    if (input.kind === 'material') {
+      refunds.push({
+        kind: 'material',
+        materialId: input.materialId,
+        count: refund,
+      });
+    } else if (input.kind === 'ammo') {
+      refunds.push({
+        kind: 'ammo',
+        ammoId: input.ammoId,
+        count: refund,
+      });
+    }
+  }
+  return refunds;
+}
