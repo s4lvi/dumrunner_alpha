@@ -361,6 +361,46 @@ export const RECIPES: Record<string, Recipe> = {
     blueprintId: 'bp_energy',
     craftTimeMs: 70_000,
   },
+  // Melee weapons. Sword + Hammer at the Workbench, energy_blade
+  // at the Weapon Bench since it slots into the late-tier weapon
+  // bench progression alongside sniper / heavy / energy carbine.
+  sword: {
+    id: 'sword',
+    name: 'Sword',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 12 },
+      { kind: 'material', materialId: 'alloy', count: 4 },
+    ],
+    output: { kind: 'weapon', weaponId: 'sword' },
+    workstation: 'workbench',
+    blueprintId: 'bp_sword',
+    craftTimeMs: 35_000,
+  },
+  hammer: {
+    id: 'hammer',
+    name: 'Hammer',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 18 },
+      { kind: 'material', materialId: 'alloy', count: 8 },
+    ],
+    output: { kind: 'weapon', weaponId: 'hammer' },
+    workstation: 'workbench',
+    blueprintId: 'bp_hammer',
+    craftTimeMs: 45_000,
+  },
+  energy_blade: {
+    id: 'energy_blade',
+    name: 'Energy Blade',
+    inputs: [
+      { kind: 'material', materialId: 'circuit', count: 6 },
+      { kind: 'material', materialId: 'crystal', count: 2 },
+      { kind: 'material', materialId: 'alloy', count: 4 },
+    ],
+    output: { kind: 'weapon', weaponId: 'energy_blade' },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_energy_blade',
+    craftTimeMs: 60_000,
+  },
   // Ammo recipes for the new families.
   sniper_rounds: {
     id: 'sniper_rounds',
@@ -826,6 +866,33 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description:
       'High-cadence laser carbine. Lower per-hit damage but blinding projectile speed. Crafted at the Weapon Bench.',
     cost: 12,
+    tier: 'rare',
+  },
+  bp_sword: {
+    id: 'bp_sword',
+    recipeId: 'sword',
+    displayName: 'Sword',
+    description:
+      'Wide-arc melee — clears a chaser cleanly, carries through a swarmer cluster. Crafted at the Workbench.',
+    cost: 4,
+    tier: 'uncommon',
+  },
+  bp_hammer: {
+    id: 'bp_hammer',
+    recipeId: 'hammer',
+    displayName: 'Hammer',
+    description:
+      'Slow, devastating, AoE-feeling cone. Pulps brutes in two hits. Crafted at the Workbench.',
+    cost: 6,
+    tier: 'rare',
+  },
+  bp_energy_blade: {
+    id: 'bp_energy_blade',
+    recipeId: 'energy_blade',
+    displayName: 'Energy Blade',
+    description:
+      'Fast, high-damage, narrow arc. Pairs well with imbue mods — every cut chills, burns, or poisons. Crafted at the Weapon Bench.',
+    cost: 10,
     tier: 'rare',
   },
   bp_turret: {

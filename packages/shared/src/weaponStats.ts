@@ -152,6 +152,66 @@ export const WEAPON_STATS: Record<
   },
 };
 
+// Per-weapon melee stats. Mirrors the ranged WEAPON_STATS table
+// shape but with the swing-specific knobs. Server reads this when
+// the equipped weapon's family is 'melee'.
+export type MeleeWeaponStats = {
+  damage: number;
+  swingIntervalMs: number;
+  // Reach in pixels from the player centre. Walls / collision are
+  // ignored — the swing is fire-and-forget.
+  range: number;
+  // Half-arc of the cone in radians. Anything in front of the
+  // player whose direction-to-target dot-product clears
+  // cos(arcRad) is hit.
+  arcRad: number;
+  // Visual tint of the swipe trail.
+  color: number;
+};
+
+export const MELEE_STATS: Record<
+  Extract<import('./inventory').WeaponKind, 'knife' | 'sword' | 'hammer' | 'energy_blade'>,
+  MeleeWeaponStats
+> = {
+  // Knife stays a low-floor tool for the starter loadout. Quick,
+  // narrow, weak. Reads as "stab the swarmer".
+  knife: {
+    damage: 35,
+    swingIntervalMs: 350,
+    range: 60,
+    arcRad: 0.7,
+    color: 0xe2e8f0,
+  },
+  // Sword: more reach + wider arc. The "real" melee weapon — clears
+  // a chaser cleanly, carries through a swarmer cluster.
+  sword: {
+    damage: 70,
+    swingIntervalMs: 450,
+    range: 90,
+    arcRad: 0.9,
+    color: 0xfde047,
+  },
+  // Hammer: heavy, slow, big damage, AoE-feeling cone. Caves brutes
+  // in two swings; whiffs against fast enemies.
+  hammer: {
+    damage: 140,
+    swingIntervalMs: 850,
+    range: 80,
+    arcRad: 1.2,
+    color: 0xf97316,
+  },
+  // Energy blade: fast, high damage, narrow. Premium late-tier
+  // option that pairs with imbue mods (the cone applies imbues to
+  // every enemy in arc).
+  energy_blade: {
+    damage: 95,
+    swingIntervalMs: 380,
+    range: 80,
+    arcRad: 0.8,
+    color: 0x22d3ee,
+  },
+};
+
 // Effective stats after applying piece affixes + mods. Damage,
 // fireInterval, spread, and projectileSpeed scale per
 // computeWeaponEffect; the remaining fields pass through unchanged.

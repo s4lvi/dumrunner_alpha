@@ -9,8 +9,10 @@ import type { BuildingKind } from '@dumrunner/shared';
 export {
   MAX_INACCURACY_RAD,
   WEAPON_STATS,
+  MELEE_STATS,
   effectiveWeaponStats,
   type RangedWeaponStats,
+  type MeleeWeaponStats,
 } from '@dumrunner/shared';
 
 // Per-turret-kind firing profile. The base 'turret' is the pistol-tier

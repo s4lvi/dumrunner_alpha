@@ -51,6 +51,7 @@ import {
 import {
   COMBAT,
   MAX_INACCURACY_RAD,
+  MELEE_STATS,
   TURRET_VARIANTS,
   WEAPON_STATS,
 } from './combat.js';
@@ -676,7 +677,7 @@ export class Scene {
 
     const family = weaponFamily(slot.weapon.weaponId);
     if (family === 'melee') {
-      this.swingKnife(conn, nx, ny);
+      this.swingMelee(conn, nx, ny);
     } else {
       this.fireRanged(conn, nx, ny, family);
     }
@@ -824,16 +825,27 @@ export class Scene {
     }
   }
 
-  private swingKnife(conn: SceneConnection, nx: number, ny: number): void {
+  private swingMelee(conn: SceneConnection, nx: number, ny: number): void {
+    const slot = conn.inventory[conn.hotbarSelection];
+    if (!slot || slot.kind !== 'weapon') return;
+    const weaponId = slot.weapon.weaponId;
+    // Pull stats from MELEE_STATS. Falls back to knife defaults so
+    // any future melee weapon added to WEAPON_FAMILY before its
+    // stats land still does *something*.
+    const stats =
+      MELEE_STATS[weaponId as keyof typeof MELEE_STATS] ?? MELEE_STATS.knife;
     const now = Date.now();
-    if (now - conn.lastFireAt < COMBAT.KNIFE_SWING_INTERVAL_MS) return;
+    if (now - conn.lastFireAt < stats.swingIntervalMs) return;
     conn.lastFireAt = now;
 
     // Half-arc threshold via dot product. Anything in front of the player
-    // and within KNIFE_RANGE takes damage.
-    const halfArcRad = (COMBAT.KNIFE_ARC_DEG / 2) * (Math.PI / 180);
-    const cosThreshold = Math.cos(halfArcRad);
-    const reachSq = COMBAT.KNIFE_RANGE * COMBAT.KNIFE_RANGE;
+    // and within range takes damage.
+    const cosThreshold = Math.cos(stats.arcRad);
+    const reachSq = stats.range * stats.range;
+
+    // Melee swings carry the same imbues as ranged shots — chem
+    // sword poisons what it cuts, cryo blade chills targets in arc.
+    const imbues = computeWeaponImbues(slot.weapon);
 
     for (const enemy of this.enemies.values()) {
       if (!enemy.alive) continue;
@@ -845,13 +857,24 @@ export class Scene {
       if (dist < 0.001) continue;
       const dot = (dx / dist) * nx + (dy / dist) * ny;
       if (dot < cosThreshold) continue;
-      this.damageEnemy(enemy, COMBAT.KNIFE_DAMAGE, now);
+      this.damageEnemy(enemy, stats.damage, now);
+      for (const imb of imbues) {
+        this.applyEnemyEffect(enemy.id, {
+          id: `imbue_${imb.kind}`,
+          kind: imb.kind,
+          magnitude: imb.magnitude,
+          expiresAt: now + imb.durationMs,
+        });
+      }
     }
 
+    // Family is melee by construction (caller checks before
+    // dispatching here), so the cast is safe; TS just can't narrow
+    // weaponId from WeaponKind to the melee subset.
     this.broadcast({
       type: 'weapon_swung',
       characterId: conn.characterId,
-      weaponId: 'knife',
+      weaponId: weaponId as 'knife' | 'sword' | 'hammer' | 'energy_blade',
       dirX: nx,
       dirY: ny,
     });

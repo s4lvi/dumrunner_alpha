@@ -171,7 +171,10 @@ export type WeaponKind =
   | 'sniper'
   | 'heavy'
   | 'energy'
-  | 'knife';
+  | 'knife'
+  | 'sword'
+  | 'hammer'
+  | 'energy_blade';
 
 // Family groups weapons that share ammo, mod compatibility, and turret
 // variants. `melee` covers the knife (no ammo, no piece-affix slots).
@@ -193,6 +196,9 @@ export const WEAPON_FAMILY: Record<WeaponKind, WeaponFamily> = {
   heavy: 'heavy',
   energy: 'energy',
   knife: 'melee',
+  sword: 'melee',
+  hammer: 'melee',
+  energy_blade: 'melee',
 };
 
 // Tiering controls slot count + crafting station gate. T1 craftable at
@@ -1206,6 +1212,9 @@ const WEAPON_DISPLAY: Record<WeaponKind, string> = {
   heavy: 'Heavy',
   energy: 'Carbine',
   knife: 'Knife',
+  sword: 'Sword',
+  hammer: 'Hammer',
+  energy_blade: 'Energy Blade',
 };
 
 // The bottom tier ("Junk") gets no flavor prefix on dropped parts —

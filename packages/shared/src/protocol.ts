@@ -720,9 +720,11 @@ export type ServerMessage =
   | {
       // Melee weapon swing event — broadcast to all in the scene so they
       // can render the slash. Server has already applied damage.
+      // Melee swing visual cue. weaponId picks the swipe color in
+      // the renderer (different blade colors per kind).
       type: 'weapon_swung';
       characterId: string;
-      weaponId: 'knife';
+      weaponId: 'knife' | 'sword' | 'hammer' | 'energy_blade';
       dirX: number;
       dirY: number;
     }
