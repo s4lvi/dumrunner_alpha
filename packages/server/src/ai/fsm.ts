@@ -34,8 +34,31 @@ export type AiOutcome = {
   meleeDamage: { targetCharacterId: string; amount: number }[];
   // Projectile fire requests resolved this tick.
   projectileFires: ProjectileFireRequest[];
+  // AoE-cone status applications resolved this tick. Scene resolves
+  // each by walking players and checking they're inside the cone.
+  aoeConeApplications: AoeConeApplication[];
   // True if the enemy moved enough to warrant a position broadcast.
   positionDirty: boolean;
+};
+
+export type AoeConeApplication = {
+  ownerEnemyId: string;
+  originX: number;
+  originY: number;
+  // Cone-axis unit vector — points at the target at fire time.
+  axisX: number;
+  axisY: number;
+  // Geometry / effect parameters (cloned from the AttackSpec entry).
+  range: number;
+  arcRad: number;
+  effectKind:
+    | 'burn_dps'
+    | 'poison_dps'
+    | 'slow_pct';
+  effectMagnitude: number;
+  effectDurationMs: number;
+  effectLabel: string;
+  coneColor: number;
 };
 
 export type ProjectileFireRequest = {
@@ -77,6 +100,7 @@ export function tickEnemy(
   const outcome: AiOutcome = {
     meleeDamage: [],
     projectileFires: [],
+    aoeConeApplications: [],
     positionDirty: false,
   };
 
@@ -416,6 +440,26 @@ function runAttacks(
         dirX: dx / len,
         dirY: dy / len,
         spec: atk,
+      });
+    } else if (atk.kind === 'aoe_cone') {
+      if (dist > atk.range) continue;
+      if (now < (enemy.attackReadyAt[i] ?? 0)) continue;
+      enemy.attackReadyAt[i] = now + atk.cooldownMs;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.001) continue;
+      outcome.aoeConeApplications.push({
+        ownerEnemyId: enemy.id,
+        originX: enemy.x,
+        originY: enemy.y,
+        axisX: dx / len,
+        axisY: dy / len,
+        range: atk.range,
+        arcRad: atk.arcRad,
+        effectKind: atk.effectKind,
+        effectMagnitude: atk.effectMagnitude,
+        effectDurationMs: atk.effectDurationMs,
+        effectLabel: atk.effectLabel,
+        coneColor: atk.coneColor,
       });
     }
   }

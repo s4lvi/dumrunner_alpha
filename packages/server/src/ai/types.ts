@@ -44,6 +44,27 @@ export type AttackSpec =
       projectileTtlMs: number;
       projectileRadius: number;
       projectileColor: number;  // 0xRRGGBB; client uses ownerKind+kind for variation
+    }
+  | {
+      // Cone AoE — when in range, applies a status effect to every
+      // player whose angle to the enemy lies within `arcRad` and
+      // distance ≤ `range`. Used by flamethrower / chem-spitter
+      // archetypes; the effect itself (kind, magnitude, duration)
+      // is delivered via PlayerEffect, so adding new flavours
+      // (cryo, acid, …) is data-only.
+      kind: 'aoe_cone';
+      range: number;
+      cooldownMs: number;
+      arcRad: number;
+      effectKind:
+        | 'burn_dps'
+        | 'poison_dps'
+        | 'slow_pct';
+      effectMagnitude: number;
+      effectDurationMs: number;
+      effectLabel: string;
+      // Display tint for client telegraph visuals.
+      coneColor: number;
     };
 
 export type EnemyTemplate = {

@@ -141,6 +141,91 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     visual: { shape: 'square', color: 0x4b5563, size: 22 },
   },
 
+  // Flame drone: kites at medium range and breathes a forward cone of
+  // fire that lands a 4s burn DoT. Lower hp than a shooter drone but
+  // hurts a lot more if you don't break the cone or close to melee.
+  flame_drone: {
+    id: 'flame_drone',
+    faction: 'sun_bleached',
+    maxHp: 65,
+    radius: 14,
+    moveSpeed: 105,
+    senseRadius: 380,
+    movement: { kind: 'kite', minRange: 120, maxRange: 220 },
+    attacks: [
+      {
+        kind: 'aoe_cone',
+        range: 180,
+        cooldownMs: 1500,
+        arcRad: 0.7,
+        effectKind: 'burn_dps',
+        effectMagnitude: 8,
+        effectDurationMs: 4000,
+        effectLabel: 'Burning',
+        coneColor: 0xfb923c,
+      },
+    ],
+    fleeBelowHpRatio: null,
+    stunDurationOnHitMs: 200,
+    lootTable: [
+      { materialId: 'scrap',    chance: 1.0,  min: 1, max: 2 },
+      { materialId: 'wire',     chance: 0.55, min: 1, max: 2 },
+      { materialId: 'circuit',  chance: 0.30, min: 1, max: 1 },
+      { materialId: 'crystal',  chance: 0.06, min: 1, max: 1 },
+      { materialId: 'artifact', chance: 0.06, min: 1, max: 1 },
+    ],
+    visual: { shape: 'circle', color: 0xfb923c, size: 14 },
+  },
+
+  // Chem bloater: slow tank that vomits a slow + poison cone at close
+  // range. Pairs with chasers — the bloater locks you down, chasers
+  // close. Drops biotic.
+  chem_bloater: {
+    id: 'chem_bloater',
+    faction: 'catacombs',
+    maxHp: 130,
+    radius: 18,
+    moveSpeed: 75,
+    senseRadius: 320,
+    movement: { kind: 'chase' },
+    attacks: [
+      // Up-close melee swat for when the player is hugging it.
+      { kind: 'melee', range: 40, damagePerSec: 18 },
+      // Cone vomit. Two effects: poison DoT + slow.
+      {
+        kind: 'aoe_cone',
+        range: 140,
+        cooldownMs: 1800,
+        arcRad: 0.9,
+        effectKind: 'poison_dps',
+        effectMagnitude: 10,
+        effectDurationMs: 5000,
+        effectLabel: 'Poisoned',
+        coneColor: 0x84cc16,
+      },
+      {
+        kind: 'aoe_cone',
+        range: 140,
+        cooldownMs: 1800,
+        arcRad: 0.9,
+        effectKind: 'slow_pct',
+        effectMagnitude: 0.30,
+        effectDurationMs: 4000,
+        effectLabel: 'Slowed',
+        coneColor: 0x84cc16,
+      },
+    ],
+    fleeBelowHpRatio: null,
+    stunDurationOnHitMs: 200,
+    lootTable: [
+      { materialId: 'scrap',    chance: 1.0,  min: 2, max: 3 },
+      { materialId: 'biotic',   chance: 0.85, min: 1, max: 3 },
+      { materialId: 'crystal',  chance: 0.06, min: 1, max: 1 },
+      { materialId: 'artifact', chance: 0.08, min: 1, max: 1 },
+    ],
+    visual: { shape: 'square', color: 0x84cc16, size: 22 },
+  },
+
   brute_chaser: {
     id: 'brute_chaser',
     faction: 'sun_bleached',

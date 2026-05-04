@@ -1309,6 +1309,50 @@ export class Scene {
         });
       }
 
+      // AoE cones: walk every player member and stamp the effect on
+      // anyone whose position lies inside the cone (range + half-arc
+      // tolerance). Bindings.applyPlayerEffect routes through World
+      // so timer-refresh + broadcast happen consistently.
+      for (const app of outcome.aoeConeApplications) {
+        const halfArc = app.arcRad * 0.5;
+        for (const memberId of this.members) {
+          const conn = this.bindings.connection(memberId);
+          if (!conn || !conn.alive) continue;
+          const dxp = conn.x - app.originX;
+          const dyp = conn.y - app.originY;
+          const dist = Math.hypot(dxp, dyp);
+          if (dist > app.range || dist < 0.001) continue;
+          const dot = (dxp * app.axisX + dyp * app.axisY) / dist;
+          if (dot < Math.cos(halfArc)) continue;
+          this.bindings.applyPlayerEffect(conn.characterId, {
+            id: `enemy_${app.effectKind}`,
+            kind: app.effectKind,
+            magnitude: app.effectMagnitude,
+            expiresAt: Date.now() + app.effectDurationMs,
+            label: app.effectLabel,
+          });
+        }
+        // Telegraph for the client — reuse projectile_spawned with a
+        // very short ttl so a cone flash renders without inventing a
+        // new wire message. Spawn a wide, short-lived 'projectile' at
+        // the cone origin pointing along axis; clients render it like
+        // a transient burst.
+        const TELEGRAPH_TTL = 250;
+        this.spawnProjectile({
+          ownerKind: 'enemy',
+          ownerId: app.ownerEnemyId,
+          fromX: app.originX + app.axisX * 8,
+          fromY: app.originY + app.axisY * 8,
+          dirX: app.axisX,
+          dirY: app.axisY,
+          speed: app.range * 4, // projectile dies before reaching tip — visual only
+          damage: 0,
+          ttlMs: TELEGRAPH_TTL,
+          radius: 14,
+          color: app.coneColor,
+        });
+      }
+
       if (outcome.positionDirty) {
         enemy.lastBroadcastX = enemy.x;
         enemy.lastBroadcastY = enemy.y;
@@ -1850,6 +1894,45 @@ export class Scene {
       this.loot.set(lr.id, lr);
       this.broadcast({ type: 'loot_spawned', loot: toLootState(lr) });
     }
+  }
+
+  // Public wrapper around applyDamage so World can route DoT/AoE
+  // damage through the same death-detection path as bullets.
+  // Bypasses the respawn-immunity check on purpose for tick-based
+  // effects so a player who walks back into a flame puddle right
+  // after respawn still takes damage.
+  applyDamageToPlayer(
+    characterId: string,
+    amount: number,
+    now: number
+  ): void {
+    const conn = this.bindings.connection(characterId);
+    if (!conn || !conn.alive) return;
+    if (!this.members.has(characterId)) return;
+    // Inline a simplified applyDamage; the private one short-circuits
+    // on respawnImmunity, which is intentional for projectiles but
+    // wrong for DoT cleanup ticks.
+    let remaining = amount;
+    if (conn.shield > 0) {
+      const absorbed = Math.min(conn.shield, remaining);
+      conn.shield -= absorbed;
+      remaining -= absorbed;
+    }
+    if (remaining > 0) {
+      conn.hp = Math.max(0, conn.hp - remaining);
+    }
+    conn.lastDamageAt = now;
+    conn.lastShieldSent = conn.shield;
+    conn.lastShieldSentAt = now;
+    this.broadcast({
+      type: 'player_damaged',
+      characterId: conn.characterId,
+      hp: conn.hp,
+      maxHp: conn.maxHp,
+      shield: conn.shield,
+      maxShield: conn.maxShield,
+    });
+    if (conn.hp <= 0) this.killPlayer(conn, now);
   }
 
   // Apply damage to a player. Shield soaks first; overflow goes to HP.
@@ -2400,6 +2483,13 @@ export interface SceneBindings {
   // loot mode), false = bag stays with the player on respawn. Equipped
   // suit gear stays in either case.
   dropItemsOnDeath(): boolean;
+  // Apply a timed status effect to a player. Routes through World so
+  // the same id refreshes the timer instead of stacking, and the
+  // 'player_effects' broadcast carries the authoritative list.
+  applyPlayerEffect(
+    characterId: string,
+    effect: import('@dumrunner/shared').PlayerEffect
+  ): void;
 }
 
 // ---------- helpers ----------

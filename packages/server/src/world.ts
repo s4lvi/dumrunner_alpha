@@ -283,6 +283,7 @@ export class World {
       isPowered: (id: string) => this.poweredBuildings.has(id),
       onBuildingsChanged: () => this.recomputePowerState(),
       dropItemsOnDeath: () => this.worldConfig.dropItemsOnDeath,
+      applyPlayerEffect: (id, effect) => this.applyPlayerEffect(id, effect),
     };
     // Surface always exists so cold servers spawn enemies immediately.
     const surface = new Scene(
@@ -1760,6 +1761,12 @@ export class World {
       else if (e.kind === 'stamina_regen_add') effectStaminaRegen += e.magnitude;
       else if (e.kind === 'shield_flat') effectShieldFlat += e.magnitude;
       else if (e.kind === 'hp_max_flat') effectHpFlat += e.magnitude;
+      // slow_pct subtracts from move speed (magnitude is positive,
+      // direction inverted here so the kind is intuitive at the
+      // attack-author site).
+      else if (e.kind === 'slow_pct') effectSpeedMult -= e.magnitude;
+      // DoT effects don't touch derived stats; they're applied per
+      // tick in tickPlayerEffects directly.
     }
     // Round to integers so the HUD doesn't render 15-digit floats from
     // affix rolls. HP/shield/stamina maxes are always whole numbers in
@@ -2182,13 +2189,33 @@ export class World {
     });
   }
 
-  // Walk every connection and drop expired effects. Cheap; only
-  // does work when something actually expires. recomputePlayerStats
-  // is called only for connections whose effect list shrank so we
-  // don't broadcast no-op stat changes every tick.
+  // Walk every connection: apply DoT damage, drop expired effects.
+  // recomputePlayerStats runs only for connections whose effect list
+  // shrank or whose DoTs killed them, so we don't broadcast no-op
+  // stat changes every tick. Per-tick DoT applies a fraction of the
+  // dps based on tick interval — small enough that the player sees
+  // smooth bar drain.
   private tickPlayerEffects(now: number): void {
+    const dt = COMBAT.TICK_MS / 1000;
     for (const conn of this.connections.values()) {
       if (conn.activeEffects.length === 0) continue;
+      // DoT damage. Each burn / poison effect ticks per-tick damage.
+      let dotTotal = 0;
+      for (const e of conn.activeEffects) {
+        if (e.kind === 'burn_dps' || e.kind === 'poison_dps') {
+          dotTotal += e.magnitude * dt;
+        }
+      }
+      if (dotTotal > 0 && conn.alive) {
+        const scene = this.scenes.get(conn.sceneId);
+        if (scene) {
+          // Route through the scene damage path so shield-soak +
+          // death detection is consistent with bullets / melee.
+          // Bypasses respawn-immunity check by going through the
+          // public method (Scene exposes one).
+          scene.applyDamageToPlayer(conn.characterId, dotTotal, now);
+        }
+      }
       const before = conn.activeEffects.length;
       conn.activeEffects = conn.activeEffects.filter(
         (e) => e.expiresAt > now

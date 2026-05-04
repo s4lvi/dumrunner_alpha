@@ -76,7 +76,10 @@ export type PlayerEffectKind =
   | 'speed_mult'        // multiplicative move-speed bonus, magnitude = +N (0.30 = +30%)
   | 'stamina_regen_add' // flat stamina/sec added to regen
   | 'shield_flat'       // flat extra max shield while active
-  | 'hp_max_flat';      // flat extra max hp while active
+  | 'hp_max_flat'       // flat extra max hp while active
+  | 'burn_dps'          // damage per second while active (incendiary)
+  | 'poison_dps'        // damage per second while active (chem)
+  | 'slow_pct';         // % movement slow (chem). magnitude = +N (0.25 = -25% speed)
 
 export type PlayerEffect = {
   // Stable id within a connection. Same id refreshes the timer
@@ -800,4 +803,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 33;
+export const PROTOCOL_VERSION = 34;
