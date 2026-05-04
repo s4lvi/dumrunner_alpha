@@ -72,6 +72,17 @@ export type ProjectileFireRequest = {
 
 const POSITION_BROADCAST_EPSILON = 0.5; // px
 
+// Active-effect aggregate that scales the enemy's effective move
+// speed this tick. Slow_pct effects subtract from 1.0; cap at 0.
+// DoT effects don't influence movement.
+export function currentEnemySpeedMult(enemy: EnemyRuntime): number {
+  let slow = 0;
+  for (const e of enemy.activeEffects) {
+    if (e.kind === 'slow_pct') slow += e.magnitude;
+  }
+  return Math.max(0, 1 - slow);
+}
+
 // Optional environment hooks the FSM consumes. Scene supplies these:
 // collisionTest gates movement against walls; lineOfSight gates target
 // acquisition behind walls. Both default to "always allowed" if absent.
@@ -294,7 +305,7 @@ function applyMovement(
   if (dist < 0.001) return;
   const ux = dx / dist;
   const uy = dy / dist;
-  const speed = enemy.template.moveSpeed * dt;
+  const speed = enemy.template.moveSpeed * currentEnemySpeedMult(enemy) * dt;
 
   if (m.kind === 'chase') {
     moveWithCollision(enemy, enemy.x + ux * speed, enemy.y + uy * speed, env);
@@ -320,7 +331,7 @@ function applyMovement(
       // Perpendicular to (ux,uy) is (-uy, ux). Half-speed sideways.
       const sx = -uy * enemy.strafeDirection;
       const sy = ux * enemy.strafeDirection;
-      const strafeSpeed = enemy.template.moveSpeed * 0.5 * dt;
+      const strafeSpeed = enemy.template.moveSpeed * 0.5 * currentEnemySpeedMult(enemy) * dt;
       moveWithCollision(
         enemy,
         enemy.x + sx * strafeSpeed,
@@ -380,7 +391,7 @@ function applyWander(
   // wanderers can't push through walls.
   const ux = dx / dist;
   const uy = dy / dist;
-  const speed = enemy.template.moveSpeed * WANDER_SPEED_MULT * dt;
+  const speed = enemy.template.moveSpeed * WANDER_SPEED_MULT * currentEnemySpeedMult(enemy) * dt;
   moveWithCollision(enemy, enemy.x + ux * speed, enemy.y + uy * speed, env);
 }
 
@@ -394,7 +405,7 @@ function applyFlee(
   const dy = target.y - enemy.y;
   const dist = Math.hypot(dx, dy);
   if (dist < 0.001) return;
-  const speed = enemy.template.moveSpeed * dt;
+  const speed = enemy.template.moveSpeed * currentEnemySpeedMult(enemy) * dt;
   moveWithCollision(
     enemy,
     enemy.x - (dx / dist) * speed,
@@ -501,5 +512,6 @@ export function instantiateEnemy(
     lastKnownTargetExpiresAt: 0,
     strafeDirection: 1,
     strafeUntil: 0,
+    activeEffects: [],
   };
 }

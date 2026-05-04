@@ -47,4 +47,17 @@ export type EnemyRuntime = EnemyState & {
   // window so they don't visually freeze in place.
   strafeDirection: 1 | -1;
   strafeUntil: number;
+
+  // Status effects layered onto the enemy from player-side imbue
+  // mods (incendiary, chem). Enemies get the same DoT / slow shape
+  // as PlayerEffect so the math stays symmetrical. Scene ticks
+  // these per-tick.
+  activeEffects: EnemyEffect[];
+};
+
+export type EnemyEffect = {
+  id: string;
+  kind: 'burn_dps' | 'poison_dps' | 'slow_pct';
+  magnitude: number;
+  expiresAt: number;
 };

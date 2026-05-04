@@ -617,6 +617,17 @@ export type AttachmentDef =
       // null = any ranged family
       family: WeaponFamily | null;
       effect: WeaponEffect;
+      // Optional projectile imbue — when this mod is on the weapon,
+      // every hit applies the corresponding status effect to the
+      // target. Server reads this off computeWeaponImbue at fire
+      // time. Magnitude / duration are flat-baked here so adding
+      // a new imbue is data-only.
+      imbue?: {
+        kind: 'burn_dps' | 'poison_dps' | 'slow_pct';
+        magnitude: number;
+        durationMs: number;
+        label: string;
+      };
     }
   | {
       kind: 'weapon_affix';
@@ -718,6 +729,37 @@ export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
     adjective: 'Whisper',
     family: null,
     effect: { fireIntervalMult: 0.9, damageMult: 0.9 },
+  },
+  // Imbue mods — every hit applies a status effect.
+  mod_incendiary: {
+    kind: 'weapon_mod',
+    id: 'mod_incendiary',
+    displayName: 'Incendiary Core',
+    description: 'Hits ignite the target — 8 dps burn for 4s.',
+    adjective: 'Pyro',
+    family: null,
+    effect: {},
+    imbue: { kind: 'burn_dps', magnitude: 8, durationMs: 4000, label: 'Burning' },
+  },
+  mod_chem: {
+    kind: 'weapon_mod',
+    id: 'mod_chem',
+    displayName: 'Chem Injector',
+    description: 'Hits coat the target in poison — 10 dps for 5s.',
+    adjective: 'Acid',
+    family: null,
+    effect: {},
+    imbue: { kind: 'poison_dps', magnitude: 10, durationMs: 5000, label: 'Poisoned' },
+  },
+  mod_cryo: {
+    kind: 'weapon_mod',
+    id: 'mod_cryo',
+    displayName: 'Cryo Coil',
+    description: 'Hits chill the target — 35% slow for 3s.',
+    adjective: 'Frost',
+    family: null,
+    effect: {},
+    imbue: { kind: 'slow_pct', magnitude: 0.35, durationMs: 3000, label: 'Chilled' },
   },
 
   // ---- weapon affixes (slot onto a weapon piece) ----
@@ -972,6 +1014,32 @@ export function attachmentDisplayName(
   const base = def?.displayName ?? arg.defId;
   if (arg.tier === 'Mk1') return base;
   return flavoredItemName(arg.id, base);
+}
+
+// Aggregate every imbue (status-effect-on-hit) defined by mods
+// attached to this weapon. Server stamps each into the projectile
+// metadata so the on-hit handler can apply the effect to whatever
+// the projectile lands on. Multiple imbues stack (a Pyro + Frost
+// build burns AND chills) — server applies each independently.
+export function computeWeaponImbues(weapon: WeaponItem): Array<{
+  kind: 'burn_dps' | 'poison_dps' | 'slow_pct';
+  magnitude: number;
+  durationMs: number;
+  label: string;
+}> {
+  const out: Array<{
+    kind: 'burn_dps' | 'poison_dps' | 'slow_pct';
+    magnitude: number;
+    durationMs: number;
+    label: string;
+  }> = [];
+  for (const mod of weapon.mods) {
+    const def = ATTACHMENT_DEFS[mod.defId];
+    if (def && def.kind === 'weapon_mod' && def.imbue) {
+      out.push({ ...def.imbue });
+    }
+  }
+  return out;
 }
 
 // Combine a weapon's frame + piece-affix + mod effects into a single

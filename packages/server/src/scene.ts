@@ -40,6 +40,7 @@ import {
   buildingHordePriority,
   buildingMaxHp,
   computeWeaponEffect,
+  computeWeaponImbues,
   consumeAmmo,
   consumePlaceable,
   countAmmo,
@@ -162,6 +163,16 @@ type ProjectileRuntime = ProjectileState & {
   expiresAt: number;
   damage: number;
   radius: number;
+  // Optional status effects to apply to whatever this projectile
+  // lands on. Populated when the firing weapon has imbue mods (see
+  // computeWeaponImbues in shared). Each on-hit handler walks this
+  // and stamps the effect on the target.
+  imbues?: Array<{
+    kind: 'burn_dps' | 'poison_dps' | 'slow_pct';
+    magnitude: number;
+    durationMs: number;
+    label: string;
+  }>;
 };
 
 type LootRuntime = LootState & {
@@ -688,6 +699,10 @@ export class Scene {
     const damage = stats.damage * eff.damageMult;
     const projectileSpeed = stats.projectileSpeed + eff.projectileSpeedAdd;
     const spreadRad = stats.spreadRad * eff.spreadMult;
+    // Imbues from incendiary / chem / cryo mods. Each pellet
+    // carries them so a 6-pellet shotgun blast lays on the status
+    // generously.
+    const imbues = computeWeaponImbues(slot.weapon);
     const now = Date.now();
     // Reload lock-out: can't fire while a reload is in progress.
     if (now < conn.reloadingUntil) return;
@@ -740,6 +755,7 @@ export class Scene {
         ttlMs: stats.projectileTtlMs,
         radius: stats.projectileRadius,
         color: stats.color,
+        imbues: imbues.length > 0 ? imbues : undefined,
       });
     }
   }
@@ -1275,6 +1291,9 @@ export class Scene {
 
     for (const enemy of this.enemies.values()) {
       if (!enemy.alive) continue;
+      this.tickEnemyEffects(enemy, dt, now);
+      // tickEnemyEffects can drop hp to 0 — re-check before AI runs.
+      if (!enemy.alive) continue;
       const outcome = tickEnemy(
         enemy,
         dt,
@@ -1730,7 +1749,22 @@ export class Scene {
           );
           if (t !== null && t < earliestT) {
             earliestT = t;
-            hitAction = () => this.damageEnemy(enemy, p.damage, now);
+            hitAction = () => {
+              this.damageEnemy(enemy, p.damage, now);
+              // Apply each imbue to the enemy. burn_dps and
+              // poison_dps push DoT into activeEffects; slow_pct
+              // does the same and gets read by fsm's speed mult.
+              if (p.imbues) {
+                for (const imb of p.imbues) {
+                  this.applyEnemyEffect(enemy.id, {
+                    id: `imbue_${imb.kind}`,
+                    kind: imb.kind,
+                    magnitude: imb.magnitude,
+                    expiresAt: now + imb.durationMs,
+                  });
+                }
+              }
+            };
           }
         }
         // Buildings block player bullets too — doors and the player's
@@ -1894,6 +1928,37 @@ export class Scene {
       this.loot.set(lr.id, lr);
       this.broadcast({ type: 'loot_spawned', loot: toLootState(lr) });
     }
+  }
+
+  // Tick DoT damage + slow expiry on a single enemy. DoT routes
+  // through damageEnemy so kill detection + drops + broadcast all
+  // happen consistently with bullets / melee. Slow doesn't apply
+  // here — fsm reads activeEffects directly via currentEnemySpeedMult.
+  private tickEnemyEffects(enemy: EnemyRuntime, dt: number, now: number): void {
+    if (enemy.activeEffects.length === 0) return;
+    let dotTotal = 0;
+    for (const e of enemy.activeEffects) {
+      if (e.kind === 'burn_dps' || e.kind === 'poison_dps') {
+        dotTotal += e.magnitude * dt;
+      }
+    }
+    if (dotTotal > 0) {
+      this.damageEnemy(enemy, dotTotal, now);
+    }
+    enemy.activeEffects = enemy.activeEffects.filter((e) => e.expiresAt > now);
+  }
+
+  // Apply (or refresh) a timed status effect on an enemy. Same id
+  // refreshes the timer in place. Mirrors World.applyPlayerEffect.
+  applyEnemyEffect(
+    enemyId: string,
+    effect: import('./ai/runtime.js').EnemyEffect
+  ): void {
+    const enemy = this.enemies.get(enemyId);
+    if (!enemy || !enemy.alive) return;
+    const idx = enemy.activeEffects.findIndex((e) => e.id === effect.id);
+    if (idx >= 0) enemy.activeEffects[idx] = effect;
+    else enemy.activeEffects.push(effect);
   }
 
   // Public wrapper around applyDamage so World can route DoT/AoE
@@ -2424,6 +2489,7 @@ export class Scene {
     ttlMs: number;
     radius: number;
     color: number;
+    imbues?: ProjectileRuntime['imbues'];
   }): void {
     const id = `p${this.nextProjectileId++}`;
     const proj: ProjectileRuntime = {
@@ -2438,6 +2504,7 @@ export class Scene {
       expiresAt: Date.now() + args.ttlMs,
       damage: args.damage,
       radius: args.radius,
+      imbues: args.imbues,
     };
     this.projectiles.set(id, proj);
     this.broadcast({ type: 'projectile_spawned', projectile: toProjectileState(proj) });
