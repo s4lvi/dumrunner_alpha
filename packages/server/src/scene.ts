@@ -166,6 +166,12 @@ type ProjectileRuntime = ProjectileState & {
 
 type LootRuntime = LootState & {
   expiresAt: number;
+  // Player who just dropped this slot. Pickup logic skips them
+  // until `dropperImmuneUntil` elapses so the same-tick pickup
+  // loop doesn't scoop the drop right back into their bag. Other
+  // players in range can still pick it up immediately.
+  dropperCharacterId?: string;
+  dropperImmuneUntil?: number;
 };
 
 // Corpses persist for the entire cycle — no expiry timestamp needed. They're
@@ -1879,19 +1885,25 @@ export class Scene {
   // Drop an inventory slot on the ground at the given position.
   // Wraps the slot in a 'slot'-variant LootRuntime so the existing
   // pickup loop sees it; small jitter spreads multiple drops out.
+  // Tags the loot with the dropper's id + a 2s immunity window so
+  // the same-tick pickup loop doesn't immediately re-scoop it.
   spawnDroppedSlot(
     x: number,
     y: number,
-    slot: import('@dumrunner/shared').InventorySlot
+    slot: import('@dumrunner/shared').InventorySlot,
+    dropperCharacterId?: string
   ): void {
     if (slot.kind === 'empty') return;
     const id = `ld${nextLootCounter()}`;
+    const now = Date.now();
     const lr: LootRuntime = {
       id,
       content: { kind: 'slot', slot },
       x: x + (Math.random() - 0.5) * 16,
       y: y + (Math.random() - 0.5) * 16,
-      expiresAt: Date.now() + COMBAT.LOOT_TTL_MS,
+      expiresAt: now + COMBAT.LOOT_TTL_MS,
+      dropperCharacterId,
+      dropperImmuneUntil: dropperCharacterId ? now + 2000 : undefined,
     };
     this.loot.set(id, lr);
     this.broadcast({ type: 'loot_spawned', loot: toLootState(lr) });
@@ -2051,6 +2063,17 @@ export class Scene {
       for (const memberId of this.members) {
         const conn = this.bindings.connection(memberId);
         if (!conn || !conn.alive) continue;
+        // Dropper-immunity: skip the player who just dropped this
+        // until the brief window elapses. Other players in range
+        // can still scoop it up immediately, so giving by drop
+        // (drop near a teammate) still works.
+        if (
+          lr.dropperCharacterId === conn.characterId &&
+          lr.dropperImmuneUntil !== undefined &&
+          now < lr.dropperImmuneUntil
+        ) {
+          continue;
+        }
         const dx = lr.x - conn.x;
         const dy = lr.y - conn.y;
         const dsq = dx * dx + dy * dy;

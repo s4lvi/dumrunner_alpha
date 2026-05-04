@@ -859,7 +859,7 @@ export class World {
     const dropped = takeFromSlot(conn.inventory, slot, all);
     if (!dropped) return;
     const scene = this.scenes.get(conn.sceneId);
-    scene?.spawnDroppedSlot(conn.x, conn.y, dropped);
+    scene?.spawnDroppedSlot(conn.x, conn.y, dropped, conn.characterId);
 
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
