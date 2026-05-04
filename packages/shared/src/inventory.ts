@@ -60,7 +60,10 @@ export type AmmoKind =
   | 'pistol_basic'
   | 'smg_basic'
   | 'shotgun_shells'
-  | 'rifle_rounds';
+  | 'rifle_rounds'
+  | 'sniper_rounds'
+  | 'heavy_slugs'
+  | 'energy_cells';
 
 // Consumables — single-use items the player triggers from a hotbar
 // slot to apply an effect (heal, buff, etc). New entries: add to the
@@ -160,16 +163,35 @@ export const CONSUMABLES: Record<ConsumableKind, ConsumableDef> = {
     ],
   },
 };
-export type WeaponKind = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'knife';
+export type WeaponKind =
+  | 'pistol'
+  | 'smg'
+  | 'shotgun'
+  | 'rifle'
+  | 'sniper'
+  | 'heavy'
+  | 'energy'
+  | 'knife';
 
 // Family groups weapons that share ammo, mod compatibility, and turret
 // variants. `melee` covers the knife (no ammo, no piece-affix slots).
-export type WeaponFamily = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'melee';
+export type WeaponFamily =
+  | 'pistol'
+  | 'smg'
+  | 'shotgun'
+  | 'rifle'
+  | 'sniper'
+  | 'heavy'
+  | 'energy'
+  | 'melee';
 export const WEAPON_FAMILY: Record<WeaponKind, WeaponFamily> = {
   pistol: 'pistol',
   smg: 'smg',
   shotgun: 'shotgun',
   rifle: 'rifle',
+  sniper: 'sniper',
+  heavy: 'heavy',
+  energy: 'energy',
   knife: 'melee',
 };
 
@@ -248,6 +270,9 @@ const INITIAL_MAGAZINE: Record<WeaponFamily, number> = {
   smg: 30,
   shotgun: 6,
   rifle: 10,
+  sniper: 4,
+  heavy: 5,
+  energy: 20,
   melee: 0,
 };
 
@@ -1109,6 +1134,9 @@ const WEAPON_DISPLAY: Record<WeaponKind, string> = {
   smg: 'SMG',
   shotgun: 'Shotgun',
   rifle: 'Rifle',
+  sniper: 'Sniper',
+  heavy: 'Heavy',
+  energy: 'Carbine',
   knife: 'Knife',
 };
 

@@ -101,6 +101,55 @@ export const WEAPON_STATS: Record<
     magazineSize: 10,
     reloadMs: 1800,
   },
+  // Sniper: bigger numbers than rifle but worse cadence + smaller mag.
+  // Pinpoint accuracy, ridiculous projectile speed, the longest ttl
+  // so a single round reads across a whole room.
+  sniper: {
+    damage: 140,
+    fireIntervalMs: 1400,
+    projectileSpeed: 3600,
+    projectileTtlMs: 1800,
+    projectileRadius: 4,
+    pelletCount: 1,
+    spreadRad: 0,
+    color: 0xfde047,
+    ammoKind: 'sniper_rounds',
+    accuracy: 0.99,
+    magazineSize: 4,
+    reloadMs: 2400,
+  },
+  // Heavy: chunky AoE-feel slug. Slow as molasses, devastating per
+  // hit, modest range. The tank-buster.
+  heavy: {
+    damage: 220,
+    fireIntervalMs: 1600,
+    projectileSpeed: 1700,
+    projectileTtlMs: 700,
+    projectileRadius: 7,
+    pelletCount: 1,
+    spreadRad: 0.04,
+    color: 0xfb923c,
+    ammoKind: 'heavy_slugs',
+    accuracy: 0.85,
+    magazineSize: 5,
+    reloadMs: 3000,
+  },
+  // Energy: SMG-cadence laser feel. Lower per-hit damage, high
+  // projectile speed, distinct cyan tint. Sustained burst weapon.
+  energy: {
+    damage: 16,
+    fireIntervalMs: 110,
+    projectileSpeed: 3200,
+    projectileTtlMs: 800,
+    projectileRadius: 3,
+    pelletCount: 1,
+    spreadRad: 0.03,
+    color: 0x22d3ee,
+    ammoKind: 'energy_cells',
+    accuracy: 0.92,
+    magazineSize: 20,
+    reloadMs: 1900,
+  },
 };
 
 // Effective stats after applying piece affixes + mods. Damage,

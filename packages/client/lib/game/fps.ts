@@ -148,13 +148,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const keys = new Set<string>();
   let pointerLocked = false;
   let mouseDown = false;
-  let equippedWeapon:
-    | 'pistol'
-    | 'smg'
-    | 'shotgun'
-    | 'rifle'
-    | 'knife'
-    | null = null;
+  let equippedWeapon: import('@dumrunner/shared').WeaponKind | null = null;
   // Brief muzzle-flash window so the crosshair pulses on every fire frame.
   let lastFireFlashAt = 0;
   // Damage feedback: full-screen red tint on self damage, per-enemy white

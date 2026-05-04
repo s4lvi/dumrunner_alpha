@@ -144,9 +144,7 @@ export type GameHandle = {
   setBuildRadiusBonus(tiles: number): void;
   // The currently-equipped weapon (selected hotbar slot if it's a weapon),
   // or null. Pixi gates fire/swing visuals + outbound fire messages on this.
-  setEquippedWeapon(
-    weaponId: "pistol" | "smg" | "shotgun" | "rifle" | "knife" | null,
-  ): void;
+  setEquippedWeapon(weaponId: import('@dumrunner/shared').WeaponKind | null): void;
   swapScene(state: SceneState): void;
   // Snapshot of the renderer's current scene state. Used by the host to
   // hot-swap renderers (FPS ↔ top-down) without losing position / entities.
@@ -416,7 +414,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // Currently equipped weapon (or null when no weapon is selected). Driven
   // externally; gates fire/swing locally so we don't show animation for
   // clicks the server will reject.
-  let equippedWeapon: "pistol" | "smg" | "shotgun" | "rifle" | "knife" | null =
+  let equippedWeapon: import('@dumrunner/shared').WeaponKind | null =
     null;
   let pendingBuildAction: "place" | "demolish" | null = null;
 

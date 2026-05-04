@@ -319,6 +319,86 @@ export const RECIPES: Record<string, Recipe> = {
     blueprintId: 'bp_rifle',
     craftTimeMs: 60_000,
   },
+  // Sniper / Heavy / Energy — late-game ranged. Crafted at the
+  // Weapon Bench so they sit a tier above the Workbench-built
+  // Pistol/SMG/Shotgun/Rifle.
+  sniper: {
+    id: 'sniper',
+    name: 'Sniper Rifle',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 6 },
+      { kind: 'material', materialId: 'circuit', count: 4 },
+      { kind: 'material', materialId: 'crystal', count: 1 },
+    ],
+    output: { kind: 'weapon', weaponId: 'sniper' },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_sniper',
+    craftTimeMs: 75_000,
+  },
+  heavy: {
+    id: 'heavy',
+    name: 'Heavy Slug Cannon',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 25 },
+      { kind: 'material', materialId: 'alloy', count: 10 },
+      { kind: 'material', materialId: 'circuit', count: 3 },
+    ],
+    output: { kind: 'weapon', weaponId: 'heavy' },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_heavy',
+    craftTimeMs: 80_000,
+  },
+  energy: {
+    id: 'energy',
+    name: 'Energy Carbine',
+    inputs: [
+      { kind: 'material', materialId: 'circuit', count: 8 },
+      { kind: 'material', materialId: 'crystal', count: 2 },
+      { kind: 'material', materialId: 'wire', count: 6 },
+    ],
+    output: { kind: 'weapon', weaponId: 'energy' },
+    workstation: 'weapon_bench',
+    blueprintId: 'bp_energy',
+    craftTimeMs: 70_000,
+  },
+  // Ammo recipes for the new families.
+  sniper_rounds: {
+    id: 'sniper_rounds',
+    name: 'Sniper Rounds (10)',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 2 },
+      { kind: 'material', materialId: 'circuit', count: 1 },
+    ],
+    output: { kind: 'ammo', ammoId: 'sniper_rounds', count: 10 },
+    workstation: 'workbench',
+    blueprintId: null,
+    craftTimeMs: 12_000,
+  },
+  heavy_slugs: {
+    id: 'heavy_slugs',
+    name: 'Heavy Slugs (12)',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 6 },
+      { kind: 'material', materialId: 'alloy', count: 3 },
+    ],
+    output: { kind: 'ammo', ammoId: 'heavy_slugs', count: 12 },
+    workstation: 'workbench',
+    blueprintId: null,
+    craftTimeMs: 12_000,
+  },
+  energy_cells: {
+    id: 'energy_cells',
+    name: 'Energy Cells (60)',
+    inputs: [
+      { kind: 'material', materialId: 'wire', count: 4 },
+      { kind: 'material', materialId: 'circuit', count: 2 },
+      { kind: 'material', materialId: 'crystal', count: 1 },
+    ],
+    output: { kind: 'ammo', ammoId: 'energy_cells', count: 60 },
+    workstation: 'workbench',
+    blueprintId: null,
+    craftTimeMs: 12_000,
+  },
 
   // ---- Weapon Bench: mods + weapon affixes ----
   craft_mod_foregrip: {
@@ -679,6 +759,33 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description:
       'High-damage long-range slug. Slow rate of fire. Crafted at the Workbench.',
     cost: 6,
+    tier: 'rare',
+  },
+  bp_sniper: {
+    id: 'bp_sniper',
+    recipeId: 'sniper',
+    displayName: 'Sniper Rifle',
+    description:
+      'Pinpoint accuracy, devastating per-shot damage, four-round mag. Crafted at the Weapon Bench.',
+    cost: 10,
+    tier: 'rare',
+  },
+  bp_heavy: {
+    id: 'bp_heavy',
+    recipeId: 'heavy',
+    displayName: 'Heavy Slug Cannon',
+    description:
+      'Tank-buster slug. Slow projectile, slow cadence, ridiculous damage. Crafted at the Weapon Bench.',
+    cost: 10,
+    tier: 'rare',
+  },
+  bp_energy: {
+    id: 'bp_energy',
+    recipeId: 'energy',
+    displayName: 'Energy Carbine',
+    description:
+      'High-cadence laser carbine. Lower per-hit damage but blinding projectile speed. Crafted at the Weapon Bench.',
+    cost: 12,
     tier: 'rare',
   },
   bp_turret: {
