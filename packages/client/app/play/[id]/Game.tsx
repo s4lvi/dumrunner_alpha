@@ -3031,8 +3031,67 @@ function WeaponEditor({
     return out;
   };
 
+  // Live ghost-stats preview. When the player hovers a candidate
+  // attach button, we synthesise a hypothetical WeaponItem with
+  // that candidate slotted in and feed it through
+  // effectiveWeaponStats. Renderer below diffs against the current
+  // stats so the player sees +/- per stat before committing.
+  const [hovered, setHovered] = useState<
+    | { kind: 'piece'; piece: WeaponPieceKind; defId: string }
+    | { kind: 'mod'; defId: string }
+    | null
+  >(null);
+
+  const findFirstInstanceOfDef = (
+    defId: string
+  ): import('@dumrunner/shared').AttachmentInstance | null => {
+    for (const s of inventory) {
+      if (s.kind === 'attachment' && s.instance.defId === defId) {
+        return s.instance;
+      }
+    }
+    return null;
+  };
+
+  const previewWeapon = (() => {
+    if (!hovered) return null;
+    const inst = findFirstInstanceOfDef(hovered.defId);
+    if (!inst) return null;
+    const cloned: WeaponItem = {
+      ...weapon,
+      pieces: { ...weapon.pieces },
+      mods: [...weapon.mods],
+    };
+    if (hovered.kind === 'piece') {
+      cloned.pieces[hovered.piece] = inst;
+    } else {
+      // Mods cap at TIER_MOD_SLOTS — preview replaces the last slot
+      // if at cap so the player sees what the swap looks like
+      // without committing the detach yet.
+      if (cloned.mods.length >= modCap) {
+        cloned.mods = [...cloned.mods.slice(0, -1), inst];
+      } else {
+        cloned.mods.push(inst);
+      }
+    }
+    return cloned;
+  })();
+
+  const currentStats = effectiveWeaponStats(weapon);
+  const previewStats = previewWeapon
+    ? effectiveWeaponStats(previewWeapon)
+    : null;
+
   return (
     <div className="flex flex-col gap-3 text-xs">
+      {/* Stats panel — live preview when hovering a candidate. */}
+      {currentStats && (
+        <WeaponStatsPanel
+          current={currentStats}
+          preview={previewStats}
+        />
+      )}
+
       {/* Pieces */}
       <div className="flex flex-col gap-1.5">
         <div className="text-[10px] uppercase tracking-wider text-zinc-500">
@@ -3051,7 +3110,7 @@ function WeaponEditor({
                   {piece}
                 </span>
                 <span className="text-zinc-200">
-                  {attached ? attachmentDisplayName(attached.id) : '— empty —'}
+                  {attached ? attachmentDisplayName(attached) : '— empty —'}
                 </span>
               </div>
               {attached ? (
@@ -3075,6 +3134,10 @@ function WeaponEditor({
                         <button
                           key={id}
                           onClick={() => onAttachAffix(piece, id)}
+                          onMouseEnter={() =>
+                            setHovered({ kind: 'piece', piece, defId: id })
+                          }
+                          onMouseLeave={() => setHovered(null)}
                           disabled={!inRange}
                           title={cdef?.description}
                           className="px-2 py-1 rounded text-[10px] border border-violet-700 bg-violet-950/30 text-violet-200 hover:bg-violet-950 disabled:opacity-40"
@@ -3112,7 +3175,7 @@ function WeaponEditor({
               key={i}
               className="flex items-center justify-between px-2 py-1.5 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
             >
-              <span className="text-zinc-200">{attachmentDisplayName(mod.id)}</span>
+              <span className="text-zinc-200">{attachmentDisplayName(mod)}</span>
               <button
                 onClick={() => onDetachMod(i)}
                 disabled={!inRange}
@@ -3136,6 +3199,8 @@ function WeaponEditor({
                   <button
                     key={id}
                     onClick={() => onAttachMod(id)}
+                    onMouseEnter={() => setHovered({ kind: 'mod', defId: id })}
+                    onMouseLeave={() => setHovered(null)}
                     disabled={!inRange}
                     title={def?.description}
                     className="px-2 py-1 rounded text-[10px] border border-blue-700 bg-blue-950/30 text-blue-200 hover:bg-blue-950 disabled:opacity-40"
@@ -3167,6 +3232,90 @@ function WeaponEditor({
             : `Tier Up → ${WEAPON_TIER_LABEL[(weapon.tier + 1) as 1 | 2 | 3 | 4] ?? `T${weapon.tier + 1}`}`}
         </button>
       </div>
+    </div>
+  );
+}
+
+// Live ghost-stats panel for the Weapon Bench assembly UI. Renders
+// the weapon's current effective stats; if a `preview` is supplied
+// (player is hovering a candidate attach button), draws a delta
+// column showing what each stat would become. Green = improvement,
+// red = regression. Decided per-stat: lower fireIntervalMs is
+// better, higher damage is better, lower spreadRad is better, etc.
+function WeaponStatsPanel({
+  current,
+  preview,
+}: {
+  current: import('@dumrunner/shared').EffectiveWeaponStats;
+  preview: import('@dumrunner/shared').EffectiveWeaponStats | null;
+}) {
+  type StatRow = {
+    label: string;
+    cur: number;
+    prv: number;
+    fmt: (v: number) => string;
+    // +1 → higher is better, -1 → lower is better
+    direction: 1 | -1;
+  };
+  const rows: StatRow[] = [
+    {
+      label: 'Damage',
+      cur: current.damage,
+      prv: preview?.damage ?? current.damage,
+      fmt: (v) => v.toFixed(1),
+      direction: 1,
+    },
+    {
+      label: 'Shots/sec',
+      cur: current.shotsPerSecond,
+      prv: preview?.shotsPerSecond ?? current.shotsPerSecond,
+      fmt: (v) => v.toFixed(2),
+      direction: 1,
+    },
+    {
+      label: 'Spread',
+      cur: current.spreadRad,
+      prv: preview?.spreadRad ?? current.spreadRad,
+      fmt: (v) => `${(v * (180 / Math.PI)).toFixed(1)}°`,
+      direction: -1,
+    },
+    {
+      label: 'Proj speed',
+      cur: current.projectileSpeed,
+      prv: preview?.projectileSpeed ?? current.projectileSpeed,
+      fmt: (v) => Math.round(v).toString(),
+      direction: 1,
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-1 px-2 py-2 rounded bg-[color:var(--bg)]/60 border border-[color:var(--panel-border)]">
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">
+        {preview ? 'Preview ▸ change' : 'Current stats'}
+      </div>
+      {rows.map((r) => {
+        const changed = preview && Math.abs(r.cur - r.prv) > 1e-3;
+        const better = r.direction === 1 ? r.prv > r.cur : r.prv < r.cur;
+        const colorCls = !changed
+          ? 'text-zinc-300'
+          : better
+            ? 'text-emerald-300'
+            : 'text-rose-300';
+        return (
+          <div
+            key={r.label}
+            className="flex items-baseline justify-between gap-2 tabular-nums"
+          >
+            <span className="text-zinc-500 text-[10px] uppercase tracking-wider">
+              {r.label}
+            </span>
+            <span className="text-zinc-300">{r.fmt(r.cur)}</span>
+            {changed && (
+              <span className={colorCls}>→ {r.fmt(r.prv)}</span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
