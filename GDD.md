@@ -587,7 +587,7 @@ The hardest risk to get out of the way was realtime sync over websockets between
 - Game-server registry: server records in Supabase, on-demand process spin-up via Fly.io, idle shutdown + state flush, per-server character provisioning. Active-occupancy via `last_seen_at` heartbeat (30s) — capacity check counts seats live in last 60s, not historic character rows.
 - Wire protocol: Zod schemas in `@dumrunner/shared` validate every inbound message; PROTOCOL_VERSION negotiation on auth handshake; HMAC-SHA256-signed JoinTokens.
 - Deployment: client + lobby on Vercel, game server on Fly with `min_machines_running = 1` so the WS proxy doesn't drop sessions during quiet menu time. Tracked via `JOIN_TOKEN_SECRET` shared across both. 25s server-side WebSocket ping/pong heartbeat keeps Fly's edge proxy from idling connections; 60-min Supabase character heartbeat tracks active occupancy.
-- CI: GitHub Actions runs `typecheck:{shared,server,client,asset_gen}` on every push + PR.
+- CI: GitHub Actions runs `typecheck:{shared,server,client,asset_gen}` on every push + PR. Auto-deploys the game server to Fly on pushes that touch `packages/server`, `packages/shared`, `packages/asset_gen`, the workspace manifests, or `fly.toml` — gated on the same typechecks. Manual `workflow_dispatch` available for re-deploys without a fresh commit.
 
 **Core gameplay**
 - Server-authoritative movement with client prediction + soft reconciliation. Stamina + sprint, shield system, per-template enemy stuns. Snap-on-jump + always-lerp client smoothing fixes invisible-attacker / rubber-band desync class.
@@ -609,6 +609,8 @@ The hardest risk to get out of the way was realtime sync over websockets between
 - 4 base weapons (pistol/SMG/shotgun/rifle) craftable at Workbench, blueprint-gated. Player starts with `bp_pistol`. Tier-up at Weapon Bench (T1→T4) preserves attached mods/affixes.
 - Workstation buildings (workbench, forge, electronics_bench, **weapon_bench**) + Artifact Uplink + 4 turret variants (pistol-tier baseline + per-family with weapon-as-component recipes).
 - Recipe schema with workstation + blueprintId + 5 input/output kinds. Per-station crafting modals (2-column UI, blueprint list left, requirements detail right). Async crafting with parallel slots + 8-slot output buffer + Take All. Inventory's "Field Craft" tab for hand-craftable basics.
+- **Craft queue** — up to 5 jobs per station (active + queued). Materials deduct at enqueue; queued rows render greyed; oldest queued promotes when an active completes. Power-aware: jobs sit in queue while the Link is over-capacity, slip in as headroom returns.
+- **Storage chests** — 16-slot bidirectional buckets, hand-craftable for 15 scrap + 4 alloy. Click-to-transfer modal (your inventory ↔ chest). Contents persist across cycles + game-server restarts via the world snapshot. Activity-bound rooms hide them in the public lobby just like the rest of the row.
 - **Recipe IO dispatch helpers** in shared (`hasRecipeInput`, `consumeRecipeInput`, `recipeOutputToSlot`, `addRecipeOutputToInventory`) — single-place dispatch over material/ammo/weapon/attachment/consumable variants.
 - **`BUILDING_REGISTRY`** in shared: single source of truth for HP, horde priority, parallel slots, isStation, isWorkstation, label.
 - Blueprint catalog + artifact trade store (vendor-only Uplink with Blueprints + Keys tabs). Per-cycle vs persistent blueprint sets (persistent slot reserved for legendary tier).
@@ -629,17 +631,67 @@ The hardest risk to get out of the way was realtime sync over websockets between
 **Communication**
 - Top-left in-game chat panel. Server-wide channel. System messages on player join / leave / death.
 
+**Server lifecycle**
+- **Owner-only pause/resume.** In-game two-click PauseServerControl (no native `confirm()` so it works inside Discord's Activity sandbox). Pausing flushes state, broadcasts `server_paused`, closes every WS with code 4090, marks `servers.is_paused = true`, evicts the World from the in-process registry so the next join hydrates fresh. Game-server tick polls `is_paused` every 5s so a lobby-side pause without the owner connected still kicks everyone.
+- Pause-driven WS close redirects clients to `/servers?notice=server_paused` with an amber banner — no generic disconnect error.
+- Lobby browser shows `[paused]` badge on owner-owned rows; Join button labels itself "Resume" when paused; the join route auto-flips `is_paused = false` for owners. Non-owners see a disabled "Paused" button.
+- Server-creation form defaults the name to `<display_name>'s server` (both lobby `/servers/new` and Discord Activity setup form).
+
 **Discord integration**
 - "Continue with Discord" OAuth button on `/login` and `/register` (web). Server-side code exchange + synthetic-email upsert into `auth.users` and `public.accounts`, then standard Supabase session — so `/api/servers/[id]/join` and the rest of the auth-gated flow work unchanged for Discord identities.
-- Discord Activity entry point at `/discord`. Boots `@discord/embedded-app-sdk` (lazy import), authorises with `identify` scope, exchanges through `/api/auth/discord/exchange`, calls `sdk.commands.authenticate`, and binds the call's `instance_id` → a server row via `/api/discord/instance`. First caller in the call provisions the room; subsequent callers rejoin. Activity-bound rooms are hidden from the public lobby.
+- Discord Activity entry point at `/discord`. Boots `@discord/embedded-app-sdk` (lazy import), authorises with `identify` scope, exchanges through `/api/auth/discord/exchange`, calls `sdk.commands.authenticate`, and binds the call's `instance_id` → a server row via `/api/discord/instance`. First caller in the call provisions the room (full server-config form: name, max slots, world seed, day length, days/perihelion, drop-on-death) + display name; subsequent callers see a read-only room summary and just confirm display name. Activity-bound rooms are hidden from the public lobby.
+- **Iframe survival kit:** Supabase session cookies forced to `SameSite=None; Secure; Partitioned` (CHIPS) so they survive Discord's third-party iframe context; `/` server-redirects to `/discord` when `frame_id` is present so URL Mappings can stay at `prefix=/`; game-server WebSocket routed through a second URL Mapping (`/game-ws` → fly host) so the cross-origin `wss://` upgrade isn't blocked by the Activity CSP.
+- `/terms` + `/privacy` pages cover Discord app-verification requirements; both linked from the landing page footer + below each auth form.
 
 **Asset generation pipeline (separate package)**
 - `@dumrunner/asset_gen`: HTTP service that generates sprite PNGs on demand via OpenAI's image API. Stable cache-key dedup. Live game posts `/v1/assets/generate` for entities it doesn't have yet; client fetches `/v1/assets/index` at boot to build a kind→texture map. Single-call animation sheet (one image-edit call → wide canvas → trim+slice into N frames) replaces the legacy per-frame N-call pipeline.
 
 ### Active / Next Up
 
-- **Hazard system** (radiation, toxic, cold, heat) — biome-specific environmental damage ticks gated by life-support resists.
-- **Discord Developer Portal config + first end-to-end test.** Code is shipped (web OAuth + Activity SDK, instance-bound rooms); waiting on Portal setup + a real Discord call to validate the flow. See `docs/discord-integration.md` for the manual steps.
+The post-alpha roadmap lives in `docs/sprints.md` with effort
+estimates, dependencies, and concrete plans-of-attack for each
+item. Headlines:
+
+**Sprint A — quick wins.** Spawn-in-walls bug; death recovery when
+the base is destroyed mid-perihelion; drop-rate retune so every
+recipe input is reachable in real playtime.
+
+**Sprint B — drop loop + status pipe + minimap.** Drop / give items
+between players; a generic status-effect pipe powering stims,
+overcharge kits, multiple medkit tiers (load-bearing for Sprint D's
+environmental ammo); a corner-mounted minimap for both top-down
+and FPS views.
+
+**Sprint C — procedural attachments.** Replace the static
+`ATTACHMENT_DEFS` registry with a class registry + per-instance
+rolled stats. Every dropped/crafted attachment becomes unique.
+Single biggest commit; unblocks meaningful versions of salvage,
+weapon assembly UI, and infinite mod variety.
+
+**Sprint D — content built on procedural attachments.**
+- Salvage system (return ~20% of cost; suit affix `salvage_yield_pct`
+  scales the rate).
+- Remaining ranged weapons (sniper, heavy, energy) + melee
+  progression as a real combat verb.
+- Environmental ammo (`incendiary`, `chem`, `emp`) + AoE-status
+  enemies (flamethrower drone, chem bloater).
+- Weapon assembly UI: drag-drop pieces at the Weapon Bench with a
+  live ghost-stats preview.
+
+**Sprint E — UX overhauls.** Blueprint tree progression with
+workstation-tier upgrades and a Path-of-Exile-style passive UI.
+Mobile controls (virtual stick + fire + hotbar). Dungeon overhaul
+via Wave Function Collapse with biome palettes (mechanical /
+organic / cave / open).
+
+**Hazard system** still on deck (radiation, toxic, cold, heat) —
+biome-specific environmental damage ticks gated by life-support
+resists. Lands naturally with Sprint E's biome palettes.
+
+**Discord Developer Portal config + first end-to-end test.** Code
+is shipped (web OAuth + Activity SDK, instance-bound rooms);
+waiting on Portal setup + a real Discord call to validate the
+flow. See `docs/discord-integration.md` for the manual steps.
 
 ### Deferred Past Alpha
 
