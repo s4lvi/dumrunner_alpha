@@ -1317,8 +1317,9 @@ export class World {
     if (!allowedPieces.includes(pieceKind)) return;
     if (slot.weapon.pieces[pieceKind]) return; // already filled
     if (def.family && def.family !== weaponFamilyOf(slot.weapon.weaponId)) return;
-    if (!consumeAttachment(conn.inventory, attachmentDefId, 1)) return;
-    slot.weapon.pieces[pieceKind] = { id: attachmentDefId, value: def.value };
+    const taken = consumeAttachment(conn.inventory, attachmentDefId);
+    if (!taken) return;
+    slot.weapon.pieces[pieceKind] = taken;
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
@@ -1338,7 +1339,7 @@ export class World {
     if (!slot || slot.kind !== 'weapon') return;
     const existing = slot.weapon.pieces[pieceKind];
     if (!existing) return;
-    if (!addAttachment(conn.inventory, existing.id, 1)) return;
+    if (!addAttachment(conn.inventory, existing)) return;
     slot.weapon.pieces[pieceKind] = null;
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
@@ -1362,8 +1363,9 @@ export class World {
     const cap = TIER_MOD_SLOTS[slot.weapon.tier];
     if (slot.weapon.mods.length >= cap) return;
     if (def.family && def.family !== weaponFamilyOf(slot.weapon.weaponId)) return;
-    if (!consumeAttachment(conn.inventory, attachmentDefId, 1)) return;
-    slot.weapon.mods.push({ id: attachmentDefId });
+    const taken = consumeAttachment(conn.inventory, attachmentDefId);
+    if (!taken) return;
+    slot.weapon.mods.push(taken);
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
@@ -1383,7 +1385,7 @@ export class World {
     if (!slot || slot.kind !== 'weapon') return;
     const mod = slot.weapon.mods[modIndex];
     if (!mod) return;
-    if (!addAttachment(conn.inventory, mod.id, 1)) return;
+    if (!addAttachment(conn.inventory, mod)) return;
     slot.weapon.mods.splice(modIndex, 1);
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
@@ -1419,9 +1421,10 @@ export class World {
     const def = ATTACHMENT_DEFS[attachmentDefId];
     if (!def || def.kind !== 'suit_affix') return;
     if (def.slotKind !== suitSlot) return;
-    if (!consumeAttachment(conn.inventory, attachmentDefId, 1)) return;
+    const taken = consumeAttachment(conn.inventory, attachmentDefId);
+    if (!taken) return;
     if (!part.appliedAttachments) part.appliedAttachments = [];
-    part.appliedAttachments.push(attachmentDefId);
+    part.appliedAttachments.push(taken);
     conn.inventoryDirty = true;
     this.recomputePlayerStats(conn);
     this.sendDirect(conn.ws, {
@@ -1451,9 +1454,9 @@ export class World {
     }
     const part = conn.equipment[suitSlot];
     if (!part || !part.appliedAttachments) return;
-    const id = part.appliedAttachments[attachmentIndex];
-    if (!id) return;
-    if (!addAttachment(conn.inventory, id, 1)) return;
+    const inst = part.appliedAttachments[attachmentIndex];
+    if (!inst) return;
+    if (!addAttachment(conn.inventory, inst)) return;
     part.appliedAttachments.splice(attachmentIndex, 1);
     conn.inventoryDirty = true;
     this.recomputePlayerStats(conn);

@@ -1545,9 +1545,9 @@ export class Scene {
       return addWeapon(inv, s.weapon);
     }
     if (s.kind === 'attachment') {
-      // addAttachment stacks if the same defId already exists, else takes
-      // a free slot. Returns false only when the bag is completely full.
-      return addAttachment(inv, s.defId, s.count);
+      // Unique-instance attachments — pass the instance through so
+      // its rolled stats survive the round-trip.
+      return addAttachment(inv, s.instance);
     }
     if (s.kind === 'consumable') {
       return addConsumable(inv, s.consumableId, s.count);

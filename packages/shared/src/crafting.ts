@@ -28,6 +28,7 @@ import {
   countMaterial,
   countWeapons,
   makeWeapon,
+  rollAttachmentInstance,
   type AmmoKind,
   type ConsumableKind,
   type Inventory,
@@ -584,7 +585,15 @@ export function recipeOutputToSlot(out: RecipeOutput): InventorySlot {
     case 'weapon':
       return { kind: 'weapon', weapon: makeWeapon(out.weaponId) };
     case 'attachment':
-      return { kind: 'attachment', defId: out.defId, count: out.count };
+      // Roll a fresh AttachmentInstance at craft time so each craft
+      // produces a unique attachment with rolled stats. count > 1
+      // is interpreted by the caller as "loop and roll N times" via
+      // addInventorySlotToInventory; the slot itself only carries
+      // a single instance.
+      return {
+        kind: 'attachment',
+        instance: rollAttachmentInstance(out.defId, 'Mk1'),
+      };
     case 'consumable':
       return { kind: 'consumable', consumableId: out.consumableId, count: out.count };
   }
@@ -606,7 +615,9 @@ export function addRecipeOutputToInventory(
     case 'weapon':
       return addWeapon(inv, makeWeapon(out.weaponId));
     case 'attachment':
-      return addAttachment(inv, out.defId, out.count);
+      // Each craft rolls its own instance so a recipe with
+      // count > 1 gives N unique attachments, not N copies.
+      return addAttachment(inv, out.defId, 'Mk1', out.count);
     case 'consumable':
       return addConsumable(inv, out.consumableId, out.count);
   }

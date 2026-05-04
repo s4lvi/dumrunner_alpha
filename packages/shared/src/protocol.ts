@@ -57,9 +57,13 @@ export type CarriedPart = {
   // affix rolling shipped don't fail to deserialize; treated as [] when
   // missing.
   affixes?: Affix[];
-  // Crafted suit-affix attachment ids glued onto this part. Slots
-  // gained at the workbench are baked here. Stacks with rolled affixes.
-  appliedAttachments?: string[];
+  // Crafted suit-affix attachment instances glued onto this part.
+  // Each entry is a unique rolled instance, not a class id, so
+  // detaching returns the same rolled stats to inventory. Slots
+  // gained at the workbench are baked here. Stacks with rolled
+  // affixes. Older saves that stored plain string defIds get
+  // migrated on character hydrate (see worldsnapshot migration).
+  appliedAttachments?: import('./inventory').AttachmentInstanceFwd[];
 };
 
 // Active timed buff/debuff on a player. Server tracks the
@@ -785,4 +789,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 31;
+export const PROTOCOL_VERSION = 32;

@@ -1719,7 +1719,7 @@ function Minimap({
   useEffect(() => {
     let raf = 0;
     let last = 0;
-    const FRAME_MS = 100; // ~10 Hz
+    const FRAME_MS = 120; // ~10 Hz
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
       if (now - last < FRAME_MS) return;
@@ -1736,7 +1736,7 @@ function Minimap({
     return () => cancelAnimationFrame(raf);
   }, [gameRef]);
   return (
-    <div className="absolute bottom-24 right-3 pointer-events-none select-none z-30">
+    <div className="absolute bottom-2 right-32 pointer-events-none select-none z-30">
       <canvas
         ref={canvasRef}
         width={140}
@@ -2749,10 +2749,11 @@ function SuitAffixPanel({
   onAttach: (suitSlot: SuitSlotKind, defId: string) => void;
   onDetach: (suitSlot: SuitSlotKind, idx: number) => void;
 }) {
+  // Each attachment instance counts as 1 of its class.
   const owned = new Map<string, number>();
   for (const s of inventory) {
     if (s.kind === 'attachment') {
-      owned.set(s.defId, (owned.get(s.defId) ?? 0) + s.count);
+      owned.set(s.instance.defId, (owned.get(s.instance.defId) ?? 0) + 1);
     }
   }
   const ownedForSlot = (slot: SuitSlotKind): string[] => {
@@ -2799,14 +2800,14 @@ function SuitAffixPanel({
             <div className="text-[10px] uppercase tracking-wider text-zinc-500">
               {SLOT_LABELS[slot] ?? slot}
             </div>
-            {applied.map((id, i) => {
+            {applied.map((inst, i) => {
               return (
                 <div
-                  key={`${id}-${i}`}
+                  key={`${inst.id}-${i}`}
                   className="flex items-center justify-between px-2 py-1 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
                 >
                   <span className="text-emerald-200">
-                    {attachmentDisplayName(id)}
+                    {attachmentDisplayName(inst)}
                   </span>
                   <button
                     onClick={() => onDetach(slot, i)}
@@ -2975,12 +2976,17 @@ function WeaponEditor({
   const pieces = TIER_PIECE_SLOTS[weapon.tier];
   const modCap = TIER_MOD_SLOTS[weapon.tier];
 
-  // Build the inventory's stack of attachment defs by id for the
-  // attach-buttons (we need to know which the player has on hand).
+  // Count attachments by class for the attach-buttons. Each
+  // instance is unique post-Sprint C, so the modal still tracks
+  // "how many do I have of this class" but attaches the first
+  // matching instance server-side (consumeAttachment by defId).
   const ownedAttachments = new Map<string, number>();
   for (const s of inventory) {
     if (s.kind === 'attachment') {
-      ownedAttachments.set(s.defId, (ownedAttachments.get(s.defId) ?? 0) + s.count);
+      ownedAttachments.set(
+        s.instance.defId,
+        (ownedAttachments.get(s.instance.defId) ?? 0) + 1
+      );
     }
   }
   const ownedAffixForPiece = (piece: WeaponPieceKind): string[] => {
@@ -3227,9 +3233,7 @@ function StorageChestModal({
         (src.kind === 'placeable' &&
           d.kind === 'placeable' &&
           src.buildingKind === d.buildingKind) ||
-        (src.kind === 'attachment' &&
-          d.kind === 'attachment' &&
-          src.defId === d.defId) ||
+        // Attachments are unique-instance — they never stack.
         (src.kind === 'consumable' &&
           d.kind === 'consumable' &&
           src.consumableId === d.consumableId)
@@ -3346,7 +3350,7 @@ function outputSlotLabel(slot: InventorySlot): string {
   }
   if (slot.kind === 'weapon') return weaponDisplayName(slot.weapon);
   if (slot.kind === 'attachment') {
-    return `${slot.count}× ${attachmentDisplayName(slot.defId)}`;
+    return attachmentDisplayName(slot.instance);
   }
   if (slot.kind === 'consumable') {
     const def = CONSUMABLES[slot.consumableId];
@@ -3968,7 +3972,7 @@ function weaponTooltip(weapon: WeaponItem): string {
   const piecesAttached: string[] = [];
   for (const [piece, attachment] of Object.entries(weapon.pieces)) {
     if (!attachment) continue;
-    piecesAttached.push(`${piece}: ${attachmentDisplayName(attachment.id)}`);
+    piecesAttached.push(`${piece}: ${attachmentDisplayName(attachment)}`);
   }
   if (piecesAttached.length > 0) {
     lines.push('— Affixes —');
@@ -3976,9 +3980,38 @@ function weaponTooltip(weapon: WeaponItem): string {
   }
   if (weapon.mods.length > 0) {
     lines.push('— Mods —');
-    for (const m of weapon.mods) lines.push(attachmentDisplayName(m.id));
+    for (const m of weapon.mods) lines.push(attachmentDisplayName(m));
   }
   return lines.join('\n');
+}
+
+// Format an attachment instance's rolled deltas as a short multi-
+// line readout for tooltips. Skips zero-rolls so a freshly-migrated
+// (legacy / no-rolls) instance reads as bare base stats.
+function formatAttachmentRolls(
+  inst: import('@dumrunner/shared').AttachmentInstance
+): string {
+  const lines: string[] = [];
+  const r = inst.rolls as Record<string, number>;
+  const fmtPct = (x: number) =>
+    `${x >= 0 ? '+' : ''}${(x * 100).toFixed(0)}%`;
+  const fmtFlat = (x: number) =>
+    `${x >= 0 ? '+' : ''}${Math.round(x)}`;
+  if (r.damageMultBonus) lines.push(`damage ${fmtPct(r.damageMultBonus)}`);
+  if (r.fireIntervalMultBonus)
+    lines.push(`fire rate ${fmtPct(-r.fireIntervalMultBonus)}`);
+  if (r.spreadMultBonus) lines.push(`spread ${fmtPct(r.spreadMultBonus)}`);
+  if (r.projectileSpeedAddBonus)
+    lines.push(`speed ${fmtFlat(r.projectileSpeedAddBonus)} px/s`);
+  if (r.hpBonusAdd) lines.push(`max HP ${fmtFlat(r.hpBonusAdd)}`);
+  if (r.shieldBonusAdd) lines.push(`max shield ${fmtFlat(r.shieldBonusAdd)}`);
+  if (r.staminaMaxBonusAdd)
+    lines.push(`max stamina ${fmtFlat(r.staminaMaxBonusAdd)}`);
+  if (r.staminaRegenBonusAdd)
+    lines.push(`stamina regen ${fmtFlat(r.staminaRegenBonusAdd)}/s`);
+  if (r.moveSpeedMultBonus)
+    lines.push(`move speed ${fmtPct(r.moveSpeedMultBonus)}`);
+  return lines.length === 0 ? '' : `Roll: ${lines.join(', ')}`;
 }
 
 function slotTooltip(slot: InventorySlot): string | undefined {
@@ -4001,8 +4034,10 @@ function slotTooltip(slot: InventorySlot): string | undefined {
     }`;
   }
   if (slot.kind === 'attachment') {
-    const def = ATTACHMENT_DEFS[slot.defId];
-    return `${attachmentDisplayName(slot.defId)} ×${slot.count}\n${def?.description ?? ''}`;
+    const def = ATTACHMENT_DEFS[slot.instance.defId];
+    const name = attachmentDisplayName(slot.instance);
+    const rolls = formatAttachmentRolls(slot.instance);
+    return `${name}\n${def?.description ?? ''}${rolls ? `\n${rolls}` : ''}`;
   }
   if (slot.kind === 'part') {
     const part = slot.part;
@@ -4145,7 +4180,6 @@ function SlotContextMenu({
     slot.kind === 'material' ||
     slot.kind === 'ammo' ||
     slot.kind === 'consumable' ||
-    slot.kind === 'attachment' ||
     slot.kind === 'placeable';
   const count = stackable ? slot.count : 1;
   const isConsumable = slot.kind === 'consumable';
@@ -4275,13 +4309,13 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
     );
   }
   if (slot.kind === 'attachment') {
-    const def = ATTACHMENT_DEFS[slot.defId];
+    const def = ATTACHMENT_DEFS[slot.instance.defId];
     const tint =
       def?.kind === 'weapon_mod'
         ? 0x60a5fa
         : def?.kind === 'weapon_affix'
-        ? 0xa78bfa
-        : 0x34d399;
+          ? 0xa78bfa
+          : 0x34d399;
     return (
       <div className="flex flex-col items-center leading-tight gap-0.5">
         <div
@@ -4291,7 +4325,9 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
             borderColor: `#${tint.toString(16).padStart(6, '0')}`,
           }}
         />
-        <span className="text-zinc-300 text-[9px]">×{slot.count}</span>
+        <span className="text-zinc-300 text-[9px] truncate max-w-[60px]">
+          {def?.displayName.split(' ')[0] ?? '?'}
+        </span>
       </div>
     );
   }

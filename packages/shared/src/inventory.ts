@@ -199,22 +199,29 @@ export const TIER_MOD_SLOTS: Record<WeaponTier, number> = {
   4: 3,
 };
 
-// Weapon affix instance — same shape as suit affix (id + rolled value).
-// The affix definition registry (kept separate from suit affixes since
-// the apply() target is different) lives in `weapon-affix.ts` once the
-// content lands in commit 5; the type is open enough that both registries
-// can use it.
-export type WeaponAffix = {
-  id: string;
-  value: number;
-};
-
-// Per-weapon piece-affix map. Only entries for pieces unlocked by the
+// Per-weapon piece-affix map. Each piece holds a full
+// AttachmentInstance once Sprint C lands, not just an id — every
+// rolled piece is unique. Only entries for pieces unlocked by the
 // weapon's current tier should be populated; the rest stay omitted.
-export type WeaponPieces = Partial<Record<WeaponPieceKind, WeaponAffix | null>>;
+// AttachmentInstance is defined later in the file; we forward-declare
+// the relevant shape here to keep the type ordering manageable.
+export type WeaponPieces = Partial<
+  Record<WeaponPieceKind, AttachmentInstanceFwd | null>
+>;
 
-export type WeaponMod = {
+export type WeaponMod = AttachmentInstanceFwd;
+
+// Forward-declared mirror of AttachmentInstance so the type can
+// reference it before its fully expanded definition below. Exported
+// so protocol.ts (CarriedPart.appliedAttachments) can refer to it
+// without importing the larger AttachmentInstance type and creating
+// a cycle.
+export type AttachmentInstanceFwd = {
   id: string;
+  defId: string;
+  tier: PartTier;
+  rolls: Record<string, number>;
+  legacyValue?: number;
 };
 
 // A weapon instance carries the base id + its rolled affixes/mods,
@@ -264,7 +271,7 @@ export type InventorySlot =
   | { kind: 'material'; materialId: MaterialKind; count: number }
   | { kind: 'ammo'; ammoId: AmmoKind; count: number }
   | { kind: 'weapon'; weapon: WeaponItem }
-  | { kind: 'attachment'; defId: string; count: number }
+  | { kind: 'attachment'; instance: AttachmentInstanceFwd }
   | { kind: 'consumable'; consumableId: ConsumableKind; count: number }
   | { kind: 'placeable'; buildingKind: BuildingKind; count: number };
 
@@ -413,17 +420,19 @@ export function computeSuitStats(equipment: Equipment): SuitStats {
       const def = AFFIX_DEFS[affix.id];
       if (def) def.apply(stats, affix.value);
     }
-    // Crafted suit-affix attachments — slot independent, reads the
-    // ATTACHMENT_DEFS registry and folds the effect onto the same
-    // SuitStats accumulator.
-    for (const attachId of part.appliedAttachments ?? []) {
-      const def = ATTACHMENT_DEFS[attachId];
+    // Crafted suit-affix attachments — slot independent. Each
+    // appliedAttachment is now a unique rolled instance, so we
+    // ask attachmentInstanceSuitEffect for the resolved stats and
+    // fold them onto the SuitStats accumulator.
+    for (const inst of part.appliedAttachments ?? []) {
+      const def = ATTACHMENT_DEFS[inst.defId];
       if (!def || def.kind !== 'suit_affix') continue;
-      stats.hpBonus += def.effect.hpBonus ?? 0;
-      stats.shieldBonus += def.effect.shieldBonus ?? 0;
-      stats.staminaMaxBonus += def.effect.staminaMaxBonus ?? 0;
-      stats.staminaRegenBonus += def.effect.staminaRegenBonus ?? 0;
-      stats.moveSpeedMult += def.effect.moveSpeedMult ?? 0;
+      const eff = attachmentInstanceSuitEffect(inst);
+      stats.hpBonus += eff.hpBonus;
+      stats.shieldBonus += eff.shieldBonus;
+      stats.staminaMaxBonus += eff.staminaMaxBonus;
+      stats.staminaRegenBonus += eff.staminaRegenBonus;
+      stats.moveSpeedMult += eff.moveSpeedMult;
     }
   }
   return stats;
@@ -738,14 +747,206 @@ export function listAttachments(): AttachmentDef[] {
   return Object.values(ATTACHMENT_DEFS);
 }
 
-// Display name for an attachment def. Bare noun phrase (no flavor
-// wrapper) — these are crafted, fungible components, not unique
-// drops. Ground-loot CarriedParts (which are unique-rolled) get the
-// flavor treatment via partDisplayName instead.
-export function attachmentDisplayName(defId: string): string {
-  const def = ATTACHMENT_DEFS[defId];
-  if (!def) return defId;
-  return def.displayName;
+// ---------- procedural roll system ----------
+// Static ATTACHMENT_DEFS above act as the *class* catalog. An
+// AttachmentInstance is one realised drop / craft within a class:
+// same family + same effect *kinds*, but with rolled magnitudes
+// inside per-class ranges, scaled by tier. Two "Compensator" mods
+// in your bag are no longer interchangeable — one might be -45%
+// spread + 5% damage, another -52% spread + nothing extra.
+//
+// Implementation strategy: each class declares `statRanges`
+// (parallel to `effect`) describing what *can* roll on instances
+// of that class. The class's static `effect` is the baseline
+// (zero-roll instance) so legacy migrations from saved data convert
+// cleanly. A fresh roll multiplies the baseline by a tier-scaled
+// factor sampled from each range.
+
+// What can roll on instances of a class. Each entry maps a stat
+// key into a [min, max] range. min < 0 means the stat can roll
+// negative (debuff), > 0 means buff. Ranges below are written as
+// *multipliers/adders on top of the base effect* so an instance's
+// effect math is `base + roll`.
+export type AttachmentStatRanges = {
+  damageMultBonus?: [number, number];        // adds to damageMult (1 + base + roll)
+  fireIntervalMultBonus?: [number, number];  // multiplied INTO fireIntervalMult
+  spreadMultBonus?: [number, number];        // multiplied INTO spreadMult
+  projectileSpeedAddBonus?: [number, number];// added to projectileSpeedAdd
+  hpBonusAdd?: [number, number];             // added to hpBonus
+  shieldBonusAdd?: [number, number];         // added to shieldBonus
+  staminaMaxBonusAdd?: [number, number];
+  staminaRegenBonusAdd?: [number, number];
+  moveSpeedMultBonus?: [number, number];
+};
+
+// Range table per class. Keys mirror ATTACHMENT_DEFS keys; classes
+// missing here roll 0 deltas (legacy / un-rolled). This way every
+// existing def has a roll path without us hand-tuning all 12
+// catalog entries up front — defaults are fine, only call out the
+// ones whose roll variance defines the class fantasy.
+export const ATTACHMENT_STAT_RANGES: Record<string, AttachmentStatRanges> = {
+  // Spread mods — main range knob is the spread cut.
+  mod_foregrip:    { spreadMultBonus: [-0.10, +0.05] },
+  mod_compensator: { spreadMultBonus: [-0.10, +0.05] },
+  mod_dampener:    { spreadMultBonus: [-0.08, +0.05], projectileSpeedAddBonus: [-50, +200] },
+  // Damage mods.
+  mod_stabilizer:    { damageMultBonus: [-0.03, +0.10] },
+  mod_armor_piercer: { damageMultBonus: [-0.03, +0.12] },
+  // Fire-rate mods.
+  mod_overclock:   { fireIntervalMultBonus: [-0.08, +0.05] },
+  mod_lightweight: { fireIntervalMultBonus: [-0.06, +0.05], damageMultBonus: [-0.05, +0.05] },
+  // Velocity.
+  mod_high_velocity: { projectileSpeedAddBonus: [-100, +300] },
+  // Weapon affixes.
+  aff_damage_15:   { damageMultBonus: [-0.05, +0.10] },
+  aff_firerate_25: { fireIntervalMultBonus: [-0.10, +0.05] },
+  // Suit affixes.
+  aff_shield_25: { shieldBonusAdd: [-5, +20] },
+  aff_speed_5:   { moveSpeedMultBonus: [-0.02, +0.05] },
+};
+
+// One realised attachment instance. Lives directly inside inventory
+// slots, weapon piece slots, and suit-part appliedAttachments
+// arrays — never identified by defId alone. `id` is unique per
+// instance (used for naming flavor + future per-instance metadata).
+//
+// Same shape as AttachmentInstanceFwd above; this is the canonical
+// public alias most code uses. Two names exist purely so
+// CarriedPart in protocol.ts can refer to the type without an
+// import cycle.
+export type AttachmentInstance = AttachmentInstanceFwd;
+
+const TIER_ROLL_SCALE: Record<PartTier, number> = {
+  Mk1: 0.5,
+  Mk2: 0.7,
+  Mk3: 0.85,
+  Mk4: 1.0,
+  Alien: 1.2,
+};
+
+let _nextAttachmentId = 1;
+function nextAttachmentInstanceId(): string {
+  return `att${_nextAttachmentId++}`;
+}
+
+// Roll a fresh AttachmentInstance for a class. tier scales the roll
+// magnitude. Stats whose class has no range entry come back as 0
+// (so the resulting effect equals the def's base effect exactly).
+export function rollAttachmentInstance(
+  defId: string,
+  tier: PartTier = 'Mk1'
+): AttachmentInstance {
+  const ranges = ATTACHMENT_STAT_RANGES[defId] ?? {};
+  const scale = TIER_ROLL_SCALE[tier] ?? 1;
+  const rolls: Record<string, number> = {};
+  for (const [k, range] of Object.entries(ranges)) {
+    if (!range) continue;
+    const [lo, hi] = range as [number, number];
+    const t = Math.random();
+    rolls[k] = (lo + t * (hi - lo)) * scale;
+  }
+  return {
+    id: nextAttachmentInstanceId(),
+    defId,
+    tier,
+    rolls: rolls as AttachmentInstance['rolls'],
+  };
+}
+
+// Effective WeaponEffect for an instance — base def effect plus
+// rolled deltas. Returns a fully-populated WeaponEffect (every
+// stat present, sensible defaults).
+export function attachmentInstanceWeaponEffect(
+  instance: AttachmentInstance
+): Required<WeaponEffect> {
+  const def = ATTACHMENT_DEFS[instance.defId];
+  const out: Required<WeaponEffect> = {
+    damageMult: 1,
+    fireIntervalMult: 1,
+    spreadMult: 1,
+    projectileSpeedAdd: 0,
+  };
+  if (
+    def &&
+    (def.kind === 'weapon_mod' || def.kind === 'weapon_affix')
+  ) {
+    out.damageMult = def.effect.damageMult ?? 1;
+    out.fireIntervalMult = def.effect.fireIntervalMult ?? 1;
+    out.spreadMult = def.effect.spreadMult ?? 1;
+    out.projectileSpeedAdd = def.effect.projectileSpeedAdd ?? 0;
+  }
+  const r = instance.rolls as Partial<Record<string, number>>;
+  if (r.damageMultBonus) out.damageMult += r.damageMultBonus;
+  if (r.fireIntervalMultBonus) out.fireIntervalMult *= 1 + r.fireIntervalMultBonus;
+  if (r.spreadMultBonus) out.spreadMult *= 1 + r.spreadMultBonus;
+  if (r.projectileSpeedAddBonus) out.projectileSpeedAdd += r.projectileSpeedAddBonus;
+  return out;
+}
+
+// Effective SuitEffect for a suit-affix instance. Same shape, just
+// the suit-side fields.
+export function attachmentInstanceSuitEffect(
+  instance: AttachmentInstance
+): Required<SuitEffect> {
+  const def = ATTACHMENT_DEFS[instance.defId];
+  const out: Required<SuitEffect> = {
+    hpBonus: 0,
+    shieldBonus: 0,
+    staminaMaxBonus: 0,
+    staminaRegenBonus: 0,
+    moveSpeedMult: 0,
+  };
+  if (def && def.kind === 'suit_affix') {
+    out.hpBonus = def.effect.hpBonus ?? 0;
+    out.shieldBonus = def.effect.shieldBonus ?? 0;
+    out.staminaMaxBonus = def.effect.staminaMaxBonus ?? 0;
+    out.staminaRegenBonus = def.effect.staminaRegenBonus ?? 0;
+    out.moveSpeedMult = def.effect.moveSpeedMult ?? 0;
+  }
+  const r = instance.rolls as Partial<Record<string, number>>;
+  if (r.hpBonusAdd) out.hpBonus += r.hpBonusAdd;
+  if (r.shieldBonusAdd) out.shieldBonus += r.shieldBonusAdd;
+  if (r.staminaMaxBonusAdd) out.staminaMaxBonus += r.staminaMaxBonusAdd;
+  if (r.staminaRegenBonusAdd) out.staminaRegenBonus += r.staminaRegenBonusAdd;
+  if (r.moveSpeedMultBonus) out.moveSpeedMult += r.moveSpeedMultBonus;
+  return out;
+}
+
+// Display name for an instance. Bare class name (e.g. "Compensator")
+// at Mk1 — keeps the early game readable. Mk2+ wraps with a
+// deterministic flavored prefix from the cyberpunk pool seeded by
+// instance id, so "Photon Compensator", "Razorback Compensator",
+// etc. read as distinct rolls without us authoring per-instance
+// names.
+export function attachmentInstanceName(
+  instance: AttachmentInstance
+): string {
+  const def = ATTACHMENT_DEFS[instance.defId];
+  const base = def?.displayName ?? instance.defId;
+  if (instance.tier === 'Mk1') return base;
+  // Defer the actual flavor wrapper to the consumer (display layer
+  // imports flavoredItemName from itemNames). We just signal "wrap
+  // it" by returning the flavor seed alongside the base; full
+  // composition lives in attachmentDisplayName.
+  return base;
+}
+
+// Display name for an attachment. Pass an instance for the
+// per-roll name (Mk1 = bare noun, Mk2+ flavor-wrapped); pass a
+// raw defId to render the class noun without a roll. Sprint C
+// kept the dual signature so legacy callers (blueprint listings,
+// recipe outputs that haven't been crafted yet) still work.
+export function attachmentDisplayName(
+  arg: string | AttachmentInstance
+): string {
+  if (typeof arg === 'string') {
+    const def = ATTACHMENT_DEFS[arg];
+    return def?.displayName ?? arg;
+  }
+  const def = ATTACHMENT_DEFS[arg.defId];
+  const base = def?.displayName ?? arg.defId;
+  if (arg.tier === 'Mk1') return base;
+  return flavoredItemName(arg.id, base);
 }
 
 // Combine a weapon's frame + piece-affix + mod effects into a single
@@ -760,20 +961,22 @@ export function computeWeaponEffect(weapon: WeaponItem): Required<WeaponEffect> 
   };
   for (const piece of Object.values(weapon.pieces)) {
     if (!piece) continue;
-    const def = ATTACHMENT_DEFS[piece.id];
+    const def = ATTACHMENT_DEFS[piece.defId];
     if (!def || def.kind !== 'weapon_affix') continue;
-    out.damageMult *= def.effect.damageMult ?? 1;
-    out.fireIntervalMult *= def.effect.fireIntervalMult ?? 1;
-    out.spreadMult *= def.effect.spreadMult ?? 1;
-    out.projectileSpeedAdd += def.effect.projectileSpeedAdd ?? 0;
+    const eff = attachmentInstanceWeaponEffect(piece);
+    out.damageMult *= eff.damageMult;
+    out.fireIntervalMult *= eff.fireIntervalMult;
+    out.spreadMult *= eff.spreadMult;
+    out.projectileSpeedAdd += eff.projectileSpeedAdd;
   }
   for (const mod of weapon.mods) {
-    const def = ATTACHMENT_DEFS[mod.id];
+    const def = ATTACHMENT_DEFS[mod.defId];
     if (!def || def.kind !== 'weapon_mod') continue;
-    out.damageMult *= def.effect.damageMult ?? 1;
-    out.fireIntervalMult *= def.effect.fireIntervalMult ?? 1;
-    out.spreadMult *= def.effect.spreadMult ?? 1;
-    out.projectileSpeedAdd += def.effect.projectileSpeedAdd ?? 0;
+    const eff = attachmentInstanceWeaponEffect(mod);
+    out.damageMult *= eff.damageMult;
+    out.fireIntervalMult *= eff.fireIntervalMult;
+    out.spreadMult *= eff.spreadMult;
+    out.projectileSpeedAdd += eff.projectileSpeedAdd;
   }
   return out;
 }
@@ -1118,11 +1321,13 @@ export function takeFromSlot(
   const s = inv[slot];
   if (s.kind === 'empty') return null;
 
+  // Attachments are unique-instance (no count) so the "take 1"
+  // branch can't apply to them; only the four count-bearing kinds
+  // need a partial-take path.
   const isStackable =
     s.kind === 'material' ||
     s.kind === 'ammo' ||
     s.kind === 'placeable' ||
-    s.kind === 'attachment' ||
     s.kind === 'consumable';
 
   if (!all && isStackable && (s as { count: number }).count > 1) {
@@ -1135,9 +1340,6 @@ export function takeFromSlot(
     }
     if (s.kind === 'placeable') {
       return { kind: 'placeable', buildingKind: s.buildingKind, count: 1 };
-    }
-    if (s.kind === 'attachment') {
-      return { kind: 'attachment', defId: s.defId, count: 1 };
     }
     if (s.kind === 'consumable') {
       return { kind: 'consumable', consumableId: s.consumableId, count: 1 };
@@ -1173,7 +1375,9 @@ export function addInventorySlotToInventory(
     case 'weapon':
       return addWeapon(inv, slot.weapon);
     case 'attachment':
-      return addAttachment(inv, slot.defId, slot.count);
+      // Unique instance — pass the AttachmentInstance through so
+      // its rolled stats survive the round-trip.
+      return addAttachment(inv, slot.instance);
     case 'consumable':
       return addConsumable(inv, slot.consumableId, slot.count);
     case 'part':
@@ -1407,11 +1611,8 @@ export function swapSlotsBetween(
     src[srcIdx] = { kind: 'empty' };
     return true;
   }
-  if (a.kind === 'attachment' && b.kind === 'attachment' && a.defId === b.defId) {
-    b.count += a.count;
-    src[srcIdx] = { kind: 'empty' };
-    return true;
-  }
+  // Attachments never merge (every instance is unique). Fall through
+  // to the swap branch so dragging stacks them but doesn't fuse them.
   if (
     a.kind === 'consumable' &&
     b.kind === 'consumable' &&
@@ -1452,15 +1653,7 @@ export function swapSlots(inv: Inventory, from: number, to: number): boolean {
     inv[from] = { ...EMPTY };
     return true;
   }
-  if (
-    a.kind === 'attachment' &&
-    b.kind === 'attachment' &&
-    a.defId === b.defId
-  ) {
-    b.count += a.count;
-    inv[from] = { ...EMPTY };
-    return true;
-  }
+  // Attachments are unique-instance — never merge.
   if (
     a.kind === 'consumable' &&
     b.kind === 'consumable' &&
@@ -1487,7 +1680,6 @@ export function discardSlot(inv: Inventory, slot: number, all: boolean): boolean
     (s.kind === 'material' ||
       s.kind === 'ammo' ||
       s.kind === 'placeable' ||
-      s.kind === 'attachment' ||
       s.kind === 'consumable') &&
     s.count > 1
   ) {
@@ -1544,43 +1736,53 @@ export function consumeConsumable(
 export function findAttachmentSlot(inv: Inventory, defId: string): number {
   for (let i = 0; i < inv.length; i++) {
     const s = inv[i];
-    if (s.kind === 'attachment' && s.defId === defId) return i;
+    if (s.kind === 'attachment' && s.instance.defId === defId) return i;
   }
   return -1;
 }
 
+// Place an attachment in the first empty inventory slot. Accepts
+// either a full AttachmentInstance (use as-is) or a defId string
+// (roll a fresh instance at the given tier — convenient for legacy
+// callers and recipe outputs that don't pre-roll). Attachments do
+// not stack now that every instance is unique; multiple of the
+// same class take separate slots.
 export function addAttachment(
   inv: Inventory,
-  defId: string,
+  instanceOrDefId: AttachmentInstance | string,
+  tierIfRolling: PartTier = 'Mk1',
   count = 1
 ): boolean {
   if (count <= 0) return true;
-  const existing = findAttachmentSlot(inv, defId);
-  if (existing >= 0) {
-    const s = inv[existing];
-    if (s.kind === 'attachment') {
-      s.count += count;
-      return true;
-    }
+  for (let n = 0; n < count; n++) {
+    const empty = findEmptySlot(inv);
+    if (empty < 0) return false;
+    const instance: AttachmentInstance =
+      typeof instanceOrDefId === 'string'
+        ? rollAttachmentInstance(instanceOrDefId, tierIfRolling)
+        : n === 0
+          ? instanceOrDefId
+          : rollAttachmentInstance(instanceOrDefId.defId, instanceOrDefId.tier);
+    inv[empty] = { kind: 'attachment', instance };
   }
-  const empty = findEmptySlot(inv);
-  if (empty < 0) return false;
-  inv[empty] = { kind: 'attachment', defId, count };
   return true;
 }
 
+// Remove one attachment of the given class from the inventory and
+// return its instance (so callers attaching to a weapon piece /
+// suit slot keep the rolled stats). Returns null if no slot of
+// that class is found.
 export function consumeAttachment(
   inv: Inventory,
-  defId: string,
-  count = 1
-): boolean {
+  defId: string
+): AttachmentInstance | null {
   const i = findAttachmentSlot(inv, defId);
-  if (i < 0) return false;
+  if (i < 0) return null;
   const s = inv[i];
-  if (s.kind !== 'attachment' || s.count < count) return false;
-  s.count -= count;
-  if (s.count <= 0) inv[i] = { kind: 'empty' };
-  return true;
+  if (s.kind !== 'attachment') return null;
+  const taken = s.instance;
+  inv[i] = { kind: 'empty' };
+  return taken;
 }
 
 // Stable categorical sort. The hotbar (first HOTBAR_SIZE slots) is preserved
@@ -1593,19 +1795,20 @@ export function sortBag(inv: Inventory): void {
   const head = inv.slice(0, HOTBAR_SIZE);
   const tail = inv.slice(HOTBAR_SIZE);
 
-  // First, collapse stackables by id across the bag.
+  // First, collapse stackables by id across the bag. Attachments
+  // are unique-instance now, so they ride along with weapons / parts
+  // in the `others` bucket — we just sort them by class so multiple
+  // of the same Compensator end up adjacent in the bag.
   type Stack = {
     ammo: Map<string, number>;
     material: Map<string, number>;
     placeable: Map<string, number>;
-    attachment: Map<string, number>;
     consumable: Map<string, number>;
   };
   const stacks: Stack = {
     ammo: new Map(),
     material: new Map(),
     placeable: new Map(),
-    attachment: new Map(),
     consumable: new Map(),
   };
   const others: InventorySlot[] = [];
@@ -1622,11 +1825,6 @@ export function sortBag(inv: Inventory): void {
       stacks.placeable.set(
         s.buildingKind,
         (stacks.placeable.get(s.buildingKind) ?? 0) + s.count
-      );
-    } else if (s.kind === 'attachment') {
-      stacks.attachment.set(
-        s.defId,
-        (stacks.attachment.get(s.defId) ?? 0) + s.count
       );
     } else if (s.kind === 'consumable') {
       stacks.consumable.set(
@@ -1659,9 +1857,18 @@ export function sortBag(inv: Inventory): void {
     }
   };
 
+  // Sub-order for attachments so instances of the same class cluster.
+  const attachmentTieBreaker = (s: InventorySlot): string =>
+    s.kind === 'attachment' ? s.instance.defId : '';
+
   const rebuilt: InventorySlot[] = [];
-  // Re-emit non-stackables in category order.
-  others.sort((x, y) => order(x) - order(y));
+  // Re-emit non-stackables in category order; attachments cluster
+  // by class within the attachment bucket.
+  others.sort((x, y) => {
+    const d = order(x) - order(y);
+    if (d !== 0) return d;
+    return attachmentTieBreaker(x).localeCompare(attachmentTieBreaker(y));
+  });
   rebuilt.push(...others);
   // Then placeables.
   for (const [id, count] of stacks.placeable) {
@@ -1674,10 +1881,6 @@ export function sortBag(inv: Inventory): void {
   // Then ammo.
   for (const [id, count] of stacks.ammo) {
     rebuilt.push({ kind: 'ammo', ammoId: id as AmmoKind, count });
-  }
-  // Then attachments.
-  for (const [defId, count] of stacks.attachment) {
-    rebuilt.push({ kind: 'attachment', defId, count });
   }
   // Then consumables.
   for (const [id, count] of stacks.consumable) {

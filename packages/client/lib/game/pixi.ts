@@ -1,6 +1,14 @@
-'use client';
+"use client";
 
-import { Application, Assets, Container, Graphics, Sprite, Text, type Texture } from 'pixi.js';
+import {
+  Application,
+  Assets,
+  Container,
+  Graphics,
+  Sprite,
+  Text,
+  type Texture,
+} from "pixi.js";
 import {
   circleFits,
   enemyVisualFor,
@@ -19,7 +27,7 @@ import {
   type Rect,
   type SceneLayout,
   type ProjectileState,
-} from '@dumrunner/shared';
+} from "@dumrunner/shared";
 
 // Must match server: COMBAT.PLAYER_RADIUS in packages/server/src/combat.ts.
 // Used for client-side collision so prediction matches server simulation.
@@ -49,7 +57,7 @@ export type GameInit = {
   // Called whenever the nearest in-range interactable changes (or becomes
   // null). The host UI renders the "Press E to …" prompt off this.
   onNearInteractableChanged: (
-    near: { id: string; label: string } | null
+    near: { id: string; label: string } | null,
   ) => void;
   // Called whenever the set of workstation building kinds the player is
   // standing within crafting range of changes. `all` drives recipe
@@ -86,11 +94,32 @@ export type GameHandle = {
   upsertPlayer(p: Player): void;
   removePlayer(characterId: string): void;
   movePlayer(characterId: string, x: number, y: number): void;
-  setPlayerHp(characterId: string, hp: number, maxHp: number, shield?: number, maxShield?: number): void;
+  setPlayerHp(
+    characterId: string,
+    hp: number,
+    maxHp: number,
+    shield?: number,
+    maxShield?: number,
+  ): void;
   setSelfStamina(stamina: number, maxStamina: number): void;
   setPlayerDead(characterId: string): void;
-  respawnPlayer(characterId: string, x: number, y: number, hp: number, maxHp: number, stamina?: number, maxStamina?: number, shield?: number, maxShield?: number): void;
-  showWeaponSwung(characterId: string, weaponId: string, dirX: number, dirY: number): void;
+  respawnPlayer(
+    characterId: string,
+    x: number,
+    y: number,
+    hp: number,
+    maxHp: number,
+    stamina?: number,
+    maxStamina?: number,
+    shield?: number,
+    maxShield?: number,
+  ): void;
+  showWeaponSwung(
+    characterId: string,
+    weaponId: string,
+    dirX: number,
+    dirY: number,
+  ): void;
   upsertEnemy(e: EnemyState): void;
   setEnemyPosition(id: string, x: number, y: number): void;
   setEnemyHp(id: string, hp: number, maxHp: number): void;
@@ -116,7 +145,7 @@ export type GameHandle = {
   // The currently-equipped weapon (selected hotbar slot if it's a weapon),
   // or null. Pixi gates fire/swing visuals + outbound fire messages on this.
   setEquippedWeapon(
-    weaponId: 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'knife' | null
+    weaponId: "pistol" | "smg" | "shotgun" | "rifle" | "knife" | null,
   ): void;
   swapScene(state: SceneState): void;
   // Snapshot of the renderer's current scene state. Used by the host to
@@ -139,7 +168,7 @@ export type GameHandle = {
 
 // Re-export shared part-tier colors for any external pixi.ts imports.
 // New code should import directly from @dumrunner/shared.
-export { TIER_COLORS_NUM as TIER_COLORS } from '@dumrunner/shared';
+export { TIER_COLORS_NUM as TIER_COLORS } from "@dumrunner/shared";
 export { TIER_COLORS_NUM };
 
 // Room floor palette. One entry per "theme bucket"; rooms hash to a
@@ -160,7 +189,8 @@ const ROOM_FLOOR_PALETTE: number[] = [
 
 function roomFloorColor(r: Rect): number {
   // Cheap deterministic mix on the room's tile-aligned origin.
-  const h = (Math.imul(r.x | 0, 0x85ebca6b) ^ Math.imul(r.y | 0, 0xc2b2ae35)) >>> 0;
+  const h =
+    (Math.imul(r.x | 0, 0x85ebca6b) ^ Math.imul(r.y | 0, 0xc2b2ae35)) >>> 0;
   return ROOM_FLOOR_PALETTE[h % ROOM_FLOOR_PALETTE.length];
 }
 
@@ -170,11 +200,11 @@ function roomFloorColor(r: Rect): number {
 // come from @dumrunner/shared/visuals.
 const visualFor = enemyVisualFor;
 
-const SELF_COLOR = 0xf97316;     // dûm orange
+const SELF_COLOR = 0xf97316; // dûm orange
 const OTHER_COLOR = 0x4dd0e1;
 const DEAD_COLOR = 0x444444;
 const PROJECTILE_COLOR = 0xfafafa;
-const MOVE_SPEED = 220;          // px/sec
+const MOVE_SPEED = 220; // px/sec
 const NETWORK_TICK_HZ = 20;
 const PISTOL_FIRE_INTERVAL_MS = 250;
 const KNIFE_SWING_INTERVAL_MS = 400;
@@ -254,17 +284,17 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   const buildings = new Map<string, RenderedBuilding>();
 
   const world = new Container();
-  const layoutLayer = new Container();         // floor / walkable rects
-  const buildingsLayer = new Container();      // walls, turrets, etc.
+  const layoutLayer = new Container(); // floor / walkable rects
+  const buildingsLayer = new Container(); // walls, turrets, etc.
   const lootLayer = new Container();
-  const interactablesLayer = new Container();  // stairs, extract pads
+  const interactablesLayer = new Container(); // stairs, extract pads
   const enemiesLayer = new Container();
   const playersLayer = new Container();
   const projectilesLayer = new Container();
-  const fogLayer = new Container();            // light/shadow over everything
-  const fxLayer = new Container();             // particles, damage numbers
-  const buildGhost = new Container();          // ghost preview during build mode
-  const ui = new Container();                  // screen-space overlay
+  const fogLayer = new Container(); // light/shadow over everything
+  const fxLayer = new Container(); // particles, damage numbers
+  const buildGhost = new Container(); // ghost preview during build mode
+  const ui = new Container(); // screen-space overlay
   const fogGraphics = new Graphics();
   fogLayer.addChild(fogGraphics);
 
@@ -290,7 +320,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   let lastSentAt = 0;
   let lastFireAt = 0;
 
-  const RECONCILE_LERP_PER_SEC = 8;   // smoothing rate toward server position
+  const RECONCILE_LERP_PER_SEC = 8; // smoothing rate toward server position
   const RECONCILE_SNAP_THRESHOLD = 120; // px — beyond this, hard-snap to server
 
   // Camera shake (epoch ms).
@@ -311,10 +341,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     obj: Container;
     vx: number;
     vy: number;
-    life: number;     // ms
-    age: number;      // ms
+    life: number; // ms
+    age: number; // ms
     fadeOut: boolean;
-    rise?: boolean;   // damage numbers float up while fading
+    rise?: boolean; // damage numbers float up while fading
   };
   const particles: Particle[] = [];
 
@@ -328,33 +358,33 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // Inline X/Y labels rendered ON TOP of each bar, centred. Replaces the
   // old "HP 100/100" text floating above the HP bar.
   const hpText = new Text({
-    text: '',
+    text: "",
     style: {
-      fill: '#ffffff',
+      fill: "#ffffff",
       fontSize: 11,
-      fontFamily: 'system-ui, sans-serif',
-      fontWeight: 'bold',
-      stroke: { color: '#000000', width: 2 },
+      fontFamily: "system-ui, sans-serif",
+      fontWeight: "bold",
+      stroke: { color: "#000000", width: 2 },
     },
   });
   const staminaText = new Text({
-    text: '',
+    text: "",
     style: {
-      fill: '#fef3c7',
+      fill: "#fef3c7",
       fontSize: 9,
-      fontFamily: 'system-ui, sans-serif',
-      fontWeight: 'bold',
-      stroke: { color: '#000000', width: 2 },
+      fontFamily: "system-ui, sans-serif",
+      fontWeight: "bold",
+      stroke: { color: "#000000", width: 2 },
     },
   });
   const shieldText = new Text({
-    text: '',
+    text: "",
     style: {
-      fill: '#cffafe',
+      fill: "#cffafe",
       fontSize: 9,
-      fontFamily: 'system-ui, sans-serif',
-      fontWeight: 'bold',
-      stroke: { color: '#000000', width: 2 },
+      fontFamily: "system-ui, sans-serif",
+      fontWeight: "bold",
+      stroke: { color: "#000000", width: 2 },
     },
   });
   hpText.anchor.set(0.5, 0.5);
@@ -362,12 +392,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   shieldText.anchor.set(0.5, 0.5);
   const deadOverlay = new Container();
   const deadText = new Text({
-    text: 'YOU ARE DOWN — respawning…',
+    text: "YOU ARE DOWN — respawning…",
     style: {
-      fill: '#ef4444',
+      fill: "#ef4444",
       fontSize: 28,
-      fontFamily: 'system-ui, sans-serif',
-      fontWeight: '700',
+      fontFamily: "system-ui, sans-serif",
+      fontWeight: "700",
     },
   });
   deadText.anchor.set(0.5);
@@ -386,22 +416,15 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // Currently equipped weapon (or null when no weapon is selected). Driven
   // externally; gates fire/swing locally so we don't show animation for
   // clicks the server will reject.
-  let equippedWeapon:
-    | 'pistol'
-    | 'smg'
-    | 'shotgun'
-    | 'rifle'
-    | 'knife'
-    | null = null;
-  let pendingBuildAction: 'place' | 'demolish' | null = null;
+  let equippedWeapon: "pistol" | "smg" | "shotgun" | "rifle" | "knife" | null =
+    null;
+  let pendingBuildAction: "place" | "demolish" | null = null;
 
   // While focus is in a chat input / textarea, suppress movement key
   // capture so the player's typing doesn't drive the character.
   function isFormFocus(): boolean {
     const ae = document.activeElement;
-    return (
-      ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement
-    );
+    return ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement;
   }
   function onKeyDown(e: KeyboardEvent) {
     if (isFormFocus()) return;
@@ -409,7 +432,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     keys.add(k);
     // Build mode is now driven by the selected hotbar slot, not a key
     // toggle. Escape just stops continuous fire if any.
-    if (k === 'escape') mouseDown = false;
+    if (k === "escape") mouseDown = false;
   }
   function onKeyUp(e: KeyboardEvent) {
     if (isFormFocus()) return;
@@ -424,8 +447,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     onMouseMove(e);
     if (buildKind !== null) {
       // In build mode the canvas is for placing/demolishing only.
-      if (e.button === 0) pendingBuildAction = 'place';
-      else if (e.button === 2) pendingBuildAction = 'demolish';
+      if (e.button === 0) pendingBuildAction = "place";
+      else if (e.button === 2) pendingBuildAction = "demolish";
       return;
     }
     if (e.button !== 0) return;
@@ -440,13 +463,13 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     e.preventDefault();
   }
 
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  window.addEventListener('mouseup', onMouseUp);
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("mouseup", onMouseUp);
 
   void app
     .init({
-      background: '#0b0d10',
+      background: "#0b0d10",
       resizeTo: host,
       antialias: true,
     })
@@ -459,13 +482,13 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
       host.appendChild(app.canvas);
       const canvas = app.canvas as HTMLCanvasElement;
-      canvas.style.display = 'block';
-      canvas.style.width = '100%';
-      canvas.style.height = '100%';
-      canvas.style.cursor = 'crosshair';
-      canvas.addEventListener('mousemove', onMouseMove);
-      canvas.addEventListener('mousedown', onMouseDown);
-      canvas.addEventListener('contextmenu', onContextMenu);
+      canvas.style.display = "block";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      canvas.style.cursor = "crosshair";
+      canvas.addEventListener("mousemove", onMouseMove);
+      canvas.addEventListener("mousedown", onMouseDown);
+      canvas.addEventListener("contextmenu", onContextMenu);
 
       world.addChild(layoutLayer);
       world.addChild(buildingsLayer);
@@ -489,7 +512,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         hpText,
         staminaText,
         shieldText,
-        deadOverlay
+        deadOverlay,
       );
       drawHpBar();
 
@@ -521,10 +544,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     // Read raw input axes from held keys. -1..1 per axis.
     let inputX = 0;
     let inputY = 0;
-    if (keys.has('w') || keys.has('arrowup')) inputY -= 1;
-    if (keys.has('s') || keys.has('arrowdown')) inputY += 1;
-    if (keys.has('a') || keys.has('arrowleft')) inputX -= 1;
-    if (keys.has('d') || keys.has('arrowright')) inputX += 1;
+    if (keys.has("w") || keys.has("arrowup")) inputY -= 1;
+    if (keys.has("s") || keys.has("arrowdown")) inputY += 1;
+    if (keys.has("a") || keys.has("arrowleft")) inputX -= 1;
+    if (keys.has("d") || keys.has("arrowright")) inputX += 1;
 
     if (selfAlive) {
       // Local prediction: apply normalised input vector at the same speed the
@@ -540,7 +563,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
         const walls = currentLayout?.walkables;
         if (walls && walls.length > 0) {
-          const fits = (x: number, y: number) => circleFits(walls, x, y, PLAYER_RADIUS);
+          const fits = (x: number, y: number) =>
+            circleFits(walls, x, y, PLAYER_RADIUS);
           if (!fits(proposedX, proposedY)) {
             const xOnly = fits(proposedX, selfY);
             const yOnly = fits(selfX, proposedY);
@@ -586,7 +610,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       if (mouseDown && buildKind === null && equippedWeapon !== null) {
         const now = performance.now();
         const interval =
-          equippedWeapon === 'knife'
+          equippedWeapon === "knife"
             ? KNIFE_SWING_INTERVAL_MS
             : PISTOL_FIRE_INTERVAL_MS;
         if (now - lastFireAt >= interval) {
@@ -704,7 +728,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         e.flashOverlay.alpha = 0;
         e.flashUntil = 0;
       } else {
-        e.flashOverlay.alpha = Math.min(0.7, remaining / 120 * 0.7);
+        e.flashOverlay.alpha = Math.min(0.7, (remaining / 120) * 0.7);
       }
     }
 
@@ -717,7 +741,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const minDelta = 1000 / NETWORK_TICK_HZ;
     const sx = selfAlive ? inputX : 0;
     const sy = selfAlive ? inputY : 0;
-    const sprint = selfAlive && (keys.has('shift') || keys.has('shiftleft') || keys.has('shiftright'));
+    const sprint =
+      selfAlive &&
+      (keys.has("shift") || keys.has("shiftleft") || keys.has("shiftright"));
     const changed =
       sx !== lastSentInputX ||
       sy !== lastSentInputY ||
@@ -763,7 +789,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     }
     world.position.set(
       Math.round(w / 2 - selfX + sx),
-      Math.round(h / 2 - selfY + sy)
+      Math.round(h / 2 - selfY + sy),
     );
   }
 
@@ -809,9 +835,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       .stroke({ color: 0x374151, width: 1 });
     const hpRatio = selfMaxHp > 0 ? Math.max(0, selfHp / selfMaxHp) : 0;
     hpBarFill.clear();
-    hpBarFill
-      .roundRect(2, 2, (barW - 4) * hpRatio, barH - 4, 3)
-      .fill({ color: hpRatio > 0.4 ? 0x22c55e : hpRatio > 0.2 ? 0xeab308 : 0xef4444 });
+    hpBarFill.roundRect(2, 2, (barW - 4) * hpRatio, barH - 4, 3).fill({
+      color: hpRatio > 0.4 ? 0x22c55e : hpRatio > 0.2 ? 0xeab308 : 0xef4444,
+    });
 
     // Stamina (thin, yellow).
     staminaBarBg.clear();
@@ -819,7 +845,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       .roundRect(0, 0, barW, stamH, 3)
       .fill({ color: 0x1f2937 })
       .stroke({ color: 0x374151, width: 1 });
-    const stamRatio = selfMaxStamina > 0 ? Math.max(0, selfStamina / selfMaxStamina) : 0;
+    const stamRatio =
+      selfMaxStamina > 0 ? Math.max(0, selfStamina / selfMaxStamina) : 0;
     staminaBarFill.clear();
     staminaBarFill
       .roundRect(2, 2, (barW - 4) * stamRatio, stamH - 4, 2)
@@ -861,14 +888,19 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     shakeMag = Math.max(shakeMag, magnitude);
   }
 
-  function spawnDamageNumber(x: number, y: number, amount: number, color = '#ef4444') {
+  function spawnDamageNumber(
+    x: number,
+    y: number,
+    amount: number,
+    color = "#ef4444",
+  ) {
     const text = new Text({
       text: Math.round(amount).toString(),
       style: {
         fill: color,
         fontSize: 14,
-        fontWeight: '700',
-        fontFamily: 'system-ui, sans-serif',
+        fontWeight: "700",
+        fontFamily: "system-ui, sans-serif",
         stroke: { color: 0x000000, width: 3 },
       },
     });
@@ -880,7 +912,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     particles.push({
       obj: text,
       vx: 0,
-      vy: -28,         // px/sec; floats up
+      vy: -28, // px/sec; floats up
       life: 700,
       age: 0,
       fadeOut: true,
@@ -980,7 +1012,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
     const label = new Text({
       text: p.displayName,
-      style: { fill: '#e6e8eb', fontSize: 12, fontFamily: 'system-ui, sans-serif' },
+      style: {
+        fill: "#e6e8eb",
+        fontSize: 12,
+        fontFamily: "system-ui, sans-serif",
+      },
     });
     label.anchor.set(0.5, 1);
     label.position.set(0, -28);
@@ -988,9 +1024,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
     // Mini HP bar above player.
     const hpBg = new Graphics();
-    hpBg
-      .roundRect(-18, -22, 36, 4, 2)
-      .fill({ color: 0x1f2937 });
+    hpBg.roundRect(-18, -22, 36, 4, 2).fill({ color: 0x1f2937 });
     container.addChild(hpBg);
     const hpFill = new Graphics();
     container.addChild(hpFill);
@@ -1013,9 +1047,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const ratio =
       rp.data.maxHp > 0 ? Math.max(0, rp.data.hp / rp.data.maxHp) : 0;
     rp.hpFill.clear();
-    rp.hpFill
-      .roundRect(-17, -21, 34 * ratio, 2, 1)
-      .fill({ color: 0x22c55e });
+    rp.hpFill.roundRect(-17, -21, 34 * ratio, 2, 1).fill({ color: 0x22c55e });
   }
 
   function addOrUpdateEnemy(e: EnemyState): RenderedEnemy {
@@ -1083,7 +1115,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
   async function resolveEnemySprite(
     re: RenderedEnemy,
-    kind: string
+    kind: string,
   ): Promise<void> {
     if (!init.getEnemyTexture) return;
     const url = init.getEnemyTexture(kind);
@@ -1109,8 +1141,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     // The procedural shapes are sized in radius-style units; doubling
     // gives a tile-comparable footprint.
     const target = visual.size * 2.4;
-    const aspect =
-      texture.height > 0 ? texture.width / texture.height : 1;
+    const aspect = texture.height > 0 ? texture.width / texture.height : 1;
     sprite.width = aspect >= 1 ? target : target * aspect;
     sprite.height = aspect >= 1 ? target / aspect : target;
     sprite.anchor.set(0.5, 0.5);
@@ -1123,19 +1154,27 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
   function drawEnemyShape(g: Graphics, v: EnemyVisual) {
     const s = v.size;
-    if (v.shape === 'circle') {
+    if (v.shape === "circle") {
       g.circle(0, 0, s).fill({ color: v.color });
       g.circle(0, 0, s).stroke({ color: 0x000000, width: 2 });
       return;
     }
-    if (v.shape === 'square') {
+    if (v.shape === "square") {
       g.rect(-s, -s, s * 2, s * 2).fill({ color: v.color });
       g.rect(-s, -s, s * 2, s * 2).stroke({ color: 0x000000, width: 2 });
       return;
     }
     // triangle (pointing up)
-    g.moveTo(0, -s).lineTo(s, s).lineTo(-s, s).closePath().fill({ color: v.color });
-    g.moveTo(0, -s).lineTo(s, s).lineTo(-s, s).closePath().stroke({ color: 0x000000, width: 2 });
+    g.moveTo(0, -s)
+      .lineTo(s, s)
+      .lineTo(-s, s)
+      .closePath()
+      .fill({ color: v.color });
+    g.moveTo(0, -s)
+      .lineTo(s, s)
+      .lineTo(-s, s)
+      .closePath()
+      .stroke({ color: 0x000000, width: 2 });
   }
 
   function drawEnemyHpBar(re: RenderedEnemy) {
@@ -1152,7 +1191,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   function addProjectile(p: ProjectileState) {
     if (projectiles.has(p.id)) return;
     const g = new Graphics();
-    const color = p.color ?? (p.ownerKind === 'enemy' ? 0xfbbf24 : PROJECTILE_COLOR);
+    const color =
+      p.color ?? (p.ownerKind === "enemy" ? 0xfbbf24 : PROJECTILE_COLOR);
     drawProjectileShape(g, color, p.vx, p.vy);
     g.position.set(p.x, p.y);
     projectilesLayer.addChild(g);
@@ -1170,7 +1210,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     g: Graphics,
     color: number,
     vx: number,
-    vy: number
+    vy: number,
   ) {
     const TRAIL_LEN = 28;
     const len = Math.hypot(vx, vy) || 1;
@@ -1198,37 +1238,39 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
     const body = new Graphics();
     if (
-      b.kind === 'turret' ||
-      b.kind === 'turret_smg' ||
-      b.kind === 'turret_shotgun' ||
-      b.kind === 'turret_rifle'
+      b.kind === "turret" ||
+      b.kind === "turret_smg" ||
+      b.kind === "turret_shotgun" ||
+      b.kind === "turret_rifle"
     ) {
       // Turret: dark base plate with a coloured cap that varies by family
       // so the player can read the build at a glance.
       const capColor =
-        b.kind === 'turret_smg'
+        b.kind === "turret_smg"
           ? 0xfde68a
-          : b.kind === 'turret_shotgun'
-          ? 0xff8a3d
-          : b.kind === 'turret_rifle'
-          ? 0x7dd3fc
-          : 0x3b82f6;
+          : b.kind === "turret_shotgun"
+            ? 0xff8a3d
+            : b.kind === "turret_rifle"
+              ? 0x7dd3fc
+              : 0x3b82f6;
       const ringColor =
-        b.kind === 'turret_smg'
+        b.kind === "turret_smg"
           ? 0xa16207
-          : b.kind === 'turret_shotgun'
-          ? 0x9a3412
-          : b.kind === 'turret_rifle'
-          ? 0x0e7490
-          : 0x1e3a8a;
+          : b.kind === "turret_shotgun"
+            ? 0x9a3412
+            : b.kind === "turret_rifle"
+              ? 0x0e7490
+              : 0x1e3a8a;
       body.rect(0, 0, w, h).fill({ color: 0x27272a });
       body.rect(0, 0, w, h).stroke({ color: 0x09090b, width: 2 });
       body.circle(w / 2, h / 2, w * 0.32).fill({ color: capColor });
-      body.circle(w / 2, h / 2, w * 0.32).stroke({ color: ringColor, width: 1 });
+      body
+        .circle(w / 2, h / 2, w * 0.32)
+        .stroke({ color: ringColor, width: 1 });
       body
         .rect(w / 2 - 2, h / 2 - h * 0.4, 4, h * 0.4)
         .fill({ color: 0x71717a });
-    } else if (b.kind === 'workbench') {
+    } else if (b.kind === "workbench") {
       // Workbench: tan tabletop with crossed tools.
       body.rect(0, 0, w, h).fill({ color: 0x92400e });
       body.rect(0, 0, w, h).stroke({ color: 0x451a03, width: 2 });
@@ -1237,16 +1279,14 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         .moveTo(w * 0.2, h * 0.7)
         .lineTo(w * 0.8, h * 0.25)
         .stroke({ color: 0xe5e7eb, width: 2 });
-    } else if (b.kind === 'forge') {
+    } else if (b.kind === "forge") {
       // Forge: dark stone base with a glowing red core.
       body.rect(0, 0, w, h).fill({ color: 0x1c1917 });
       body.rect(0, 0, w, h).stroke({ color: 0x000000, width: 2 });
       body.circle(w / 2, h / 2, w * 0.3).fill({ color: 0xdc2626 });
       body.circle(w / 2, h / 2, w * 0.3).stroke({ color: 0x7f1d1d, width: 1 });
-      body
-        .circle(w / 2, h / 2, w * 0.15)
-        .fill({ color: 0xfbbf24 });
-    } else if (b.kind === 'door') {
+      body.circle(w / 2, h / 2, w * 0.15).fill({ color: 0xfbbf24 });
+    } else if (b.kind === "door") {
       // Wood-tone door with a metal lock plate centred on the tile.
       // Reads as "interactable, not just another wall."
       body.rect(0, 0, w, h).fill({ color: 0x8b5e34 });
@@ -1265,21 +1305,15 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         .moveTo(w * 0.5, h * 0.58)
         .lineTo(w * 0.5, h * 0.9)
         .stroke({ color: 0x6b4221, width: 1 });
-    } else if (b.kind === 'power_link') {
+    } else if (b.kind === "power_link") {
       // Massive central pillar with a bright cyan-violet plasma core. Reads
       // as both "this is the dungeon portal" and "this is the power source"
       // — the most visually distinct building on the surface.
       body.rect(0, 0, w, h).fill({ color: 0x0c1126 });
       body.rect(0, 0, w, h).stroke({ color: 0x000000, width: 3 });
-      body
-        .circle(w / 2, h / 2, w * 0.42)
-        .fill({ color: 0x4338ca });
-      body
-        .circle(w / 2, h / 2, w * 0.28)
-        .fill({ color: 0x06b6d4 });
-      body
-        .circle(w / 2, h / 2, w * 0.14)
-        .fill({ color: 0xe0f2fe });
+      body.circle(w / 2, h / 2, w * 0.42).fill({ color: 0x4338ca });
+      body.circle(w / 2, h / 2, w * 0.28).fill({ color: 0x06b6d4 });
+      body.circle(w / 2, h / 2, w * 0.14).fill({ color: 0xe0f2fe });
       // Energy spokes radiating outward.
       const cx = w / 2;
       const cy = h / 2;
@@ -1289,9 +1323,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         const y1 = cy + Math.sin(a) * h * 0.42;
         const x2 = cx + Math.cos(a) * w * 0.5;
         const y2 = cy + Math.sin(a) * h * 0.5;
-        body.moveTo(x1, y1).lineTo(x2, y2).stroke({ color: 0x67e8f9, width: 1.5 });
+        body
+          .moveTo(x1, y1)
+          .lineTo(x2, y2)
+          .stroke({ color: 0x67e8f9, width: 1.5 });
       }
-    } else if (b.kind === 'artifact_uplink') {
+    } else if (b.kind === "artifact_uplink") {
       // Tall pylon with a glowing pink core — sells the "alien tech" feel.
       body.rect(0, 0, w, h).fill({ color: 0x1a1325 });
       body.rect(0, 0, w, h).stroke({ color: 0x09090b, width: 2 });
@@ -1299,17 +1336,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         .circle(w / 2, h / 2, w * 0.32)
         .fill({ color: 0xf472b6 })
         .stroke({ color: 0x86195e, width: 2 });
-      body
-        .circle(w / 2, h / 2, w * 0.16)
-        .fill({ color: 0xfbcfe8 });
+      body.circle(w / 2, h / 2, w * 0.16).fill({ color: 0xfbcfe8 });
       // Antenna stripes top and bottom.
-      body
-        .rect(w * 0.4, 0, w * 0.2, h * 0.12)
-        .fill({ color: 0xfbcfe8 });
-      body
-        .rect(w * 0.4, h * 0.88, w * 0.2, h * 0.12)
-        .fill({ color: 0xfbcfe8 });
-    } else if (b.kind === 'weapon_bench') {
+      body.rect(w * 0.4, 0, w * 0.2, h * 0.12).fill({ color: 0xfbcfe8 });
+      body.rect(w * 0.4, h * 0.88, w * 0.2, h * 0.12).fill({ color: 0xfbcfe8 });
+    } else if (b.kind === "weapon_bench") {
       // Gunsmith bench: dark steel surface with a stylised pistol
       // silhouette on top + a brass-tone vise at one end. Reads as
       // "you build / mod weapons here."
@@ -1319,36 +1350,32 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       body.rect(w * 0.1, h * 0.18, w * 0.8, h * 0.22).fill({ color: 0x374151 });
       // Pistol silhouette (rectangular slide + handle).
       body.rect(w * 0.22, h * 0.5, w * 0.5, h * 0.14).fill({ color: 0x9ca3af });
-      body.rect(w * 0.34, h * 0.62, w * 0.18, h * 0.22).fill({ color: 0x9ca3af });
+      body
+        .rect(w * 0.34, h * 0.62, w * 0.18, h * 0.22)
+        .fill({ color: 0x9ca3af });
       // Vise on the right.
       body
         .rect(w * 0.74, h * 0.52, w * 0.14, h * 0.28)
         .fill({ color: 0xb45309 })
         .stroke({ color: 0x78350f, width: 1 });
-    } else if (b.kind === 'electronics_bench') {
+    } else if (b.kind === "electronics_bench") {
       // Electronics bench: green PCB-like surface with a yellow LED.
       body.rect(0, 0, w, h).fill({ color: 0x064e3b });
       body.rect(0, 0, w, h).stroke({ color: 0x022c22, width: 2 });
-      body
-        .rect(w * 0.2, h * 0.2, w * 0.6, h * 0.6)
-        .fill({ color: 0x065f46 });
+      body.rect(w * 0.2, h * 0.2, w * 0.6, h * 0.6).fill({ color: 0x065f46 });
       body.circle(w * 0.3, h * 0.3, 2).fill({ color: 0xfbbf24 });
       body.circle(w * 0.7, h * 0.7, 2).fill({ color: 0xfbbf24 });
       body
         .moveTo(w * 0.3, h * 0.3)
         .lineTo(w * 0.7, h * 0.7)
         .stroke({ color: 0x10b981, width: 1 });
-    } else if (b.kind === 'storage_chest') {
+    } else if (b.kind === "storage_chest") {
       // Storage: brass-banded crate with a single padlock. Reads
       // distinctly from workstations (no glowing core) at a glance.
       body.rect(0, 0, w, h).fill({ color: 0x4a3520 });
       body.rect(0, 0, w, h).stroke({ color: 0x1f1611, width: 2 });
-      body
-        .rect(0, h * 0.2, w, h * 0.08)
-        .fill({ color: 0xa16207 });
-      body
-        .rect(0, h * 0.72, w, h * 0.08)
-        .fill({ color: 0xa16207 });
+      body.rect(0, h * 0.2, w, h * 0.08).fill({ color: 0xa16207 });
+      body.rect(0, h * 0.72, w, h * 0.08).fill({ color: 0xa16207 });
       body
         .rect(w * 0.42, h * 0.4, w * 0.16, h * 0.2)
         .fill({ color: 0xfbbf24 })
@@ -1385,9 +1412,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const tileSize = currentLayout?.tileSize ?? 32;
     const w = rb.data.width * tileSize;
     const ratio = Math.max(0, rb.data.hp / rb.data.maxHp);
-    rb.hpFill
-      .rect(2, -6, (w - 4) * ratio, 3)
-      .fill({ color: 0x22c55e });
+    rb.hpFill.rect(2, -6, (w - 4) * ratio, 3).fill({ color: 0x22c55e });
   }
 
   function addCorpse(c: CorpseState) {
@@ -1413,9 +1438,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const label = new Text({
       text: c.ownerDisplayName,
       style: {
-        fill: '#fca5a5',
+        fill: "#fca5a5",
         fontSize: 11,
-        fontFamily: 'system-ui, sans-serif',
+        fontFamily: "system-ui, sans-serif",
         stroke: { color: 0x000000, width: 3 },
       },
     });
@@ -1432,15 +1457,18 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // outputSlotLabel formatting in Game.tsx loosely; we don't pull
   // attachment / weapon display name helpers here to keep the
   // renderer free of inventory.ts dependency.
-  function droppedSlotLabel(s: import('@dumrunner/shared').InventorySlot): string | null {
-    if (s.kind === 'empty') return null;
-    if (s.kind === 'material') return `${s.count}× ${s.materialId}`;
-    if (s.kind === 'ammo') return `${s.count}× ${s.ammoId}`;
-    if (s.kind === 'placeable') return `${s.count}× ${s.buildingKind}`;
-    if (s.kind === 'attachment') return `${s.count}× mod`;
-    if (s.kind === 'consumable') return `${s.count}× ${s.consumableId}`;
-    if (s.kind === 'weapon') return s.weapon.weaponId;
-    if (s.kind === 'part') return s.part.slot;
+  function droppedSlotLabel(
+    s: import("@dumrunner/shared").InventorySlot,
+  ): string | null {
+    if (s.kind === "empty") return null;
+    if (s.kind === "material") return `${s.count}× ${s.materialId}`;
+    if (s.kind === "ammo") return `${s.count}× ${s.ammoId}`;
+    if (s.kind === "placeable") return `${s.count}× ${s.buildingKind}`;
+    if (s.kind === "attachment")
+      return s.instance.defId.replace(/^(mod_|aff_)/, "");
+    if (s.kind === "consumable") return `${s.count}× ${s.consumableId}`;
+    if (s.kind === "weapon") return s.weapon.weaponId;
+    if (s.kind === "part") return s.part.slot;
     return null;
   }
 
@@ -1451,7 +1479,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     container.position.set(l.x, l.y);
     const body = new Graphics();
 
-    if (l.content.kind === 'part') {
+    if (l.content.kind === "part") {
       // Diamond, color-graded by part tier.
       const color = TIER_COLORS_NUM[l.content.part.tier] ?? 0xffffff;
       const s = 9;
@@ -1468,7 +1496,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         .lineTo(-s, 0)
         .closePath()
         .stroke({ color: 0x000000, width: 1.5 });
-    } else if (l.content.kind === 'material') {
+    } else if (l.content.kind === "material") {
       // Material pile — squarish nugget tinted by material color, count
       // shown as a small label so 1 vs 12 reads at a glance.
       const def = materialTint(l.content.materialId);
@@ -1483,14 +1511,14 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         style: {
           fill: 0xffffff,
           fontSize: 11,
-          fontFamily: 'system-ui, sans-serif',
+          fontFamily: "system-ui, sans-serif",
           stroke: { color: 0x000000, width: 3 },
         },
       });
       label.anchor.set(0.5, 0);
       label.position.set(0, 8);
       container.addChild(label);
-    } else if (l.content.kind === 'slot') {
+    } else if (l.content.kind === "slot") {
       // Player-dropped slot. We don't have per-kind sprites for every
       // possible slot variant, so render a generic amber pouch + a
       // short label so the picker can tell what they're walking onto.
@@ -1508,7 +1536,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           style: {
             fill: 0xffffff,
             fontSize: 10,
-            fontFamily: 'system-ui, sans-serif',
+            fontFamily: "system-ui, sans-serif",
             stroke: { color: 0x000000, width: 3 },
           },
         });
@@ -1546,7 +1574,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     y1: number,
     x2: number,
     y2: number,
-    tileSize: number
+    tileSize: number,
   ): boolean {
     if (buildings.size === 0) return false;
     const dx = x2 - x1;
@@ -1578,13 +1606,13 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // hasn't swapped, and no building has been added/removed/destroyed.
   // The graphics object retains the last fill so visuals are unchanged
   // until invalidated.
-  let lastFogKey = '';
+  let lastFogKey = "";
   function updateFog() {
     const layout = currentLayout;
     if (!layout || layout.walkables.length === 0 || layout.tileSize <= 0) {
-      if (lastFogKey !== '__empty') {
+      if (lastFogKey !== "__empty") {
         fogGraphics.clear();
-        lastFogKey = '__empty';
+        lastFogKey = "__empty";
       }
       return;
     }
@@ -1643,12 +1671,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // Only fires the callback when the kind set changes, so it's cheap to call
   // every frame.
   const CRAFT_STATION_RANGE_PX = 96;
-  let lastWorkstationKey = '';
+  let lastWorkstationKey = "";
   function updateNearWorkstations() {
     const tileSize = currentLayout?.tileSize ?? 0;
     if (tileSize <= 0 || buildings.size === 0) {
-      if (lastWorkstationKey !== '') {
-        lastWorkstationKey = '';
+      if (lastWorkstationKey !== "") {
+        lastWorkstationKey = "";
         init.onNearWorkstationsChanged({
           all: [],
           nearest: null,
@@ -1675,7 +1703,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
       const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
       const dsq = dx * dx + dy * dy;
-      if (b.kind === 'door') {
+      if (b.kind === "door") {
         if (dsq <= r2 && dsq < nearestDoorDsq) {
           nearestDoorDsq = dsq;
           nearestDoorId = b.id;
@@ -1683,12 +1711,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         continue;
       }
       if (
-        b.kind !== 'workbench' &&
-        b.kind !== 'forge' &&
-        b.kind !== 'electronics_bench' &&
-        b.kind !== 'weapon_bench' &&
-        b.kind !== 'artifact_uplink' &&
-        b.kind !== 'storage_chest'
+        b.kind !== "workbench" &&
+        b.kind !== "forge" &&
+        b.kind !== "electronics_bench" &&
+        b.kind !== "weapon_bench" &&
+        b.kind !== "artifact_uplink" &&
+        b.kind !== "storage_chest"
       ) {
         continue;
       }
@@ -1698,20 +1726,20 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           nearestDsq = dsq;
           nearestKind = b.kind;
         }
-        if (b.kind === 'storage_chest' && dsq < nearestChestDsq) {
+        if (b.kind === "storage_chest" && dsq < nearestChestDsq) {
           nearestChestDsq = dsq;
           nearestChestId = b.id;
         }
       }
     }
     const key =
-      [...found].sort().join(',') +
-      '|' +
-      (nearestKind ?? '') +
-      '|' +
-      (nearestDoorId ?? '') +
-      '|' +
-      (nearestChestId ?? '');
+      [...found].sort().join(",") +
+      "|" +
+      (nearestKind ?? "") +
+      "|" +
+      (nearestDoorId ?? "") +
+      "|" +
+      (nearestChestId ?? "");
     if (key !== lastWorkstationKey) {
       lastWorkstationKey = key;
       init.onNearWorkstationsChanged({
@@ -1751,7 +1779,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     if (bestId !== lastNearInteractableId) {
       lastNearInteractableId = bestId;
       init.onNearInteractableChanged(
-        bestId && bestLabel ? { id: bestId, label: bestLabel } : null
+        bestId && bestLabel ? { id: bestId, label: bestLabel } : null,
       );
     }
   }
@@ -1800,10 +1828,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     buildGhost.addChild(ghost);
     buildGhost.visible = true;
 
-    if (pendingBuildAction === 'place') {
+    if (pendingBuildAction === "place") {
       pendingBuildAction = null;
       if (valid && buildKind) init.sendBuild(buildKind, tileX, tileY);
-    } else if (pendingBuildAction === 'demolish') {
+    } else if (pendingBuildAction === "demolish") {
       pendingBuildAction = null;
       const target = findBuildingAtTile(tileX, tileY);
       if (target && inRange) init.sendDemolish(target.data.id);
@@ -1824,7 +1852,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     return false;
   }
 
-  function findBuildingAtTile(tileX: number, tileY: number): RenderedBuilding | null {
+  function findBuildingAtTile(
+    tileX: number,
+    tileY: number,
+  ): RenderedBuilding | null {
     for (const b of buildings.values()) {
       if (
         tileX >= b.data.tileX &&
@@ -1912,7 +1943,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         layoutLayer,
         layout.walkables,
         layout.rooms,
-        layout.tileSize
+        layout.tileSize,
       );
     }
 
@@ -1945,7 +1976,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     parent: Container,
     walkables: Rect[],
     rooms: Rect[],
-    tileSize: number
+    tileSize: number,
   ) {
     // Dark void background then lit walkable rects on top. Walls are the
     // implicit gap between rects.
@@ -1997,7 +2028,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     }
   }
 
-  function drawExteriorWalls(parent: Container, walkables: Rect[], tileSize: number) {
+  function drawExteriorWalls(
+    parent: Container,
+    walkables: Rect[],
+    tileSize: number,
+  ) {
     const probe = tileSize * 0.25;
     const g = new Graphics();
 
@@ -2046,7 +2081,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     container.position.set(it.x, it.y);
 
     const ring = new Graphics();
-    const tint = it.kind === 'extract_pad' ? 0xf97316 : 0x60a5fa;
+    const tint = it.kind === "extract_pad" ? 0xf97316 : 0x60a5fa;
     ring.circle(0, 0, 22).fill({ color: tint, alpha: 0.18 });
     ring.circle(0, 0, 22).stroke({ color: tint, width: 2 });
     container.addChild(ring);
@@ -2057,12 +2092,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
     // Symbol — a small text glyph centred.
     const glyph = new Text({
-      text: it.kind === 'extract_pad' ? '↑' : '↓',
+      text: it.kind === "extract_pad" ? "↑" : "↓",
       style: {
-        fill: '#0b0d10',
+        fill: "#0b0d10",
         fontSize: 14,
-        fontWeight: '900',
-        fontFamily: 'system-ui, sans-serif',
+        fontWeight: "900",
+        fontFamily: "system-ui, sans-serif",
       },
     });
     glyph.anchor.set(0.5);
@@ -2072,9 +2107,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const label = new Text({
       text: it.label,
       style: {
-        fill: tint === 0xf97316 ? '#fde68a' : '#bfdbfe',
+        fill: tint === 0xf97316 ? "#fde68a" : "#bfdbfe",
         fontSize: 11,
-        fontFamily: 'system-ui, sans-serif',
+        fontFamily: "system-ui, sans-serif",
         stroke: { color: 0x000000, width: 3 },
       },
     });
@@ -2092,7 +2127,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
   return {
     upsertPlayer(p: Player) {
-      ifReady(() => addOrUpdatePlayer(p, p.characterId === init.self.characterId));
+      ifReady(() =>
+        addOrUpdatePlayer(p, p.characterId === init.self.characterId),
+      );
     },
     removePlayer(characterId: string) {
       const p = players.get(characterId);
@@ -2118,7 +2155,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       hp: number,
       maxHp: number,
       shield?: number,
-      maxShield?: number
+      maxShield?: number,
     ) {
       const p = players.get(characterId);
       let damageAmount = 0;
@@ -2143,10 +2180,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         drawHpBar();
         if (selfDamage > 0) {
           triggerShake(Math.min(14, 4 + selfDamage * 0.3));
-          spawnDamageNumber(selfX, selfY - 22, selfDamage, '#fca5a5');
+          spawnDamageNumber(selfX, selfY - 22, selfDamage, "#fca5a5");
         }
       } else if (damageAmount > 0 && p) {
-        spawnDamageNumber(p.data.x, p.data.y - 22, damageAmount, '#fca5a5');
+        spawnDamageNumber(p.data.x, p.data.y - 22, damageAmount, "#fca5a5");
       }
     },
     setSelfStamina(stamina: number, maxStamina: number) {
@@ -2179,7 +2216,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       stamina?: number,
       maxStamina?: number,
       shield?: number,
-      maxShield?: number
+      maxShield?: number,
     ) {
       const p = players.get(characterId);
       if (p) {
@@ -2213,11 +2250,16 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         drawHpBar();
       }
     },
-    showWeaponSwung(characterId: string, weaponId: string, dirX: number, dirY: number) {
+    showWeaponSwung(
+      characterId: string,
+      weaponId: string,
+      dirX: number,
+      dirY: number,
+    ) {
       const p = players.get(characterId);
       if (!p) return;
       // For now: render a brief slash arc as a particle in front of the player.
-      if (weaponId !== 'knife') return;
+      if (weaponId !== "knife") return;
       const len = Math.hypot(dirX, dirY) || 1;
       const ux = dirX / len;
       const uy = dirY / len;
@@ -2228,7 +2270,14 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         .lineTo(p.data.x + ux * reach, p.data.y + uy * reach)
         .stroke({ color: 0xfde68a, width: 4 });
       fxLayer.addChild(slash);
-      particles.push({ obj: slash, vx: 0, vy: 0, life: 140, age: 0, fadeOut: true });
+      particles.push({
+        obj: slash,
+        vx: 0,
+        vy: 0,
+        life: 140,
+        age: 0,
+        fadeOut: true,
+      });
     },
     upsertEnemy(e: EnemyState) {
       addOrUpdateEnemy(e);
@@ -2249,7 +2298,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       if (damage > 0) {
         e.flashUntil = performance.now() + 120;
         e.flashOverlay.alpha = 0.7;
-        spawnDamageNumber(e.data.x, e.data.y - visualFor(e.data.kind).size, damage);
+        spawnDamageNumber(
+          e.data.x,
+          e.data.y - visualFor(e.data.kind).size,
+          damage,
+        );
       }
     },
     removeEnemy(id: string) {
@@ -2275,7 +2328,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       // produce no flash. Per-pellet projectiles each call this — the
       // flash overlaps cleanly so a shotgun blast still looks fine.
       if (
-        p.ownerKind === 'player' &&
+        p.ownerKind === "player" &&
         p.ownerCharacterId === init.self.characterId
       ) {
         spawnMuzzleFlash(p.x, p.y, p.vx, p.vy);
@@ -2340,11 +2393,13 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     swapScene(state: SceneState) {
       ifReady(() => {
         // Tear down everything that doesn't belong to the new scene.
-        for (const p of players.values()) p.container.destroy({ children: true });
+        for (const p of players.values())
+          p.container.destroy({ children: true });
         players.clear();
         playersLayer.removeChildren();
 
-        for (const e of enemies.values()) e.container.destroy({ children: true });
+        for (const e of enemies.values())
+          e.container.destroy({ children: true });
         enemies.clear();
         enemiesLayer.removeChildren();
 
@@ -2354,11 +2409,13 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
 
         for (const l of loot.values()) l.container.destroy({ children: true });
         loot.clear();
-        for (const c of corpses.values()) c.container.destroy({ children: true });
+        for (const c of corpses.values())
+          c.container.destroy({ children: true });
         corpses.clear();
         lootLayer.removeChildren();
 
-        for (const b of buildings.values()) b.container.destroy({ children: true });
+        for (const b of buildings.values())
+          b.container.destroy({ children: true });
         buildings.clear();
         buildingsLayer.removeChildren();
 
@@ -2394,18 +2451,18 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       });
     },
     paintMinimap(canvas: HTMLCanvasElement, worldRadius: number) {
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext("2d");
       if (!ctx) return;
       const w = canvas.width;
       const h = canvas.height;
       const cx = w / 2;
       const cy = h / 2;
-      const scale = Math.min(w, h) / (worldRadius * 2);
+      const scale = Math.min(w, h) / (worldRadius * 6);
 
       ctx.clearRect(0, 0, w, h);
 
       // Background panel.
-      ctx.fillStyle = 'rgba(10, 12, 18, 0.85)';
+      ctx.fillStyle = "rgba(10, 12, 18, 0.85)";
       ctx.fillRect(0, 0, w, h);
 
       const tileSize = currentLayout?.tileSize ?? 32;
@@ -2413,7 +2470,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       // Walkables (rooms + corridors). World-space rects map into
       // canvas-space relative to selfX/selfY at the centre.
       if (currentLayout && currentLayout.walkables.length > 0) {
-        ctx.fillStyle = 'rgba(82, 82, 91, 0.45)';
+        ctx.fillStyle = "rgba(82, 82, 91, 0.45)";
         for (const r of currentLayout.walkables) {
           const x = (r.x - selfX) * scale + cx;
           const y = (r.y - selfY) * scale + cy;
@@ -2422,7 +2479,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       } else {
         // Open scene (surface) — draw a faint grid disc so the
         // player has spatial reference even without walls.
-        ctx.fillStyle = 'rgba(82, 82, 91, 0.18)';
+        ctx.fillStyle = "rgba(82, 82, 91, 0.18)";
         ctx.beginPath();
         ctx.arc(cx, cy, Math.min(w, h) / 2 - 2, 0, Math.PI * 2);
         ctx.fill();
@@ -2437,17 +2494,17 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         const sw = Math.max(2, b.width * tileSize * scale);
         const sh = Math.max(2, b.height * tileSize * scale);
         ctx.fillStyle =
-          b.kind === 'power_link'
-            ? '#06b6d4'
-            : b.kind === 'storage_chest'
-              ? '#fbbf24'
-              : b.kind === 'wall'
-                ? '#71717a'
-                : b.kind.startsWith('turret')
-                  ? '#a78bfa'
-                  : b.kind === 'door'
-                    ? '#fde68a'
-                    : '#22c55e';
+          b.kind === "power_link"
+            ? "#06b6d4"
+            : b.kind === "storage_chest"
+              ? "#fbbf24"
+              : b.kind === "wall"
+                ? "#71717a"
+                : b.kind.startsWith("turret")
+                  ? "#a78bfa"
+                  : b.kind === "door"
+                    ? "#fde68a"
+                    : "#22c55e";
         ctx.fillRect(x, y, sw, sh);
       }
 
@@ -2457,7 +2514,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         if (!p.container.visible) continue;
         const x = (p.data.x - selfX) * scale + cx;
         const y = (p.data.y - selfY) * scale + cy;
-        ctx.fillStyle = '#34d399';
+        ctx.fillStyle = "#34d399";
         ctx.beginPath();
         ctx.arc(x, y, 3, 0, Math.PI * 2);
         ctx.fill();
@@ -2466,29 +2523,30 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         if (!e.container.visible || e.data.hp <= 0) continue;
         const x = (e.data.x - selfX) * scale + cx;
         const y = (e.data.y - selfY) * scale + cy;
-        ctx.fillStyle = '#ef4444';
+        ctx.fillStyle = "#ef4444";
         ctx.beginPath();
         ctx.arc(x, y, 2.5, 0, Math.PI * 2);
         ctx.fill();
       }
 
       // Self — bright arrow at the centre.
-      ctx.fillStyle = '#fde047';
+      ctx.fillStyle = "#fde047";
       ctx.beginPath();
       ctx.arc(cx, cy, 4, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#000';
+      ctx.strokeStyle = "#000";
       ctx.lineWidth = 1;
       ctx.stroke();
 
       // Frame.
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
       ctx.lineWidth = 1;
       ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
     },
     nearbyPlayers(radiusPx: number) {
       const r2 = radiusPx * radiusPx;
-      const out: { characterId: string; displayName: string; dsq: number }[] = [];
+      const out: { characterId: string; displayName: string; dsq: number }[] =
+        [];
       for (const p of players.values()) {
         if (p.data.characterId === init.self.characterId) continue;
         const dx = p.data.x - selfX;
@@ -2534,14 +2592,14 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     destroy() {
       destroyed = true;
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("mouseup", onMouseUp);
       try {
         const canvas = app.canvas as HTMLCanvasElement;
-        canvas?.removeEventListener('mousemove', onMouseMove);
-        canvas?.removeEventListener('mousedown', onMouseDown);
-        canvas?.removeEventListener('contextmenu', onContextMenu);
+        canvas?.removeEventListener("mousemove", onMouseMove);
+        canvas?.removeEventListener("mousedown", onMouseDown);
+        canvas?.removeEventListener("contextmenu", onContextMenu);
         app.destroy(true, { children: true });
       } catch {
         // ignore
@@ -2552,7 +2610,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       loot.clear();
       corpses.clear();
       buildings.clear();
-      for (const it of interactables.values()) it.container.destroy({ children: true });
+      for (const it of interactables.values())
+        it.container.destroy({ children: true });
       interactables.clear();
     },
   };

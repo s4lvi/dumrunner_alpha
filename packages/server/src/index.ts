@@ -5,6 +5,7 @@ import {
   emptyEquipment,
   emptyInventory,
   addPart as invAddPart,
+  rollAttachmentInstance,
   type ClientMessage,
   type Equipment,
   type Inventory,
@@ -323,6 +324,90 @@ async function clearLastSeen(characterId: string): Promise<void> {
 //   4 — { schema:4, slots, equipment, hotbarSelection }: current.
 // Anything unrecognised returns null and the caller falls back to the
 // starter loadout.
+// Sprint C migration: pre-Sprint C saves stored attachments as
+// `{ kind: 'attachment'; defId; count }` (stackable) and weapon
+// pieces/mods as plain `{ id }` references. Walk the persisted
+// inventory and convert in-place so existing characters keep
+// their gear after the schema flip. Each old stack of N expands
+// into N separate AttachmentInstance slots, each rolled fresh
+// (consistent with how new content drops/crafts behave).
+function migrateLegacyAttachmentSlots(inv: Inventory): Inventory {
+  const out: Inventory = [];
+  for (const slot of inv) {
+    // Old shape leaks through as { kind: 'attachment'; defId; count }
+    // even though the type system says otherwise — defensive runtime
+    // sniffing is the only safe path here.
+    const s = slot as unknown as {
+      kind?: string;
+      defId?: string;
+      count?: number;
+      instance?: unknown;
+      weapon?: { pieces?: Record<string, unknown>; mods?: unknown[] };
+    };
+    if (s.kind === 'attachment' && s.instance === undefined && s.defId) {
+      const count = Math.max(1, Number(s.count ?? 1));
+      for (let i = 0; i < count; i++) {
+        out.push({
+          kind: 'attachment',
+          instance: rollAttachmentInstance(s.defId, 'Mk1'),
+        });
+      }
+      continue;
+    }
+    if (s.kind === 'weapon' && s.weapon) {
+      // Pieces: legacy { id } → AttachmentInstance.
+      const pieces = s.weapon.pieces ?? {};
+      for (const k of Object.keys(pieces)) {
+        const v = pieces[k] as unknown;
+        if (v && typeof v === 'object') {
+          const obj = v as { id?: string; defId?: string; rolls?: unknown };
+          if (obj.id && !obj.defId) {
+            (pieces as Record<string, unknown>)[k] = rollAttachmentInstance(
+              obj.id,
+              'Mk1'
+            );
+          }
+        }
+      }
+      // Mods: legacy [{ id }] → AttachmentInstance[].
+      if (Array.isArray(s.weapon.mods)) {
+        s.weapon.mods = s.weapon.mods.map((m) => {
+          const obj = m as { id?: string; defId?: string };
+          if (obj.id && !obj.defId) return rollAttachmentInstance(obj.id, 'Mk1');
+          return m;
+        });
+      }
+    }
+    out.push(slot);
+  }
+  // Fill any leftover length back out with empties (caller expects
+  // a fixed-size Inventory).
+  while (out.length < inv.length) out.push({ kind: 'empty' });
+  return out;
+}
+
+// Sprint C migration for equipment.appliedAttachments. Was string[]
+// of defIds; now AttachmentInstance[]. Mutates the equipment in
+// place — reads it through `unknown` so the new type doesn't fight
+// the migration.
+function migrateLegacyEquipmentAttachments(equipment: Equipment): void {
+  for (const slotKey of Object.keys(equipment) as Array<keyof Equipment>) {
+    const part = equipment[slotKey];
+    if (!part) continue;
+    const arr = part.appliedAttachments as unknown;
+    if (!Array.isArray(arr)) continue;
+    const out: unknown[] = [];
+    for (const entry of arr) {
+      if (typeof entry === 'string') {
+        out.push(rollAttachmentInstance(entry, 'Mk1'));
+      } else {
+        out.push(entry);
+      }
+    }
+    part.appliedAttachments = out as typeof part.appliedAttachments;
+  }
+}
+
 function parseInventoryJson(
   raw: unknown
 ): {
@@ -345,7 +430,9 @@ function parseInventoryJson(
       obj.equipment && typeof obj.equipment === 'object'
         ? (obj.equipment as Equipment)
         : undefined;
-    return { inventory: obj.slots as Inventory, hotbarSelection: sel, equipment };
+    const inventory = migrateLegacyAttachmentSlots(obj.slots as Inventory);
+    if (equipment) migrateLegacyEquipmentAttachments(equipment);
+    return { inventory, hotbarSelection: sel, equipment };
   }
   if (obj.schema === 3) {
     if (!Array.isArray(obj.slots)) return null;
