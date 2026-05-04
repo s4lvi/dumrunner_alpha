@@ -45,6 +45,9 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     stunDurationOnHitMs: 200,
     lootTable: [
       { materialId: 'scrap',    chance: 1.0,  min: 1, max: 3 },
+      // Wire is heavily demanded by recipes (16 references) but only
+      // dropped by drones today — chasers carry frayed cabling now too.
+      { materialId: 'wire',     chance: 0.45, min: 1, max: 2 },
       { materialId: 'biotic',   chance: 0.15, min: 1, max: 1 },
       { materialId: 'artifact', chance: 0.04, min: 1, max: 1 },
       { materialId: 'key',      chance: 0.02, min: 1, max: 1 },
@@ -77,8 +80,8 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     // Drones are mechanical — circuits + wiring, no biotic.
     lootTable: [
       { materialId: 'scrap',    chance: 0.8,  min: 1, max: 2 },
-      { materialId: 'wire',     chance: 0.6,  min: 1, max: 2 },
-      { materialId: 'circuit',  chance: 0.25, min: 1, max: 1 },
+      { materialId: 'wire',     chance: 0.85, min: 1, max: 3 },
+      { materialId: 'circuit',  chance: 0.45, min: 1, max: 2 },
       { materialId: 'artifact', chance: 0.05, min: 1, max: 1 },
       { materialId: 'key',      chance: 0.04, min: 1, max: 1 },
     ],
@@ -103,8 +106,11 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     fleeBelowHpRatio: null,
     stunDurationOnHitMs: 140,
     lootTable: [
-      { materialId: 'scrap',  chance: 0.8, min: 1, max: 2 },
-      { materialId: 'biotic', chance: 0.2, min: 1, max: 1 },
+      { materialId: 'scrap',  chance: 0.8,  min: 1, max: 2 },
+      // Swarmers chew on conduit; gives the alloy/circuit-light early
+      // game a wire trickle when they appear in packs.
+      { materialId: 'wire',   chance: 0.30, min: 1, max: 1 },
+      { materialId: 'biotic', chance: 0.2,  min: 1, max: 1 },
       { materialId: 'key',    chance: 0.02, min: 1, max: 1 },
     ],
     visual: { shape: 'triangle', color: 0xfb7185, size: 12 },
@@ -127,8 +133,8 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     stunDurationOnHitMs: 60,
     lootTable: [
       { materialId: 'scrap',    chance: 1.0,  min: 2, max: 4 },
-      { materialId: 'alloy',    chance: 0.85, min: 1, max: 3 },
-      { materialId: 'circuit',  chance: 0.25, min: 1, max: 1 },
+      { materialId: 'alloy',    chance: 0.95, min: 2, max: 4 },
+      { materialId: 'circuit',  chance: 0.55, min: 1, max: 2 },
       { materialId: 'artifact', chance: 0.09, min: 1, max: 1 },
       { materialId: 'key',      chance: 0.04, min: 1, max: 1 },
     ],
@@ -154,8 +160,9 @@ export const TEMPLATES: Record<string, EnemyTemplate> = {
     // alpha (boss-tier enemies will replace this once they ship).
     lootTable: [
       { materialId: 'scrap',    chance: 1.0,  min: 2, max: 4 },
-      { materialId: 'alloy',    chance: 0.7,  min: 1, max: 2 },
-      { materialId: 'crystal',  chance: 0.04, min: 1, max: 1 },
+      { materialId: 'alloy',    chance: 0.85, min: 1, max: 3 },
+      { materialId: 'circuit',  chance: 0.30, min: 1, max: 2 },
+      { materialId: 'crystal',  chance: 0.10, min: 1, max: 1 },
       { materialId: 'artifact', chance: 0.12, min: 1, max: 1 },
       { materialId: 'key',      chance: 0.06, min: 1, max: 1 },
     ],

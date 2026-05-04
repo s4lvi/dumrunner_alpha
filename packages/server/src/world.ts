@@ -455,6 +455,7 @@ export class World {
       lastFireAt: 0,
       reloadingUntil: 0,
       respawnAt: null,
+      respawnImmunityUntil: 0,
       dirty: false,
       inventoryDirty: false,
       lastStaminaSentAt: 0,
@@ -635,6 +636,15 @@ export class World {
     conn.hp = conn.maxHp;
     conn.stamina = conn.maxStamina;
     conn.shield = conn.maxShield;
+    // 2s damage immunity covers both the case where the safe-tile
+    // search couldn't find anywhere clean (whole arena swarmed) and
+    // the few frames between teleport and the player taking input.
+    conn.respawnImmunityUntil = Date.now() + 2000;
+
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    const safe = surface
+      ? surface.findSafeSpawnNear(SURFACE_ENTRANCE_X, SURFACE_ENTRANCE_Y)
+      : { x: SURFACE_ENTRANCE_X, y: SURFACE_ENTRANCE_Y };
 
     // Full-loot extraction: respawning naked is the point. Inventory was
     // already cleared into a corpse on death (see Scene.killPlayer) — don't
@@ -642,11 +652,10 @@ export class World {
     if (conn.sceneId === SURFACE_SCENE_ID) {
       // Already on surface (e.g. died on surface) — just teleport to the
       // entrance and broadcast a respawn event without a scene swap.
-      conn.x = SURFACE_ENTRANCE_X;
-      conn.y = SURFACE_ENTRANCE_Y;
+      conn.x = safe.x;
+      conn.y = safe.y;
       conn.dirty = true;
-      const scene = this.scenes.get(SURFACE_SCENE_ID);
-      scene?.broadcast({
+      surface?.broadcast({
         type: 'player_respawned',
         characterId: conn.characterId,
         x: conn.x,
@@ -661,12 +670,7 @@ export class World {
       return;
     }
     // Cross-scene respawn: full transition handles broadcasts + state swap.
-    this.transition(
-      characterId,
-      SURFACE_SCENE_ID,
-      SURFACE_ENTRANCE_X,
-      SURFACE_ENTRANCE_Y
-    );
+    this.transition(characterId, SURFACE_SCENE_ID, safe.x, safe.y);
   }
 
   // Called by Scene when a player walks onto an interactable. Owns the
@@ -683,12 +687,13 @@ export class World {
 
     if (kind === 'extract_pad') {
       // Always lands at the surface entrance (near the stairs).
-      this.transition(
-        characterId,
-        SURFACE_SCENE_ID,
-        SURFACE_ENTRANCE_X,
-        SURFACE_ENTRANCE_Y
-      );
+      // Pick a safe tile so a wall built on top of the canonical
+      // entrance doesn't trap the returning player.
+      const surface = this.scenes.get(SURFACE_SCENE_ID);
+      const safe = surface
+        ? surface.findSafeSpawnNear(SURFACE_ENTRANCE_X, SURFACE_ENTRANCE_Y)
+        : { x: SURFACE_ENTRANCE_X, y: SURFACE_ENTRANCE_Y };
+      this.transition(characterId, SURFACE_SCENE_ID, safe.x, safe.y);
       return;
     }
 

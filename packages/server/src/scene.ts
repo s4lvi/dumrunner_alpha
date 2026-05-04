@@ -127,6 +127,10 @@ export interface SceneConnection {
   // reloading. Fire is locked while now < reloadingUntil.
   reloadingUntil: number;
   respawnAt: number | null;
+  // Damage immunity window after respawn so a player doesn't get
+  // re-killed by enemies clustered around the spawn point. Set in
+  // World.respawnPlayerToSurface; checked in applyDamage.
+  respawnImmunityUntil: number;
   lastStaminaSentAt: number;
   lastShieldSentAt: number;
   lastStaminaSent: number;
@@ -1838,6 +1842,9 @@ export class Scene {
   // resulting hp+shield to everyone in the scene (everyone needs to see HP
   // updates; shield is sent alongside since the wire shape carries both).
   private applyDamage(conn: SceneConnection, amount: number, now: number): void {
+    // Respawn-immunity grace window so a player who lands in a hot
+    // surface doesn't get instantly re-killed before they can move.
+    if (now < conn.respawnImmunityUntil) return;
     let remaining = amount;
     if (conn.shield > 0) {
       const absorbed = Math.min(conn.shield, remaining);
@@ -1858,6 +1865,80 @@ export class Scene {
       shield: conn.shield,
       maxShield: conn.maxShield,
     });
+  }
+
+  // Find a clear, enemy-free tile near a preferred pixel point, used
+  // by spawn / respawn / extract-return so the player doesn't land
+  // inside a wall or in the middle of a horde. Returns the *centre*
+  // of an open tile in pixel coords. Walks outward in a square ring
+  // pattern (BFS-ish but cheaper); falls back to the preferred point
+  // if nothing safe is found within `maxRingTiles` rings.
+  //
+  // - "Clear" = no building footprint occupies the tile.
+  // - "Safe" = no living enemy within `enemyClearRadiusPx`.
+  // - The surface scene has no walkable bounds, so any tile is
+  //   geometrically valid; this only matters for buildings + enemies.
+  findSafeSpawnNear(
+    preferredX: number,
+    preferredY: number,
+    enemyClearRadiusPx = 5 * 32,
+    maxRingTiles = 12
+  ): { x: number; y: number } {
+    const tileSize = this.layout?.tileSize ?? 32;
+    const px = Math.floor(preferredX / tileSize);
+    const py = Math.floor(preferredY / tileSize);
+
+    const buildingTiles = new Set<string>();
+    for (const b of this.buildings.values()) {
+      for (let dy = 0; dy < b.height; dy++) {
+        for (let dx = 0; dx < b.width; dx++) {
+          buildingTiles.add(`${b.tileX + dx},${b.tileY + dy}`);
+        }
+      }
+    }
+    const clearR2 = enemyClearRadiusPx * enemyClearRadiusPx;
+    const enemies = [...this.enemies.values()].filter((e) => e.alive);
+
+    const checkTile = (tx: number, ty: number): { x: number; y: number } | null => {
+      if (buildingTiles.has(`${tx},${ty}`)) return null;
+      const cx = (tx + 0.5) * tileSize;
+      const cy = (ty + 0.5) * tileSize;
+      for (const e of enemies) {
+        const ex = e.x - cx;
+        const ey = e.y - cy;
+        if (ex * ex + ey * ey < clearR2) return null;
+      }
+      return { x: cx, y: cy };
+    };
+
+    // Ring 0 — preferred tile itself.
+    const at = checkTile(px, py);
+    if (at) return at;
+
+    // Spiral outward by rings.
+    for (let r = 1; r <= maxRingTiles; r++) {
+      // Top + bottom edges of the ring.
+      for (let dx = -r; dx <= r; dx++) {
+        const top = checkTile(px + dx, py - r);
+        if (top) return top;
+        const bot = checkTile(px + dx, py + r);
+        if (bot) return bot;
+      }
+      // Left + right edges (excluding corners already covered).
+      for (let dy = -r + 1; dy <= r - 1; dy++) {
+        const left = checkTile(px - r, py + dy);
+        if (left) return left;
+        const right = checkTile(px + r, py + dy);
+        if (right) return right;
+      }
+    }
+    // Whole ring search exhausted (very unlikely on the surface) —
+    // fall back to the preferred tile centre. Caller can always
+    // hand out respawn immunity to compensate.
+    return {
+      x: (px + 0.5) * tileSize,
+      y: (py + 0.5) * tileSize,
+    };
   }
 
   // Public entry for World-driven kills (Power Link severance, future

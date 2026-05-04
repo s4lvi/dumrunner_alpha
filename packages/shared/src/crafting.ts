@@ -89,7 +89,10 @@ export const RECIPES: Record<string, Recipe> = {
     name: 'Storage Chest',
     inputs: [
       { kind: 'material', materialId: 'scrap', count: 15 },
-      { kind: 'material', materialId: 'alloy', count: 4 },
+      // Wire is now common-tier (drops from chasers + drones + swarmers
+      // post-rebalance), so a brand-new player can craft a chest after
+      // a single early dungeon clear instead of needing armored loot.
+      { kind: 'material', materialId: 'wire', count: 6 },
     ],
     output: { kind: 'placeable', buildingKind: 'storage_chest', count: 1 },
     // Hand-craftable — no station required so a brand-new player
