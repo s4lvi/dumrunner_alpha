@@ -1030,6 +1030,83 @@ export function addPart(inv: Inventory, part: CarriedPart): boolean {
 
 // Adds count to an existing material stack, or to a new empty slot. Returns
 // the leftover that didn't fit (when inventory is full).
+// Pull a slot's contents out of the inventory and return them as a
+// detached InventorySlot value. `all=true` empties the slot wholesale;
+// `all=false` decrements stackable kinds by 1 (or empties non-stackables).
+// Returns null if the slot is empty. Mirrors discardSlot's count
+// semantics so drop/give and discard behave identically.
+export function takeFromSlot(
+  inv: Inventory,
+  slot: number,
+  all: boolean
+): InventorySlot | null {
+  if (slot < 0 || slot >= inv.length) return null;
+  const s = inv[slot];
+  if (s.kind === 'empty') return null;
+
+  const isStackable =
+    s.kind === 'material' ||
+    s.kind === 'ammo' ||
+    s.kind === 'placeable' ||
+    s.kind === 'attachment' ||
+    s.kind === 'consumable';
+
+  if (!all && isStackable && (s as { count: number }).count > 1) {
+    (s as { count: number }).count -= 1;
+    if (s.kind === 'material') {
+      return { kind: 'material', materialId: s.materialId, count: 1 };
+    }
+    if (s.kind === 'ammo') {
+      return { kind: 'ammo', ammoId: s.ammoId, count: 1 };
+    }
+    if (s.kind === 'placeable') {
+      return { kind: 'placeable', buildingKind: s.buildingKind, count: 1 };
+    }
+    if (s.kind === 'attachment') {
+      return { kind: 'attachment', defId: s.defId, count: 1 };
+    }
+    if (s.kind === 'consumable') {
+      return { kind: 'consumable', consumableId: s.consumableId, count: 1 };
+    }
+  }
+
+  // Take the whole slot; clone the value before clearing so callers
+  // hold their own copy.
+  const taken: InventorySlot = JSON.parse(JSON.stringify(s));
+  inv[slot] = { kind: 'empty' };
+  return taken;
+}
+
+// Generic dispatcher for "place this slot into the inventory" —
+// routes to the right add* helper by kind. Used by ground-loot
+// pickup of dropped slots and give-to-player transfers. Returns
+// true if anything landed; for stackable kinds with leftover, the
+// caller is responsible for re-spawning the leftover (the underlying
+// helpers report leftovers individually).
+export function addInventorySlotToInventory(
+  inv: Inventory,
+  slot: InventorySlot
+): boolean {
+  switch (slot.kind) {
+    case 'empty':
+      return false;
+    case 'material':
+      return addMaterial(inv, slot.materialId, slot.count) < slot.count;
+    case 'ammo':
+      return addAmmo(inv, slot.ammoId, slot.count) < slot.count;
+    case 'placeable':
+      return addPlaceable(inv, slot.buildingKind, slot.count) < slot.count;
+    case 'weapon':
+      return addWeapon(inv, slot.weapon);
+    case 'attachment':
+      return addAttachment(inv, slot.defId, slot.count);
+    case 'consumable':
+      return addConsumable(inv, slot.consumableId, slot.count);
+    case 'part':
+      return addPart(inv, slot.part);
+  }
+}
+
 export function addMaterial(
   inv: Inventory,
   materialId: MaterialKind,

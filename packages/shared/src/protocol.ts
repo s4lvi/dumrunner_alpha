@@ -64,11 +64,16 @@ export type CarriedPart = {
 
 // Loot on the ground. Discriminated by `content.kind`:
 //   - 'part'     : a CarriedPart (legacy enemy-drop behaviour).
-//   - 'material' : a stack of a MaterialKind (new: scavenged components).
+//   - 'material' : a stack of a MaterialKind (scavenged components).
+//   - 'slot'     : a generic dropped inventory slot — used for the
+//                  "drop item from your bag" action so weapons,
+//                  consumables, attachments, etc. can land on the
+//                  ground without inventing a new variant for each.
 // New variants slot in here; the client renders by `content.kind`.
 export type LootContent =
   | { kind: 'part'; part: CarriedPart }
-  | { kind: 'material'; materialId: MaterialKind; count: number };
+  | { kind: 'material'; materialId: MaterialKind; count: number }
+  | { kind: 'slot'; slot: InventorySlot };
 
 export type LootState = {
   id: string;
@@ -494,6 +499,26 @@ export const ReloadWeaponMsgSchema = z.object({
   type: z.literal('reload_weapon'),
 });
 
+// Drop a slot's contents on the ground at the player's current
+// position. `all` = drop the whole stack; otherwise drop a single
+// unit (matches the inventory_discard semantics).
+export const InventoryDropMsgSchema = z.object({
+  type: z.literal('inventory_drop'),
+  slot: slotIndex,
+  all: z.boolean(),
+});
+
+// Hand a slot's contents to a nearby player. Server validates
+// proximity (within crafting station range), copies the slot into
+// the recipient's first available stackable/empty slot, clears
+// the source. Same `all` semantics as drop.
+export const GiveItemMsgSchema = z.object({
+  type: z.literal('give_item'),
+  targetCharacterId: z.string().min(1).max(64),
+  slot: slotIndex,
+  all: z.boolean(),
+});
+
 // Owner-only: pause the server. Server validates the requester is
 // the owner, persists state, broadcasts 'server_paused' to all
 // connections, closes them, and exits. Lobby browser shows the
@@ -546,6 +571,8 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   ChatMsgSchema,
   PauseServerMsgSchema,
   StorageMoveMsgSchema,
+  InventoryDropMsgSchema,
+  GiveItemMsgSchema,
 ]);
 
 
@@ -725,4 +752,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 29;
+export const PROTOCOL_VERSION = 30;

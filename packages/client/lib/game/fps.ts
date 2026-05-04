@@ -861,10 +861,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       pushSprite(c.x, c.y, CORPSE_COLOR, CORPSE_SIZE);
     }
     for (const l of loot.values()) {
-      const color =
-        l.content.kind === 'material'
-          ? materialTint(l.content.materialId)
-          : (TIER_COLORS_NUM[l.content.part.tier] ?? 0xffffff);
+      let color: number;
+      if (l.content.kind === 'material') {
+        color = materialTint(l.content.materialId);
+      } else if (l.content.kind === 'part') {
+        color = TIER_COLORS_NUM[l.content.part.tier] ?? 0xffffff;
+      } else {
+        // Player-dropped slot — generic amber pouch sprite.
+        color = 0xfbbf24;
+      }
       // Loot sits on the floor — small height.
       pushSprite(l.x, l.y, color, 14);
     }
@@ -1269,6 +1274,28 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     swapScene(state) {
       applySceneState(state);
+    },
+    nearbyPlayers(radiusPx: number) {
+      const r2 = radiusPx * radiusPx;
+      const out: { characterId: string; displayName: string; dsq: number }[] = [];
+      for (const p of players.values()) {
+        if (p.characterId === init.self.characterId) continue;
+        const dx = p.x - selfX;
+        const dy = p.y - selfY;
+        const dsq = dx * dx + dy * dy;
+        if (dsq <= r2) {
+          out.push({
+            characterId: p.characterId,
+            displayName: p.displayName,
+            dsq,
+          });
+        }
+      }
+      out.sort((a, b) => a.dsq - b.dsq);
+      return out.map((o) => ({
+        characterId: o.characterId,
+        displayName: o.displayName,
+      }));
     },
     currentSceneState(): SceneState {
       const self = players.get(init.self.characterId);

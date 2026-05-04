@@ -31,6 +31,7 @@ import {
   addAmmo,
   addAttachment,
   addConsumable,
+  addInventorySlotToInventory,
   addMaterial,
   addPart,
   addPlaceable,
@@ -1867,6 +1868,27 @@ export class Scene {
     });
   }
 
+  // Drop an inventory slot on the ground at the given position.
+  // Wraps the slot in a 'slot'-variant LootRuntime so the existing
+  // pickup loop sees it; small jitter spreads multiple drops out.
+  spawnDroppedSlot(
+    x: number,
+    y: number,
+    slot: import('@dumrunner/shared').InventorySlot
+  ): void {
+    if (slot.kind === 'empty') return;
+    const id = `ld${nextLootCounter()}`;
+    const lr: LootRuntime = {
+      id,
+      content: { kind: 'slot', slot },
+      x: x + (Math.random() - 0.5) * 16,
+      y: y + (Math.random() - 0.5) * 16,
+      expiresAt: Date.now() + COMBAT.LOOT_TTL_MS,
+    };
+    this.loot.set(id, lr);
+    this.broadcast({ type: 'loot_spawned', loot: toLootState(lr) });
+  }
+
   // Find a clear, enemy-free tile near a preferred pixel point, used
   // by spawn / respawn / extract-return so the player doesn't land
   // inside a wall or in the middle of a horde. Returns the *centre*
@@ -2034,6 +2056,8 @@ export class Scene {
       let placed = false;
       if (lr.content.kind === 'part') {
         placed = addPart(closest.inventory, lr.content.part);
+      } else if (lr.content.kind === 'slot') {
+        placed = addInventorySlotToInventory(closest.inventory, lr.content.slot);
       } else {
         // Material stacks merge into existing slots; leftover stays on the
         // ground so a near-full inventory still scoops what it can next pass.

@@ -122,6 +122,13 @@ export type GameHandle = {
   // Snapshot of the renderer's current scene state. Used by the host to
   // hot-swap renderers (FPS ↔ top-down) without losing position / entities.
   currentSceneState(): SceneState;
+  // Other players within `radiusPx` of the local player, sorted by
+  // distance. Used by the inventory slot menu to populate a "Give
+  // to…" submenu without the host needing to track positions itself.
+  nearbyPlayers(radiusPx: number): {
+    characterId: string;
+    displayName: string;
+  }[];
   destroy(): void;
 };
 
@@ -1415,6 +1422,23 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     corpses.set(c.id, { data: { ...c }, container });
   }
 
+  // Cheap label for player-dropped slot loot so a near-walker can
+  // tell what's on the ground without picking it up. Mirrors the
+  // outputSlotLabel formatting in Game.tsx loosely; we don't pull
+  // attachment / weapon display name helpers here to keep the
+  // renderer free of inventory.ts dependency.
+  function droppedSlotLabel(s: import('@dumrunner/shared').InventorySlot): string | null {
+    if (s.kind === 'empty') return null;
+    if (s.kind === 'material') return `${s.count}× ${s.materialId}`;
+    if (s.kind === 'ammo') return `${s.count}× ${s.ammoId}`;
+    if (s.kind === 'placeable') return `${s.count}× ${s.buildingKind}`;
+    if (s.kind === 'attachment') return `${s.count}× mod`;
+    if (s.kind === 'consumable') return `${s.count}× ${s.consumableId}`;
+    if (s.kind === 'weapon') return s.weapon.weaponId;
+    if (s.kind === 'part') return s.part.slot;
+    return null;
+  }
+
   function addLoot(l: LootState) {
     if (loot.has(l.id)) return;
 
@@ -1439,7 +1463,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         .lineTo(-s, 0)
         .closePath()
         .stroke({ color: 0x000000, width: 1.5 });
-    } else {
+    } else if (l.content.kind === 'material') {
       // Material pile — squarish nugget tinted by material color, count
       // shown as a small label so 1 vs 12 reads at a glance.
       const def = materialTint(l.content.materialId);
@@ -1461,6 +1485,32 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       label.anchor.set(0.5, 0);
       label.position.set(0, 8);
       container.addChild(label);
+    } else if (l.content.kind === 'slot') {
+      // Player-dropped slot. We don't have per-kind sprites for every
+      // possible slot variant, so render a generic amber pouch + a
+      // short label so the picker can tell what they're walking onto.
+      const inner = l.content.slot;
+      body
+        .circle(0, 0, 8)
+        .fill({ color: 0xfbbf24 })
+        .circle(0, 0, 8)
+        .stroke({ color: 0x78350f, width: 1.5 });
+      container.addChild(body);
+      const lbl = droppedSlotLabel(inner);
+      if (lbl) {
+        const label = new Text({
+          text: lbl,
+          style: {
+            fill: 0xffffff,
+            fontSize: 10,
+            fontFamily: 'system-ui, sans-serif',
+            stroke: { color: 0x000000, width: 3 },
+          },
+        });
+        label.anchor.set(0.5, 0);
+        label.position.set(0, 10);
+        container.addChild(label);
+      }
     }
     if (container.children.length === 0) container.addChild(body);
 
@@ -2337,6 +2387,28 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         // Build mode is surface-only; if the new scene has no grid, exit it.
         if ((state.layout?.tileSize ?? 0) <= 0) buildKind = null;
       });
+    },
+    nearbyPlayers(radiusPx: number) {
+      const r2 = radiusPx * radiusPx;
+      const out: { characterId: string; displayName: string; dsq: number }[] = [];
+      for (const p of players.values()) {
+        if (p.data.characterId === init.self.characterId) continue;
+        const dx = p.data.x - selfX;
+        const dy = p.data.y - selfY;
+        const dsq = dx * dx + dy * dy;
+        if (dsq <= r2) {
+          out.push({
+            characterId: p.data.characterId,
+            displayName: p.data.displayName,
+            dsq,
+          });
+        }
+      }
+      out.sort((a, b) => a.dsq - b.dsq);
+      return out.map((o) => ({
+        characterId: o.characterId,
+        displayName: o.displayName,
+      }));
     },
     currentSceneState(): SceneState {
       // Snapshot all entities for hot-swapping into the FPS renderer (or

@@ -24,12 +24,14 @@ import type {
 import {
   HOTBAR_SIZE,
   INVENTORY_SIZE,
+  addInventorySlotToInventory,
   resizeInventory,
   swapSlots,
   discardSlot,
   sortBag,
   isSuitPart,
   findEmptySlot,
+  takeFromSlot,
   addAttachment,
   addMaterial,
   addRecipeOutputToInventory,
@@ -839,6 +841,77 @@ export class World {
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',
       inventory: conn.inventory,
+    });
+  }
+
+  // Drop a slot's contents on the ground at the player's feet. Spawns
+  // a 'slot' variant LootRuntime; the existing pickup loop picks it
+  // up via addInventorySlotToInventory. all=false drops a single unit
+  // (matches inventory_discard semantics).
+  handleInventoryDrop(characterId: string, slot: number, all: boolean): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (slot < 0 || slot >= conn.inventory.length) return;
+    const src = conn.inventory[slot];
+    if (src.kind === 'empty') return;
+
+    const dropped = takeFromSlot(conn.inventory, slot, all);
+    if (!dropped) return;
+    const scene = this.scenes.get(conn.sceneId);
+    scene?.spawnDroppedSlot(conn.x, conn.y, dropped);
+
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Transfer a slot from one player to a nearby player. Proximity
+  // check uses the same crafting-station radius. Stack-merging on
+  // arrival handled by the dispatcher; if the recipient's bag has
+  // no room, the give silently fails (no partial transfer).
+  handleGiveItem(
+    characterId: string,
+    targetCharacterId: string,
+    slot: number,
+    all: boolean
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const target = this.connections.get(targetCharacterId);
+    if (!target) return;
+    if (target.sceneId !== conn.sceneId) return;
+    const dx = target.x - conn.x;
+    const dy = target.y - conn.y;
+    if (dx * dx + dy * dy > COMBAT.CRAFT_STATION_RANGE_PX * COMBAT.CRAFT_STATION_RANGE_PX) {
+      this.sendDirect(conn.ws, { type: 'error', message: 'give_too_far' });
+      return;
+    }
+
+    if (slot < 0 || slot >= conn.inventory.length) return;
+    const src = conn.inventory[slot];
+    if (src.kind === 'empty') return;
+
+    const taken = takeFromSlot(conn.inventory, slot, all);
+    if (!taken) return;
+    const placed = addInventorySlotToInventory(target.inventory, taken);
+    if (!placed) {
+      // Recipient was full — refund the source.
+      addInventorySlotToInventory(conn.inventory, taken);
+      this.sendDirect(conn.ws, { type: 'error', message: 'recipient_inventory_full' });
+      return;
+    }
+
+    conn.inventoryDirty = true;
+    target.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+    this.sendDirect(target.ws, {
+      type: 'inventory_changed',
+      inventory: target.inventory,
     });
   }
 

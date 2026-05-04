@@ -1382,8 +1382,43 @@ export function Game({ serverId }: { serverId: string }) {
             slot={inventory[slotMenu.slot]}
             x={slotMenu.x}
             y={slotMenu.y}
+            nearbyPlayers={gameRef.current?.nearbyPlayers(96) ?? []}
             onUse={() => {
               sendOnLiveWs({ type: 'use_consumable', slot: slotMenu.slot });
+              setSlotMenu(null);
+            }}
+            onDropOne={() => {
+              sendOnLiveWs({
+                type: 'inventory_drop',
+                slot: slotMenu.slot,
+                all: false,
+              });
+              setSlotMenu(null);
+            }}
+            onDropAll={() => {
+              sendOnLiveWs({
+                type: 'inventory_drop',
+                slot: slotMenu.slot,
+                all: true,
+              });
+              setSlotMenu(null);
+            }}
+            onGiveOne={(targetCharacterId) => {
+              sendOnLiveWs({
+                type: 'give_item',
+                targetCharacterId,
+                slot: slotMenu.slot,
+                all: false,
+              });
+              setSlotMenu(null);
+            }}
+            onGiveAll={(targetCharacterId) => {
+              sendOnLiveWs({
+                type: 'give_item',
+                targetCharacterId,
+                slot: slotMenu.slot,
+                all: true,
+              });
               setSlotMenu(null);
             }}
             onDiscardOne={() => {
@@ -3962,7 +3997,12 @@ function SlotContextMenu({
   slot,
   x,
   y,
+  nearbyPlayers,
   onUse,
+  onDropOne,
+  onDropAll,
+  onGiveOne,
+  onGiveAll,
   onDiscardOne,
   onDiscardAll,
   onClose,
@@ -3970,7 +4010,12 @@ function SlotContextMenu({
   slot: InventorySlot;
   x: number;
   y: number;
+  nearbyPlayers: { characterId: string; displayName: string }[];
   onUse: () => void;
+  onDropOne: () => void;
+  onDropAll: () => void;
+  onGiveOne: (targetCharacterId: string) => void;
+  onGiveAll: (targetCharacterId: string) => void;
   onDiscardOne: () => void;
   onDiscardAll: () => void;
   onClose: () => void;
@@ -3979,14 +4024,16 @@ function SlotContextMenu({
     slot.kind === 'material' ||
     slot.kind === 'ammo' ||
     slot.kind === 'consumable' ||
-    slot.kind === 'attachment';
+    slot.kind === 'attachment' ||
+    slot.kind === 'placeable';
   const count = stackable ? slot.count : 1;
   const isConsumable = slot.kind === 'consumable';
+  const [giveOpen, setGiveOpen] = useState(false);
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div
-        className="fixed z-50 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded shadow-lg text-xs min-w-[140px]"
+        className="fixed z-50 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded shadow-lg text-xs min-w-[160px]"
         style={{ left: x, top: y }}
       >
         {isConsumable && (
@@ -4000,6 +4047,50 @@ function SlotContextMenu({
         {stackable && count > 1 && (
           <button
             className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)]"
+            onClick={onDropOne}
+          >
+            Drop 1
+          </button>
+        )}
+        <button
+          className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)] text-amber-300"
+          onClick={onDropAll}
+        >
+          {stackable && count > 1 ? `Drop all (${count})` : 'Drop'}
+        </button>
+        {nearbyPlayers.length > 0 && (
+          <button
+            className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)]"
+            onClick={() => setGiveOpen((v) => !v)}
+          >
+            Give to… {giveOpen ? '▾' : '▸'}
+          </button>
+        )}
+        {giveOpen &&
+          nearbyPlayers.map((p) => (
+            <div key={p.characterId} className="border-t border-[color:var(--panel-border)]">
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500">
+                {p.displayName}
+              </div>
+              {stackable && count > 1 && (
+                <button
+                  className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)]"
+                  onClick={() => onGiveOne(p.characterId)}
+                >
+                  Give 1
+                </button>
+              )}
+              <button
+                className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)]"
+                onClick={() => onGiveAll(p.characterId)}
+              >
+                {stackable && count > 1 ? `Give all (${count})` : 'Give'}
+              </button>
+            </div>
+          ))}
+        {stackable && count > 1 && (
+          <button
+            className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)] border-t border-[color:var(--panel-border)]"
             onClick={onDiscardOne}
           >
             Discard 1

@@ -85,6 +85,9 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
       m.toKind,
       m.toIdx
     ),
+  inventory_drop: (w, c, m) => w.handleInventoryDrop(c, m.slot, m.all),
+  give_item: (w, c, m) =>
+    w.handleGiveItem(c, m.targetCharacterId, m.slot, m.all),
 };
 
 const wss = new WebSocketServer({ port: env.port, host: env.host });
