@@ -246,6 +246,7 @@ function SetupForm({
       const seedRaw = String(fd.get('world_seed') ?? '').trim();
       const drop_items_on_death =
         String(fd.get('drop_items_on_death') ?? 'on') === 'on';
+      const is_playtest = String(fd.get('is_playtest') ?? '') === 'on';
 
       if (name.length < 1 || name.length > 64) {
         setFormError('Server name must be 1–64 characters.');
@@ -287,6 +288,7 @@ function SetupForm({
         day_duration_sec,
         days_per_cycle,
         drop_items_on_death,
+        is_playtest,
       };
     }
 
@@ -396,6 +398,10 @@ function SetupForm({
               <label className="flex items-center gap-2 mt-3 text-sm">
                 <input type="checkbox" name="drop_items_on_death" defaultChecked />
                 <span>Drop bag contents on death</span>
+              </label>
+              <label className="flex items-center gap-2 mt-2 text-sm">
+                <input type="checkbox" name="is_playtest" />
+                <span>Playtest server (debug starter inventory)</span>
               </label>
             </div>
           </>

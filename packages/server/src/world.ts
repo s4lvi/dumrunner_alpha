@@ -230,13 +230,22 @@ export class World {
     dayDurationMs: number;
     daysPerCycle: number;
     dropItemsOnDeath: boolean;
+    isPlaytest: boolean;
   } = {
     dayDurationMs: 300_000,
     daysPerCycle: 3,
     dropItemsOnDeath: true,
+    isPlaytest: false,
   };
   // Owner accountId from the servers row. Pause is gated to this id.
   private ownerAccountId: string | null = null;
+
+  // Whether this world was created as a playtest server. Drives the
+  // starter inventory variant (every material/ammo + sample
+  // attachments) and unlocks every blueprint in the catalog up front.
+  isPlaytest(): boolean {
+    return this.worldConfig.isPlaytest;
+  }
   // Monotonic FIFO counter for craft-job queue ordering. Bumped on
   // every enqueue; queued jobs at the same station promote in
   // ascending queueIndex order.
@@ -319,7 +328,7 @@ export class World {
       const { data: serverRow } = await supabase
         .from('servers')
         .select(
-          'world_seed, day_duration_sec, days_per_cycle, drop_items_on_death, owner_id'
+          'world_seed, day_duration_sec, days_per_cycle, drop_items_on_death, owner_id, is_playtest'
         )
         .eq('id', this.serverId)
         .maybeSingle();
@@ -337,6 +346,7 @@ export class World {
           (serverRow?.day_duration_sec ?? 300) * 1000,
         daysPerCycle: serverRow?.days_per_cycle ?? 3,
         dropItemsOnDeath: serverRow?.drop_items_on_death ?? true,
+        isPlaytest: serverRow?.is_playtest ?? false,
       };
     }
 
@@ -476,8 +486,12 @@ export class World {
       interactCooldownUntil: Date.now() + TRANSITION_COOLDOWN_MS,
       // Alpha grant: every fresh cycle hands out the turret blueprint so
       // there's a complete crafting loop to test. Replace with the artifact
-      // uplink trade store once that ships.
-      knownBlueprints: new Set<string>(STARTER_BLUEPRINTS),
+      // uplink trade store once that ships. Playtest servers grant the
+      // entire blueprint catalog up front so contributors can exercise
+      // every recipe without grinding artifacts.
+      knownBlueprints: this.worldConfig.isPlaytest
+        ? new Set<string>(Object.keys(BLUEPRINT_CATALOG))
+        : new Set<string>(STARTER_BLUEPRINTS),
       persistentBlueprints: new Set<string>(),
     };
     this.connections.set(player.characterId, conn);

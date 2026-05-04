@@ -13,7 +13,10 @@ import {
   type Player,
 } from '@dumrunner/shared';
 import { verifyJoinToken } from '@dumrunner/shared/token';
-import { buildStarterInventory } from './starter.js';
+import {
+  buildPlaytestInventory,
+  buildStarterInventory,
+} from './starter.js';
 import { env } from './env.js';
 import { supabase } from './supabase.js';
 import { registry } from './registry.js';
@@ -227,9 +230,14 @@ wss.on('connection', (ws: WebSocket) => {
       };
 
       const loaded = parseInventoryJson(characterRow.inventory);
-      const inventory = loaded?.inventory ?? buildStarterInventory();
-      const equipment = loaded?.equipment ?? emptyEquipment();
+      // Reorder so the world hydrates before we pick the starter
+      // loadout — that way playtest servers can hand out the bigger
+      // debug bag without re-querying the row.
       const world = await registry.getOrCreate(serverId);
+      const inventory =
+        loaded?.inventory ??
+        (world.isPlaytest() ? buildPlaytestInventory() : buildStarterInventory());
+      const equipment = loaded?.equipment ?? emptyEquipment();
       world.add(ws, player, inventory, equipment);
       if (loaded?.hotbarSelection !== undefined) {
         world.handleSelectHotbar(player.characterId, loaded.hotbarSelection);

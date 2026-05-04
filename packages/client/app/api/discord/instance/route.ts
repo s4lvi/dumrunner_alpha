@@ -23,6 +23,7 @@ type ServerConfig = {
   day_duration_sec?: number;
   days_per_cycle?: number;
   drop_items_on_death?: boolean;
+  is_playtest?: boolean;
 };
 
 type PostBody = {
@@ -55,7 +56,7 @@ function validateServerConfig(
   raw: ServerConfig | undefined
 ): { name: string; max_slots: number; world_seed: number | null;
      day_duration_sec: number; days_per_cycle: number;
-     drop_items_on_death: boolean } | { error: string } {
+     drop_items_on_death: boolean; is_playtest: boolean } | { error: string } {
   if (!raw) return { error: 'server_config_required' };
   const name = (raw.name ?? '').trim();
   if (name.length < 1 || name.length > 64) return { error: 'name_length' };
@@ -92,6 +93,7 @@ function validateServerConfig(
     day_duration_sec,
     days_per_cycle,
     drop_items_on_death: raw.drop_items_on_death !== false,
+    is_playtest: raw.is_playtest === true,
   };
 }
 
@@ -207,6 +209,7 @@ export async function POST(request: NextRequest) {
       day_duration_sec: cfg.day_duration_sec,
       days_per_cycle: cfg.days_per_cycle,
       drop_items_on_death: cfg.drop_items_on_death,
+      is_playtest: cfg.is_playtest,
       discord_instance_id: instanceId,
     })
     .select('id')

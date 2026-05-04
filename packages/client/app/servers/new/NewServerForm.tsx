@@ -114,6 +114,16 @@ export function NewServerForm({ defaultName = '' }: { defaultName?: string }) {
           Off = items stay with you on respawn. Equipped suit gear always
           stays regardless.
         </p>
+        <label className="flex items-center gap-2 mt-3 text-sm">
+          <input type="checkbox" name="is_playtest" />
+          <span>Playtest server (debug starter inventory + all blueprints)</span>
+        </label>
+        <p className="text-[11px] text-zinc-500 mt-1">
+          Spawns every new character with bulk materials, every ammo
+          kind, sample attachments of every class, all consumables, and
+          unlocks the entire blueprint catalogue. For testing recipes
+          and weapon builds without grinding.
+        </p>
       </div>
 
       {state?.error && <p className="text-sm text-red-400">{state.error}</p>}

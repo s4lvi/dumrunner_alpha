@@ -19,6 +19,7 @@ export async function createServerAction(
   const daysPerCycle = Number(formData.get('days_per_cycle') ?? 3);
   const dropItemsOnDeath =
     String(formData.get('drop_items_on_death') ?? 'on') === 'on';
+  const isPlaytest = String(formData.get('is_playtest') ?? '') === 'on';
 
   if (!name || name.length < 1 || name.length > 64) {
     return { error: 'Server name must be 1–64 characters.' };
@@ -68,6 +69,7 @@ export async function createServerAction(
       day_duration_sec: dayDurationSec,
       days_per_cycle: daysPerCycle,
       drop_items_on_death: dropItemsOnDeath,
+      is_playtest: isPlaytest,
     })
     .select('id')
     .single();
