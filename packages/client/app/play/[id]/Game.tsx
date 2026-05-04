@@ -123,6 +123,20 @@ export function Game({ serverId }: { serverId: string }) {
   const [activeEffects, setActiveEffects] = useState<
     import('@dumrunner/shared').PlayerEffect[]
   >([]);
+  // Minimap toggle. Defaults on; bound to 'N' so 'M' (mute) stays
+  // its current binding. Persisted to localStorage so the player's
+  // preference survives reloads.
+  const [showMinimap, setShowMinimap] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    return window.localStorage.getItem('dr_minimap') !== '0';
+  });
+  const showMinimapRef = useRef(showMinimap);
+  useEffect(() => {
+    showMinimapRef.current = showMinimap;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('dr_minimap', showMinimap ? '1' : '0');
+    }
+  }, [showMinimap]);
   // Surface power state — capacity scales with deepest floor reached, draw
   // is the count of consuming buildings (turrets + Phase-4 craft jobs).
   // Powered set tells the renderer which buildings are currently online so
@@ -1123,6 +1137,11 @@ export function Game({ serverId }: { serverId: string }) {
         });
         return;
       }
+      // N toggles the corner minimap.
+      if (e.key === 'n' || e.key === 'N') {
+        setShowMinimap((v) => !v);
+        return;
+      }
       // V toggles between top-down and FPS renderers. Swap is hot — we
       // snapshot scene state from the old renderer and seed the new one.
       if (e.key === 'v' || e.key === 'V') {
@@ -1204,6 +1223,7 @@ export function Game({ serverId }: { serverId: string }) {
         {worldClock && <WorldClockHud clock={worldClock} />}
         <PowerHud state={powerState} />
         <ActiveEffectsHud effects={activeEffects} />
+        {showMinimap && <Minimap gameRef={gameRef} />}
         <AmmoHud
           inventory={inventory}
           hotbarSelection={hotbarSelection}
@@ -1686,6 +1706,50 @@ function Toast({ message }: { message: string; keyId: number }) {
 // authoritative list via 'player_effects'; client just displays.
 // Per-effect dedup happens server-side (matching id refreshes the
 // timer rather than stacking) so the chips never duplicate.
+// Corner minimap. Backed by GameHandle.paintMinimap which both
+// renderers (pixi top-down + fps) implement against their own
+// state. Repainted at 10 Hz — stays smooth without burning CPU
+// on a high-frequency repaint that the player would never notice.
+function Minimap({
+  gameRef,
+}: {
+  gameRef: React.RefObject<GameHandle | null>;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    const FRAME_MS = 100; // ~10 Hz
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      if (now - last < FRAME_MS) return;
+      last = now;
+      const c = canvasRef.current;
+      const g = gameRef.current;
+      if (!c || !g) return;
+      // World radius shown around the player. 12 tiles ≈ 384px in
+      // either direction is wide enough to see the surrounding base
+      // without zooming out so far that detail vanishes.
+      g.paintMinimap(c, 384);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [gameRef]);
+  return (
+    <div className="absolute bottom-24 right-3 pointer-events-none select-none z-30">
+      <canvas
+        ref={canvasRef}
+        width={140}
+        height={140}
+        className="rounded border border-[color:var(--panel-border)] shadow-lg"
+      />
+      <div className="text-[9px] text-zinc-500 text-center mt-1 uppercase tracking-wider">
+        N
+      </div>
+    </div>
+  );
+}
+
 function ActiveEffectsHud({
   effects,
 }: {

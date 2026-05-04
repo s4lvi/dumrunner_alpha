@@ -129,6 +129,11 @@ export type GameHandle = {
     characterId: string;
     displayName: string;
   }[];
+  // Paint the minimap into the host's <canvas>. World-coords are
+  // mapped to canvas pixels via worldRadius. Cheap to call at 10 Hz;
+  // the renderer reads from its own entity maps so this is just a
+  // 2D ctx pass.
+  paintMinimap(canvas: HTMLCanvasElement, worldRadius: number): void;
   destroy(): void;
 };
 
@@ -2387,6 +2392,99 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         // Build mode is surface-only; if the new scene has no grid, exit it.
         if ((state.layout?.tileSize ?? 0) <= 0) buildKind = null;
       });
+    },
+    paintMinimap(canvas: HTMLCanvasElement, worldRadius: number) {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      const cx = w / 2;
+      const cy = h / 2;
+      const scale = Math.min(w, h) / (worldRadius * 2);
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Background panel.
+      ctx.fillStyle = 'rgba(10, 12, 18, 0.85)';
+      ctx.fillRect(0, 0, w, h);
+
+      const tileSize = currentLayout?.tileSize ?? 32;
+
+      // Walkables (rooms + corridors). World-space rects map into
+      // canvas-space relative to selfX/selfY at the centre.
+      if (currentLayout && currentLayout.walkables.length > 0) {
+        ctx.fillStyle = 'rgba(82, 82, 91, 0.45)';
+        for (const r of currentLayout.walkables) {
+          const x = (r.x - selfX) * scale + cx;
+          const y = (r.y - selfY) * scale + cy;
+          ctx.fillRect(x, y, r.w * scale, r.h * scale);
+        }
+      } else {
+        // Open scene (surface) — draw a faint grid disc so the
+        // player has spatial reference even without walls.
+        ctx.fillStyle = 'rgba(82, 82, 91, 0.18)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, Math.min(w, h) / 2 - 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Buildings — colour by kind so the player can read the base
+      // layout at a glance.
+      for (const rb of buildings.values()) {
+        const b = rb.data;
+        const x = (b.tileX * tileSize - selfX) * scale + cx;
+        const y = (b.tileY * tileSize - selfY) * scale + cy;
+        const sw = Math.max(2, b.width * tileSize * scale);
+        const sh = Math.max(2, b.height * tileSize * scale);
+        ctx.fillStyle =
+          b.kind === 'power_link'
+            ? '#06b6d4'
+            : b.kind === 'storage_chest'
+              ? '#fbbf24'
+              : b.kind === 'wall'
+                ? '#71717a'
+                : b.kind.startsWith('turret')
+                  ? '#a78bfa'
+                  : b.kind === 'door'
+                    ? '#fde68a'
+                    : '#22c55e';
+        ctx.fillRect(x, y, sw, sh);
+      }
+
+      // Other players — green dots; enemies in LoS — red dots.
+      for (const p of players.values()) {
+        if (p.data.characterId === init.self.characterId) continue;
+        if (!p.container.visible) continue;
+        const x = (p.data.x - selfX) * scale + cx;
+        const y = (p.data.y - selfY) * scale + cy;
+        ctx.fillStyle = '#34d399';
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      for (const e of enemies.values()) {
+        if (!e.container.visible || e.data.hp <= 0) continue;
+        const x = (e.data.x - selfX) * scale + cx;
+        const y = (e.data.y - selfY) * scale + cy;
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Self — bright arrow at the centre.
+      ctx.fillStyle = '#fde047';
+      ctx.beginPath();
+      ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Frame.
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
     },
     nearbyPlayers(radiusPx: number) {
       const r2 = radiusPx * radiusPx;
