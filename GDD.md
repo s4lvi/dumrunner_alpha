@@ -702,9 +702,46 @@ For the alpha and first public beta, **stay browser-only on Vercel + itch.io.** 
 
 ## Content Pipeline & Editor Suite
 
-As the systems land, **content creation is going to become the bottleneck** — every new biome, enemy, prop, or texture is a TypeScript edit, a server restart, and a manual playtest. The plan is to invest in editor tooling **before** the content gets large, so adding a new enemy class or biome is a few minutes in a UI rather than a multi-file PR.
+As the systems land, **content creation is going to become the bottleneck** — every new biome, enemy, prop, weapon, recipe, or drop table is a TypeScript edit, a server restart, and a manual playtest. The plan is to invest in editor tooling **before** the content gets large, so adding a new enemy class or rebalancing weapon stats is a few minutes in a UI rather than a multi-file PR.
 
 The editor suite lives at `/editor` in the client app. Each tool is its own sub-route with shared infrastructure (demo scene, repo persistence, hot-reload via the override / content fetch). Authoring writes JSON or PNG files into the repo so the dev can `git diff` what they made; nothing is dev-machine local.
+
+### Authoring philosophy: data-driven first
+
+**Anything currently hardcoded as a TypeScript config-style table should move to JSON content + an editor.** The principle covers:
+
+- Base weapons (`WEAPON_STATS`, per-tier scaling, tier-mismatch curve).
+- Buildings (`BUILDING_REGISTRY`, station-tier upgrades).
+- Enemies (`ENEMY_VISUALS`, server-side templates, AI parameters).
+- Props (`PROP_REGISTRY` once it exists).
+- Biomes (palette, generation params, asset palettes).
+- Crafting recipes + station / tier requirements.
+- Blueprint tree (when E1 lands — DAG nodes + edges as content data).
+- Drop tables — corpse loot, scatter-loot, prop-break loot, enemy drops.
+- Affix / RNG tables — procedural attachment stat ranges, affix pools, weights.
+- Combat globals (`COMBAT` constants — player speed, regen rates, etc).
+
+**Migration policy.** Existing tables stay in TS until their editor lands; no big-bang JSON migration. When an editor ships, that area's data ports over and the TS module becomes a thin loader that reads + Zod-validates the JSON. Adding new entries before the editor ships is fine in TS — it's still authoring; just be aware the JSON port will need to pick those up.
+
+**Storage + deploy.** All content is plain JSON committed to the repo under `packages/shared/content/<area>/`. The server reads it at boot. No database, no runtime mutation, no live tuning loop — for the alpha's authoring scale (one dev, occasional collaborators), the **edit → save → commit → push** cycle is fast enough and keeps every change in version control. If we ever need live tuning (ops dashboard, A/B tests), DB is a later add; the JSON shape is forward-compatible.
+
+### Editor coverage plan
+
+| Editor | Scope | Status |
+|--------|-------|--------|
+| **Texture** | PNG/WEBP per `(category, id)`. | shipped |
+| **Biome** | `BiomeDef` — palette, generation params, asset palettes, hazard intensity. Preview = generated demo dungeon. | E3.0 |
+| **Enemy** | `EnemyDef` — stats, AI template + params, visual, loot. Preview = AI sandbox vs dummy player. | E3.0 |
+| **Decorator** (props) | `PropDef` — HP, solid flag, on-destroy behavior, loot. Preview = row of the selected prop kinds. | E3.0 |
+| **Weapon** | `WeaponDef` — base stats per kind, per-tier scaling table, tier-mismatch curve. Preview = side-by-side DPS / TTK panel against a dummy. | post-E3 |
+| **Building** | `BuildingDef` — HP, footprint, station + workstation flags, upgrade chains. Preview = placed cube with stats panel. | post-E3 |
+| **Recipe** | `RecipeDef` — inputs, outputs, station, tier requirement, time cost. UI is an item-input/output composer. | aligns with E1 |
+| **Blueprint Tree** | DAG nodes + edges + station unlock prerequisites. Pannable tree visualisation; nodes coloured by state. | E1 |
+| **Loot Tables** | Drop pools per source (corpse / prop-break / scatter / champion). Weighted entry list with rarity tiers and tier scaling. | post-E3 |
+| **Affix / RNG** | Procedural attachment classes — stat ranges, weight tables, affix pools per class. Preview = roll-N-times sampler so distributions are visible. | post-E3 |
+| **Combat Tuning** | The `COMBAT` constants table — player speed, sprint multiplier, stamina rates, shield regen, perihelion windows. Single-form editor; saves to one JSON. | post-E3 |
+
+The "post-E3" tag means **no dependency on E3** — these can land in any order once their authoring is annoying enough to justify. They share the same API + schema infrastructure E3.0 builds, so each later editor is mostly a form + preview pane against an existing JSON shape.
 
 ### Architecture
 
@@ -713,12 +750,17 @@ The editor suite lives at `/editor` in the client app. Each tool is its own sub-
   - `/editor/biomes` — planned.
   - `/editor/enemies` — planned.
   - `/editor/decorators` — planned (props).
+  - Future: `/editor/weapons`, `/editor/recipes`, `/editor/blueprint-tree`, `/editor/loot`, `/editor/affixes`, `/editor/combat`.
 - **Persistence model.** Two on-disk shapes:
   - **Asset files** (PNG/WEBP) live under `packages/client/public/textures/<category>/<id>.<ext>`. Served as static URLs.
-  - **Content data** (biomes, enemies, props) lives under `packages/shared/content/<area>/<id>.json`. Read at server boot + on cycle regen by both server and client (shared package). Edits land via `POST /api/editor/content/<area>` writing the JSON file directly into the repo.
+  - **Content data** (biomes, enemies, props, weapons, recipes, drop tables, …) lives under `packages/shared/content/<area>/`. Two file layouts depending on the area:
+    - **File-per-entity** for entity-shaped content (one file per biome / enemy / prop / weapon / building): `<area>/<id>.json`. Easy git diffs per entry; idiomatic.
+    - **Single-file table** for cross-cutting tables (combat globals, affix pools, blueprint-tree edges): `<area>/index.json`. Atomic commits; smaller files.
+  - Both shapes are loaded at server boot. No DB.
+- **Edit flow.** `POST /api/editor/content/<area>` writes the JSON; `GET` lists. The route Zod-validates against the area's schema before touching disk so a malformed save can never make it into the repo.
 - **Hot-reload story.** Texture changes are picked up live (the renderer subscribes to `textureOverrides` notifications). Content changes apply on the next dungeon regen (cycle perihelion) — restarting the dev server is fine for the iteration loop. A "regenerate now" dev button on each editor's preview pane forces a regen without waiting for a real perihelion.
-- **Schema validation.** Each content area exports a TypeScript shape (`BiomeDef`, `EnemyDef`, `PropDef`) from shared. The editor forms are derived from those shapes; the API route runs Zod validation before writing. Bad edits never hit disk.
-- **Demo scene** (already shipped for textures). Each editor mounts the iso renderer with a hand-built scene tailored to that domain — biome editor renders a generated dungeon, enemy editor spawns one of the selected enemy in front of the camera, decorator editor places a row of the selected prop kinds.
+- **Schema validation.** Each content area exports a TypeScript shape (`BiomeDef`, `EnemyDef`, `PropDef`, …) from shared, plus a co-located Zod schema. The editor forms are derived from those shapes; the API route runs Zod validation before writing. Bad edits never hit disk.
+- **Demo scene** (already shipped for textures). Each editor mounts the iso renderer with a hand-built scene tailored to that domain — biome editor renders a generated dungeon, enemy editor spawns one of the selected enemy in front of the camera, weapon editor puts a dummy in front of the player so you can fire and read stats, etc.
 
 ### Texture Editor (shipped)
 
