@@ -117,7 +117,7 @@ Within any band, the last floor (the fifth) hosts a faction champion (themed to 
 
 ### Props (planned)
 
-Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, terminals, trees, rocks, scrap heaps, alien growths, broken furniture. Server-authoritative, destructible by attacks, biome-themed. Scope: pure set-dressing first, then a thin layer of interactive specials (explosive barrels, lootable crates, EMP terminals). Implementation lands alongside the **E3 Dungeon overhaul** because prop spawn rules are biome-coupled — see Roadmap.
+Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, terminals, trees, rocks, scrap heaps, alien growths, broken furniture. Server-authoritative, destructible by attacks, biome-themed. Scope: pure set-dressing first, then a thin layer of interactive specials (explosive barrels, lootable crates, EMP terminals). Lands as Roadmap **E3.2** once the biome scaffolding (E3.1) and editor suite (E3.0) are in place — prop spawn rules are biome-coupled and prop kinds are authored in the decorator editor, not by hand.
 
 **Design intent.**
 
@@ -700,6 +700,193 @@ Beyond browser-on-Vercel, three platforms are realistic targets later:
 
 For the alpha and first public beta, **stay browser-only on Vercel + itch.io.** Wrappers are a beta+ concern; they're worth the effort once organic browser traction proves the game.
 
+## Content Pipeline & Editor Suite
+
+As the systems land, **content creation is going to become the bottleneck** — every new biome, enemy, prop, or texture is a TypeScript edit, a server restart, and a manual playtest. The plan is to invest in editor tooling **before** the content gets large, so adding a new enemy class or biome is a few minutes in a UI rather than a multi-file PR.
+
+The editor suite lives at `/editor` in the client app. Each tool is its own sub-route with shared infrastructure (demo scene, repo persistence, hot-reload via the override / content fetch). Authoring writes JSON or PNG files into the repo so the dev can `git diff` what they made; nothing is dev-machine local.
+
+### Architecture
+
+- **Sub-routes** under `/editor`:
+  - `/editor/textures` — what shipped (formerly just `/editor`).
+  - `/editor/biomes` — planned.
+  - `/editor/enemies` — planned.
+  - `/editor/decorators` — planned (props).
+- **Persistence model.** Two on-disk shapes:
+  - **Asset files** (PNG/WEBP) live under `packages/client/public/textures/<category>/<id>.<ext>`. Served as static URLs.
+  - **Content data** (biomes, enemies, props) lives under `packages/shared/content/<area>/<id>.json`. Read at server boot + on cycle regen by both server and client (shared package). Edits land via `POST /api/editor/content/<area>` writing the JSON file directly into the repo.
+- **Hot-reload story.** Texture changes are picked up live (the renderer subscribes to `textureOverrides` notifications). Content changes apply on the next dungeon regen (cycle perihelion) — restarting the dev server is fine for the iteration loop. A "regenerate now" dev button on each editor's preview pane forces a regen without waiting for a real perihelion.
+- **Schema validation.** Each content area exports a TypeScript shape (`BiomeDef`, `EnemyDef`, `PropDef`) from shared. The editor forms are derived from those shapes; the API route runs Zod validation before writing. Bad edits never hit disk.
+- **Demo scene** (already shipped for textures). Each editor mounts the iso renderer with a hand-built scene tailored to that domain — biome editor renders a generated dungeon, enemy editor spawns one of the selected enemy in front of the camera, decorator editor places a row of the selected prop kinds.
+
+### Texture Editor (shipped)
+
+Already live at `/editor`. Side panel lists every `EnemyKind` and `BuildingKind` (via shared registries), each row shows current texture preview + Upload/Replace + Clear, demo scene mounts iso/top-down/FPS with V-cycling and WASD walking via local physics. Files write to `public/textures/<category>/<id>.<ext>` via the `/api/editor/textures` route. Renderers subscribe to override notifications and live-refresh on save.
+
+When the suite expands, `/editor` becomes a top-nav landing page; the existing texture UI moves to `/editor/textures` unchanged. Build a `prop` category alongside `enemy` and `building` so prop sprites land in the same flow.
+
+### Biome Editor (planned)
+
+`/editor/biomes`. Author and tune the 4-biome lore set (Sun-Bleached / Catacombs / Frozen / Alien Core) plus any future biomes.
+
+**Schema (`BiomeDef` in `packages/shared/content/biomes/<id>.json`):**
+
+```ts
+type BiomeDef = {
+  id: string;
+  label: string;
+  dominantHazard: 'heat' | 'radiation' | 'cold' | 'toxic';
+  // Floor / wall / accent colours used as palette fallbacks
+  // when per-tile sprites haven't been authored.
+  palette: { floor: string; wall: string; accent: string };
+  generation: {
+    roomCountMin: number;
+    roomCountMax: number;
+    roomSizeMin: number;       // tiles per dim
+    roomSizeMax: number;
+    corridorWidth: number;     // tiles
+    branching: number;         // 0..1 — corridor branching probability
+    propDensity: number;       // props per walkable tile
+    enemyDensity: number;      // enemies per walkable tile (×depth multiplier server-side)
+    lootDensity: number;       // scatter loot piles per room
+    hazardIntensity: number;   // 0..1 — multiplier on the dominant hazard tick
+  };
+  enemyRoster: { id: string; weight: number }[];      // pulls EnemyDef ids
+  propPalette: {
+    id: string;
+    weight: number;
+    naturalOnly?: boolean;
+    allowDoorway?: boolean;
+  }[];                                                 // pulls PropDef ids
+  lootBias: { materialId: string; multiplier: number }[]; // tilts scatter loot rolls
+  tileTextures?: {
+    floor?: string;            // texture-override id, e.g. 'biome::sun_bleached::floor'
+    wall?: string;
+  };
+};
+```
+
+**UI:**
+
+- Left sidebar: list of biome ids (CRUD — duplicate, rename, delete).
+- Centre: form bound to the selected biome's `BiomeDef`, grouped by section (palette / generation / enemyRoster / propPalette / lootBias). Asset pickers (enemy id, prop id, material id) are dropdowns populated from the registries — typing creates a new entry; weight is a slider.
+- Right preview pane: iso-rendered demo dungeon generated from the current params. Buttons:
+  - **Generate** — runs procgen with `(seed, biomeId)` and renders.
+  - **Re-roll** — bumps the seed.
+  - **Stats** — room count, walkable tile count, avg corridor length, prop count, enemy count rendered live.
+
+**Save** writes the JSON file. Server reads `packages/shared/content/biomes/*.json` at boot; the next perihelion uses the new params. Preview's "Generate" runs purely client-side (no server round-trip) so iteration is instant.
+
+### Enemy Editor (planned)
+
+`/editor/enemies`. Author and tune enemy classes — stats, AI behavior, visual.
+
+**Schema (`EnemyDef` in `packages/shared/content/enemies/<id>.json`):**
+
+```ts
+type EnemyDef = {
+  id: string;
+  label: string;
+  faction: 'catacombs' | 'sun_bleached' | 'frozen' | 'alien_core' | 'neutral';
+  biomeAffinity: string[];          // biome ids this enemy can spawn in
+  stats: {
+    hp: number;
+    contactDamage: number;
+    moveSpeed: number;              // px/sec
+    aggroRadius: number;            // px
+    deaggroRadius: number;          // px
+    bodyRadius: number;             // collision radius
+  };
+  ai: AiSpec;                       // see below
+  visual: {
+    shape: 'circle' | 'square' | 'triangle';
+    color: string;                  // hex
+    size: number;                   // existing EnemyVisual size
+    // textureId optional — looked up via getOverride('enemy', id)
+    // automatically; this field is just for documentation.
+  };
+  loot: {
+    materialDrops?: { materialId: string; min: number; max: number; chance: number }[];
+    partDropChance?: number;        // 0..1
+    blueprintDropChance?: number;   // 0..1
+  };
+};
+
+// Behavior templates. Each has its own typed parameter shape.
+type AiSpec =
+  | { kind: 'chaser_melee'; attackInterval: number; meleeRange: number }
+  | {
+      kind: 'ranged_pulser';
+      attackInterval: number;
+      preferredRange: { min: number; max: number };
+      projectile: ProjectileSpec;
+    }
+  | { kind: 'swarmer'; aggression: number; chaseStickiness: number }
+  | { kind: 'brute'; chargeWindupMs: number; chargeDamage: number; chargeRange: number }
+  | {
+      kind: 'sniper';
+      attackInterval: number;
+      sightlineRequired: true;
+      retreatBelowHpRatio: number;
+      projectile: ProjectileSpec;
+    };
+
+type ProjectileSpec = {
+  speed: number;
+  damage: number;
+  ttlMs: number;
+  radius: number;
+  color: string;
+};
+```
+
+**UI:**
+
+- Left sidebar: list of `EnemyDef` ids with shape/color thumbnail + biome chips.
+- Centre: form for the selected enemy:
+  - **Identity** section (id, label, faction, biomeAffinity multi-select).
+  - **Stats** section (HP, damage, speed, aggro/deaggro radii, body radius — all numeric inputs with sane min/max).
+  - **AI** section: behavior template dropdown swaps the parameter form (chaser_melee shows `attackInterval` + `meleeRange`; ranged_pulser shows `attackInterval` + `preferredRange` + nested `ProjectileSpec` form; etc).
+  - **Visual** section: shape / color / size + a "Upload sprite" button that hands off to the texture editor's `enemy/<id>` slot.
+  - **Loot** section: material drops table, part-drop chance, blueprint-drop chance.
+- Right preview pane: iso scene with one of the selected enemy in front of the camera, plus a stationary "dummy player" 200px away. Buttons:
+  - **Spawn one** — adds the enemy to the demo scene; you can shoot it to verify HP / death FX.
+  - **AI sandbox** — toggles a "let AI run" mode where the enemy chases / attacks the dummy player so you can see the behavior.
+  - **Reset**.
+
+Server's spawn picker reads `packages/shared/content/enemies/*.json` at boot; biome roster references resolve against this list. Existing hand-coded enemy templates (in `server/src/ai/templates.ts`) migrate into JSON files as a one-time port.
+
+### Decorator Editor (planned)
+
+`/editor/decorators`. Same shape as the Enemy Editor, but for `PropDef` (see [Dungeon → Props](#props-planned) for the design).
+
+**Schema (`PropDef` in `packages/shared/content/props/<id>.json`):**
+
+```ts
+type PropDef = {
+  id: string;
+  label: string;
+  biomeAffinity: string[];
+  hp: number;
+  solid: boolean;                   // blocks movement + projectiles
+  onDestroy: 'nothing' | 'drop_loot' | 'explode';
+  explode?: { radius: number; damage: number };
+  loot?: { materialId: string; min: number; max: number; chance: number }[];
+  visual: { textureId?: string; tint?: string };
+};
+```
+
+**UI:**
+
+- Same three-pane layout as Enemy Editor (sidebar / form / preview).
+- Form sections: **Identity** (id, label, biomeAffinity), **Behavior** (HP, solid, onDestroy with conditional explode params), **Loot table**, **Visual** (texture upload).
+- Preview: iso scene with a row of the selected prop kind. Shoot to verify HP / break FX / loot drops / explosion radius.
+
+### Roadmap dependency
+
+These tools are the **prerequisite** for the dungeon overhaul, not an afterthought. Without them, every new biome / enemy / prop is a multi-file edit + restart cycle, and the four-biome lore commitment becomes a labour wall. They ship as **E3.0** before any of the system work in E3.1+. See [Roadmap → E3.0](#sprint-e--ux-overhauls) for the implementation slice.
+
 ## Alpha Scope & Implementation Status
 
 The hardest risk to get out of the way was realtime sync over websockets between authenticated players in created servers. That work shipped first; gameplay systems layered on top of proven netcode.
@@ -871,8 +1058,12 @@ equipped suit parts.
 
 #### Sprint E — UX overhauls
 
-Three never-started original asks. Independent; each ships on
-its own timeline.
+E1 / E2 are independent; each ships on its own timeline. **E3 is
+the biggest single piece on the board** and is now sliced into
+five phases (E3.0 → E3.4) that ship sequentially — each one
+playable, each one unblocking the next. The phasing puts
+**editor tooling first** so we don't author the four-biome lore
+commitment by hand-editing TypeScript.
 
 **E1. Blueprint progression tree.** Replace the flat
 `BLUEPRINT_CATALOG` listing with a DAG: unlocking the Workbench
@@ -891,34 +1082,90 @@ reload / use / interact, hamburger for inventory. FPS view
 needs a touch-look gesture (right-half drag for aim + auto-fire
 on tap) — trickier; can ship with top-down only at first.
 
-**E3. Dungeon overhaul / WFC + biomes + hazards.** The biggest
-single piece on the board; defer to last. Multiple coupled
-sub-deliverables:
-- `Biome` enum keyed to the 4-biome lore set (Sun-Bleached /
-  Catacombs / Frozen / Alien Core). Each ships a tile palette,
-  room-shape constraints, enemy bias, scatter-loot bias.
-- WFC procgen replacing the current rectangular-rooms-and-
-  corridors layout (`procgen.ts` rewrite, ~600 LOC). Adjacency
-  rules per tile, propagation, backtracking.
-- Per-biome enemy roster + scatter-loot material bias (organic
-  drops biotic; mechanical drops circuit; cave drops crystal).
-- Renderer per-tile sprite support; asset_gen catalog needs
-  biome-tile sprites.
-- **Hazard system** lands here: radiation / toxic / cold / heat
-  ticks gated by Life-Support resists. Adds resist fields to
-  `CarriedPart` for life-support parts; adds per-floor hazard
-  spec; server tick applies environmental damage scaled by
+**E3.0. Editor suite.** Prerequisite for everything else in E3.
+Full design under [Content Pipeline & Editor Suite](#content-pipeline--editor-suite). Slice:
+
+- Top-nav landing at `/editor`. Existing texture editor moves
+  under `/editor/textures` unchanged.
+- **Schemas first.** `BiomeDef`, `EnemyDef`, `PropDef` in
+  `packages/shared/content/types.ts`, with Zod validators.
+  Migrate the existing hand-coded `ENEMY_VISUALS` + planned
+  `PROP_REGISTRY` data into JSON files under
+  `packages/shared/content/<area>/`.
+- **API routes.** `POST /api/editor/content/<area>` (write JSON,
+  Zod-validated), `GET /api/editor/content/<area>` (list).
+  Mirrors the texture API pattern.
+- `/editor/biomes`. Sidebar list + form (palette, generation
+  params, asset palettes) + preview pane that runs procgen
+  client-side and renders in the iso renderer.
+- `/editor/enemies`. Sidebar list + form (identity, stats, AI
+  template + per-template params, visual, loot) + preview pane
+  with Spawn / AI-sandbox buttons.
+- `/editor/decorators`. Same shape as enemies but for `PropDef`.
+- **Server boot reads JSON content** for biomes / enemies /
+  props (alongside the existing TypeScript-source registries
+  during the migration). New "regenerate dungeon now" dev
+  control on each editor's preview reaches into the running
+  game session via a dev-only WS message — no real perihelion
+  needed for iteration.
+
+**E3.1. Biome scaffolding + per-band assignment + enemy rosters.**
+Foundation. Lands once the editor suite from E3.0 can author the data.
+
+- `Biome` enum + `BiomeDef` JSON content (4 biomes: Sun-Bleached
+  / Catacombs / Frozen / Alien Core), authored in the biome
+  editor.
+- Per-band assignment at perihelion (each band rolls a biome
+  independently per the GDD's biome rotation rule). `layout.biome`
+  field on `SceneLayout`. Surface UI shows the cycle's biome
+  layout for known bands.
+- Existing enemies migrate to `EnemyDef` JSON with `biomeAffinity`
+  set; spawn picker pulls from `BiomeDef.enemyRoster` weighted
+  list.
+- **No procgen change** — existing rectangular rooms keep
+  working but now know what biome they are, with per-biome
+  floor / wall colour palettes from `BiomeDef.palette`.
+
+**E3.2. Props system.** Self-contained, slots into biome
+palettes from E3.1. Full design under
+[Dungeon → Props](#props-planned).
+
+- Server-side prop entities with HP + destruction handling.
+  `PROP_REGISTRY` migrates to `PropDef` JSON; biome palettes
+  reference prop ids.
+- Three-renderer billboard pass (no HP bar, hit-flash on
+  damage). Editor's `prop` category mirrors `enemy` / `building`
+  so art iteration uses the same texture upload flow.
+- Spawning hooks into the existing rectangular procgen via
+  `BiomeDef.propPalette`; biome-flavoured scenery (trees, rocks,
+  conduits, terminals) plus the explosive-barrel and
+  lootable-cargo specials.
+
+**E3.3. Hazard system.** Independent of WFC. Lands on existing
+rectangular rooms with the biome data from E3.1.
+
+- Resist fields on life-support `CarriedPart` (heat / cold /
+  radiation / toxic).
+- Per-floor hazard spec derived from `BiomeDef.dominantHazard` +
+  `hazardIntensity` + depth scaling.
+- Server tick applies environmental damage scaled by the
   resist gap. Folds the "depth gating via life-support tier"
   loop the GDD describes.
-- **Props system** ships in lockstep with the biome palettes
-  (full design under [Dungeon → Props](#props-planned)). New
-  shared `PROP_REGISTRY`, server-side prop entities with HP +
-  destruction handling, three-renderer billboard pass (no HP
-  bar, hit-flash on damage), per-biome prop palettes feeding
-  the generator. Explosive barrel + lootable cargo container
-  + biome-flavoured scenery (trees, rocks, conduits, terminals).
-  Editor's `prop` category mirrors `enemy` / `building` so art
-  iteration uses the same upload flow.
+
+**E3.4. WFC procgen + per-tile sprite support.** The big
+graphics + algorithmic rewrite, deferred to last because it's
+the highest-risk change and benefits from the rest landing
+first.
+
+- WFC procgen replacing the rectangular-rooms-and-corridors
+  layout (`procgen.ts` rewrite, ~600 LOC). Adjacency rules per
+  tile, propagation, backtracking.
+- Renderer per-tile sprite support — biome `tileTextures`
+  feed iso/top-down/FPS; the texture editor learns a per-biome
+  tile category.
+- Existing rectangular generator stays as a fallback flag for
+  biomes that haven't been WFC-tuned yet, so a half-authored
+  biome doesn't break the dungeon.
 
 #### Deferred past alpha
 
@@ -969,11 +1216,10 @@ scheduled. Listed so the next agent doesn't re-discover them.
 
 #### Pending external work
 
-- **Discord Developer Portal config + first end-to-end test.**
-  Code is shipped (web OAuth + Activity SDK, instance-bound
-  rooms); waiting on Portal setup + a real Discord call to
-  validate the flow. See `docs/discord-integration.md` for the
-  manual steps.
+- ~~**Discord Developer Portal config + first end-to-end test.**~~
+  *Done.* Web OAuth + Activity SDK + instance-bound rooms shipped
+  and validated end-to-end. See `docs/discord-integration.md` for
+  the historical setup notes.
 - **Add prewarm labels** for D3 enemies (`flame_drone`,
   `chem_bloater`) and `precision_mill` in
   `assetGenClient.ENEMY_LABELS`. Falls back to auto-generated
