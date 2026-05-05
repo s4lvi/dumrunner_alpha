@@ -22,13 +22,15 @@ import { env } from './env.js';
 import { supabase } from './supabase.js';
 import { registry } from './registry.js';
 import { initTemplates } from './ai/templates.js';
+import { initBiomes } from './biomes.js';
 import type { World } from './world.js';
 
-// Hydrate the JSON-backed enemy template registry before
-// accepting connections. Crashes on missing content — by design,
-// since a server with no enemy templates can't run a game. See
-// packages/shared/content/enemies/.
+// Hydrate JSON-backed content registries before accepting
+// connections. Templates is hard-required (no enemies = no game,
+// throws). Biomes is soft — empty content dir falls back to
+// legacy depth-banded weights for spawning.
 await initTemplates();
+await initBiomes();
 
 // Typed dispatch map for inbound client messages. Each key is a
 // ClientMessage['type']; each value handles ONLY that type (TS narrows

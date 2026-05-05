@@ -802,6 +802,7 @@ function EnemyPreview({ draft }: { draft: EnemyDef }) {
       spawn: { x: 0, y: 0 },
       interactables: [],
       tileSize: PREVIEW_TILE,
+      biome: 'default',
     };
     const self: Player = {
       characterId: PREVIEW_SELF_ID,

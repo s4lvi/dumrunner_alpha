@@ -565,6 +565,10 @@ function BiomePreview({ draft }: { draft: BiomeDef }) {
       spawn: { x: 0, y: 0 },
       interactables: [],
       tileSize: PREVIEW_TILE,
+      // The editor passes init.palette explicitly, so this id
+      // is just a label — the renderer's palette resolver
+      // short-circuits before reading it.
+      biome: draft.id,
     };
     const self: Player = {
       characterId: PREVIEW_SELF_ID,

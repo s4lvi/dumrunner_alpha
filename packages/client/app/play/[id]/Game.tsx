@@ -36,6 +36,7 @@ import {
   partPrimaryStat,
   PLAYER_BASE_STATS,
   PROTOCOL_VERSION,
+  setBiomePalettes,
   setEnemyVisuals,
   SUIT_ATTACHMENT_SLOTS,
   SUIT_SLOT_KINDS,
@@ -486,6 +487,11 @@ export function Game({ serverId }: { serverId: string }) {
         // enemyVisualFor() against this map; without this call
         // every kind would resolve to the dummy_target fallback.
         setEnemyVisuals(msg.enemyVisuals);
+        // Same shape for biomes — renderer resolves
+        // layout.biome → palette via biomePaletteFor() at scene
+        // change time. Newly authored biomes light up without a
+        // code change.
+        setBiomePalettes(msg.biomes);
         setInventory(msg.inventory);
         setEquipment(msg.equipment);
         setHotbarSelection(msg.hotbarSelection);

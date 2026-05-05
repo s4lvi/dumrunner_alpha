@@ -45,6 +45,37 @@ export function setEnemyVisuals(
   Object.assign(ENEMY_VISUALS, visuals);
 }
 
+// ---------- Biome registry ----------
+//
+// Per-biome render palette shipped to the client at session
+// start (welcome message → setBiomePalettes). Renderers look up
+// `BIOMES[layout.biome]` when drawing a scene to pick the right
+// floor / wall hues. Falls back to defaults when a biome isn't
+// in the registry (e.g. surface scene with biome='default'
+// before any biomes are authored).
+export type BiomePalette = {
+  floor: string;
+  wall: string;
+  accent: string;
+};
+export const BIOMES: Record<string, BiomePalette> = {};
+
+export const FALLBACK_BIOME_PALETTE: BiomePalette = {
+  floor: '#1f242c',
+  wall: '#52525b',
+  accent: '#94a3b8',
+};
+
+export function biomePaletteFor(biomeId: string | undefined | null): BiomePalette {
+  if (!biomeId) return FALLBACK_BIOME_PALETTE;
+  return BIOMES[biomeId] ?? FALLBACK_BIOME_PALETTE;
+}
+
+export function setBiomePalettes(palettes: Record<string, BiomePalette>): void {
+  for (const k of Object.keys(BIOMES)) delete BIOMES[k];
+  Object.assign(BIOMES, palettes);
+}
+
 // Part tier colours used by both the top-down loot drop tint and the
 // inventory tooltip rail. Mirror set: hex string for CSS, raw number
 // for Pixi.

@@ -4,6 +4,7 @@
 // servers see consistent floors.
 
 import type { Interactable, Rect, SceneLayout } from '@dumrunner/shared';
+import { BIOMES } from './biomes.js';
 
 // Initial door placement returned alongside the layout. Each door is a
 // 1×1 building seeded by Scene.constructor at a tile that bridges a
@@ -100,7 +101,8 @@ function tilesToPixels(r: Rect): Rect {
 export function generateFloorLayout(
   worldSeed: number,
   cycle: number,
-  floorIndex: number
+  floorIndex: number,
+  biome: string,
 ): SceneLayout {
   // Mix the inputs into a single 32-bit seed. Off-the-shelf mixing constants.
   const mixed =
@@ -202,7 +204,15 @@ export function generateFloorLayout(
     h: maxY - minY + TILE_SIZE * 4,
   };
 
-  return { worldBounds, walkables, rooms, spawn, interactables, tileSize: TILE_SIZE };
+  return {
+    worldBounds,
+    walkables,
+    rooms,
+    spawn,
+    interactables,
+    tileSize: TILE_SIZE,
+    biome,
+  };
 }
 
 // Initial enemy placement for a dungeon floor. Same seed → same spawns, so
@@ -220,6 +230,27 @@ type TemplateWeights = Record<string, number>;
 // dummy_target was a placeholder for combat testing — stationary, no
 // interesting behaviour. Removed from the live spawn pool; the
 // template stays in the AI library for ad-hoc smoke tests.
+// Resolve the spawn-weight table for a given floor. Prefers the
+// floor's biome roster (authored via /editor/biomes); falls back
+// to legacy depth-banded weights when the biome has no roster.
+function weightsForFloor(
+  layout: SceneLayout,
+  floorIndex: number,
+): TemplateWeights {
+  const biome = BIOMES[layout.biome];
+  if (biome && biome.enemyRoster.length > 0) {
+    const w: TemplateWeights = {};
+    for (const entry of biome.enemyRoster) {
+      if (entry.weight > 0) w[entry.id] = entry.weight;
+    }
+    if (Object.keys(w).length > 0) return w;
+  }
+  return (
+    DEPTH_WEIGHTS.find((b) => floorIndex <= b.maxFloor)?.weights ??
+    DEPTH_WEIGHTS[DEPTH_WEIGHTS.length - 1].weights
+  );
+}
+
 const DEPTH_WEIGHTS: { maxFloor: number; weights: TemplateWeights }[] = [
   { maxFloor: 2, weights: { swarmer: 30, chaser_melee: 50, shooter_drone: 20 } },
   { maxFloor: 5, weights: { swarmer: 20, chaser_melee: 22, shooter_drone: 22, brute_chaser: 14, armored: 10, flame_drone: 8, chem_bloater: 4 } },
@@ -250,9 +281,11 @@ export function generateInitialEnemies(
     (floorIndex * 0x165667B1);
   const rng = mulberry32(mixed);
 
-  const weights =
-    DEPTH_WEIGHTS.find((b) => floorIndex <= b.maxFloor)?.weights ??
-    DEPTH_WEIGHTS[DEPTH_WEIGHTS.length - 1].weights;
+  // Prefer the biome-authored roster when one is set on the
+  // layout. Empty roster (or an absent / missing biome) falls
+  // through to the legacy depth-banded weights so existing
+  // saves don't lose enemies during the migration.
+  const weights = weightsForFloor(layout, floorIndex);
 
   // First room is the entrance — leave it empty for safe arrival.
   const candidateRooms = layout.rooms.slice(1);

@@ -37,6 +37,7 @@ import {
   subscribe as subscribeOverrides,
 } from "../textureOverrides";
 import {
+  biomePaletteFor,
   enemyVisualFor,
   materialTint,
   segmentInsideWalkables,
@@ -152,12 +153,32 @@ const PLAYER_SELF_COLOR = 0xfacc15;
 const CORPSE_COLOR = 0x4a1d1d;
 
 export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
-  // Resolved palette. Defaults to the built-in dark dungeon
-  // colours; the biome editor passes its own per-biome hexes
-  // here so the preview pane reflects the live JSON.
-  const floorColor = parseHex(init.palette?.floor, FLOOR_COLOR);
-  const wallTopColor = parseHex(init.palette?.wallTop, WALL_TOP_COLOR);
-  const wallFrontColor = parseHex(init.palette?.wallFront, WALL_FRONT_COLOR);
+  // Palette resolution priority (highest first):
+  //   1. init.palette — explicit override (editor preview).
+  //   2. biomePaletteFor(layout.biome) — live game.
+  //   3. Built-in FLOOR_COLOR / WALL_*_COLOR constants.
+  // Re-resolved on every layout change (rebuildLayout call) so
+  // a scene transition into a different biome picks up the new
+  // hues without re-mounting the renderer.
+  let floorColor = FLOOR_COLOR;
+  let wallTopColor = WALL_TOP_COLOR;
+  let wallFrontColor = WALL_FRONT_COLOR;
+  function resolvePalette(biomeId: string | null | undefined): void {
+    if (init.palette) {
+      floorColor = parseHex(init.palette.floor, FLOOR_COLOR);
+      wallTopColor = parseHex(init.palette.wallTop, WALL_TOP_COLOR);
+      wallFrontColor = parseHex(init.palette.wallFront, WALL_FRONT_COLOR);
+      return;
+    }
+    const palette = biomePaletteFor(biomeId);
+    floorColor = parseHex(palette.floor, FLOOR_COLOR);
+    // Both wall faces use the biome's single wall hue; the
+    // renderer shades the front face slightly darker on its own
+    // (existing side-face hardcode kept for now).
+    wallTopColor = parseHex(palette.wall, WALL_TOP_COLOR);
+    wallFrontColor = parseHex(palette.wall, WALL_FRONT_COLOR);
+  }
+  resolvePalette(init.layout?.biome ?? null);
 
   // ---------- Pixi app ----------
   // Pixi v8: init() is async + creates the renderer + (by default)
@@ -408,6 +429,10 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
     floorLayer.removeChildren();
     clearWalls();
     if (!currentLayout) return;
+    // Resolve the biome palette before any drawing — scene_changed
+    // can land us in a different biome and the wall / floor
+    // colours need to follow.
+    resolvePalette(currentLayout.biome ?? null);
     const tile = currentLayout.tileSize || 32;
     if (tile <= 0) return;
     if (currentLayout.walkables.length === 0) {

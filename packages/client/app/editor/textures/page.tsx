@@ -319,6 +319,7 @@ function buildDemoInit({
     spawn: { x: 0, y: 0 },
     interactables: [],
     tileSize: TILE,
+    biome: 'default',
   };
   const self: Player = {
     characterId: SELF_ID,

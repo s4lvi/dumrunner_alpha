@@ -79,6 +79,11 @@ import {
 } from './procgen.js';
 import type { SceneLayout } from '@dumrunner/shared';
 import { getEnemyVisualsForWire } from './ai/templates.js';
+import {
+  biomeForFloor,
+  DEFAULT_BIOME_ID,
+  getBiomesForWire,
+} from './biomes.js';
 
 // Surface is an open scene (no walls) but ships a layout so the client knows
 // where the dungeon entrance is. Walkables are empty → collision is skipped.
@@ -120,6 +125,10 @@ function surfaceLayout(): SceneLayout {
     // cleanly. Walkables stays empty — no collision walls on the surface
     // itself; only player-placed buildings act as blockers.
     tileSize: 32,
+    // Surface = the player's base, no hazard biome. Renderers
+    // resolve this to the FALLBACK_BIOME_PALETTE (or whatever
+    // the 'default' biome JSON authors).
+    biome: DEFAULT_BIOME_ID,
   };
 }
 
@@ -559,6 +568,7 @@ export class World {
       layout: scene.layout,
       knownBlueprints: mergedBlueprints(conn),
       enemyVisuals: getEnemyVisualsForWire(),
+      biomes: getBiomesForWire(),
     });
 
     scene.broadcast(
@@ -2711,7 +2721,16 @@ export class World {
 
   private createDungeonScene(floorIndex: number): Scene {
     const sceneId = dungeonSceneId(floorIndex);
-    const layout = generateFloorLayout(this.worldSeed, this.cycle, floorIndex);
+    // Resolve the floor's biome via the per-band assignment.
+    // Same (worldSeed, cycle, band) inputs across the cycle, so
+    // every player on the server sees the same biome layout.
+    const biome = biomeForFloor(this.worldSeed, this.cycle, floorIndex);
+    const layout = generateFloorLayout(
+      this.worldSeed,
+      this.cycle,
+      floorIndex,
+      biome,
+    );
     const meta = generateLockedRoomMeta(
       layout,
       this.worldSeed,

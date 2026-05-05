@@ -256,6 +256,11 @@ export type SceneLayout = {
   // Pixel size of one grid tile. Walkable rect dimensions are integer
   // multiples of this. Surface ships 0 (open scene, no grid).
   tileSize: number;
+  // Biome assigned to this floor — drives renderer palette + the
+  // server-side spawn picker's enemy roster. The id matches a
+  // BiomeDef.id authored under packages/shared/content/biomes/.
+  // 'default' is the safe / surface starter biome (no hazard).
+  biome: string;
 };
 
 export type Player = {
@@ -717,6 +722,12 @@ export type ServerMessage =
         string,
         { shape: 'square' | 'circle' | 'triangle'; color: number; size: number }
       >;
+      // Biome registry — per-id palette used by the renderer
+      // for layout.biome lookup. Hex strings (renderer parses).
+      biomes: Record<
+        string,
+        { floor: string; wall: string; accent: string }
+      >;
     }
   | {
       // Sent when the player transitions between scenes (stairs, extract pad,
@@ -884,4 +895,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 38;
+export const PROTOCOL_VERSION = 39;
