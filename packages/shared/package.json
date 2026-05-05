@@ -11,7 +11,8 @@
     "./token": "./src/token.ts",
     "./geometry": "./src/geometry.ts",
     "./inventory": "./src/inventory.ts",
-    "./crafting": "./src/crafting.ts"
+    "./crafting": "./src/crafting.ts",
+    "./content/loader": "./src/content/loader.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
