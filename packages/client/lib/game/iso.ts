@@ -1649,6 +1649,14 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
       s.data.hp = hp;
       s.data.maxHp = maxHp;
       paintHpBar(s.hpBar, hp, maxHp);
+      // Hide the moment hp hits 0, even though the canonical
+      // enemy_killed message comes through a tick later. Without
+      // this, a V-cycle (or scene snapshot) between hp=0 and the
+      // kill broadcast carries a "dead but still visible" sprite
+      // into the new renderer.
+      if (hp <= 0) {
+        s.container.visible = false;
+      }
     },
     removeEnemy(id) {
       const s = enemies.get(id);

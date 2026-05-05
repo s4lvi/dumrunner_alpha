@@ -734,8 +734,15 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     amount: number,
     color = "#ef4444",
   ) {
+    // DoT ticks land sub-1 damage per server tick (8 DPS at
+    // 20Hz = 0.4/tick). Math.round'ing those produces "0" labels
+    // that flicker up every 50ms — visually wrong (it IS damaging
+    // the target; the HP bar drops). Skip the spawn unless the
+    // accumulated amount renders as ≥ 1.
+    const display = Math.round(amount);
+    if (display <= 0) return;
     const text = new Text({
-      text: Math.round(amount).toString(),
+      text: display.toString(),
       style: {
         fill: color,
         fontSize: 14,
@@ -2246,6 +2253,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           e.data.y - visualFor(e.data.kind).size,
           damage,
         );
+      }
+      // Hide on hp=0 so a V-cycle that happens between
+      // enemy_damaged and enemy_killed doesn't carry the dead
+      // sprite into the new renderer's snapshot.
+      if (hp <= 0) {
+        e.container.visible = false;
       }
     },
     removeEnemy(id: string) {

@@ -46,6 +46,7 @@ import type {
   SceneLayout,
 } from '@dumrunner/shared';
 import {
+  BUILDING_REGISTRY,
   enemyVisualFor,
   isInsideAny,
   materialTint,
@@ -55,7 +56,16 @@ import type { GameHandle, GameInit, SceneState } from './pixi';
 import { buildingsToMinimapList, type MinimapSnapshot } from './minimap';
 
 // ---------- tuning ----------
-const FOV = (Math.PI / 180) * 70; // 70deg horizontal FOV
+// VERTICAL field of view. Horizontal FOV is derived per frame
+// from the canvas aspect (HOR+ scaling — wider screens see more
+// world side-to-side, vertical stays locked). 60° vertical at a
+// 16:9 aspect = ~95° horizontal, matching the original 70°
+// horizontal feel at standard widescreen.
+const VERTICAL_FOV = (Math.PI / 180) * 60;
+// Kept for back-compat (pitch limits + sprite-cull frustum
+// reference). Equals VERTICAL_FOV but consumers should treat
+// this as "the larger FOV axis" — horizontal at typical aspects.
+const FOV = VERTICAL_FOV;
 const COLUMN_STEP_PX = 1; // 1 ray per pixel — sharpest possible.
 const RAY_MAX_DIST = 1500;
 const WALL_HEIGHT_WORLD = 64; // arbitrary world units. Tunes apparent wall scale.
@@ -588,8 +598,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // close-range curvature at the edges of the FOV disappears. Matches
     // the sprite pass below so they share the same camera model exactly.
     const numCols = Math.ceil(W / COLUMN_STEP_PX);
-    const halfFov = FOV / 2;
-    const halfPlane = Math.tan(halfFov);
+    // HOR+ scaling: vertical FOV is fixed; horizontal half-plane
+    // scales with the canvas aspect ratio so wider screens see
+    // more world side-to-side rather than just stretching.
+    const aspect = H > 0 ? W / H : 1;
+    const halfFov = VERTICAL_FOV / 2;
+    const halfPlane = Math.tan(halfFov) * aspect;
     const dirX = Math.cos(yaw);
     const dirY = Math.sin(yaw);
     const planeX = -dirY * halfPlane;
@@ -617,8 +631,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       if (perp <= 0.0001) continue;
       zBuffer[i] = perp;
 
-      const lineH = (WALL_HEIGHT_WORLD * H) / perp;
-      const top = horizonY - lineH / 2;
+      // Per-kind world height. Stations (workbench / forge /
+      // weapon_bench / etc) are half the height of a wall so they
+      // read as workstations rather than full walls. Doors are
+      // shorter still; full walls + dungeon walls keep the
+      // canonical WALL_HEIGHT_WORLD.
+      const heightMult = stationHeightMultFor(hit);
+      const fullWallH = (WALL_HEIGHT_WORLD * H) / perp;
+      const lineH = fullWallH * heightMult;
+      // Anchor the wall on the floor line at this distance, so a
+      // half-height obstacle sits on the ground rather than
+      // floating around the horizon.
+      const groundY = horizonY + fullWallH / 2;
+      const top = groundY - lineH;
 
       const baseColor = hit.isBuilding
         ? hit.faceNS
@@ -663,6 +688,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
         const geom = new MeshGeometry({ positions, uvs, indices });
         const mesh = new Mesh({ geometry: geom, texture: tex });
+        // Distance-fog tint. White stays full-bright at near
+        // range; far walls fade toward palette.fog so textured
+        // walls match the solid-color path's distance shading.
+        mesh.tint = applyFog(0xffffff, perp, palette.fog);
         wallTexLayer.addChild(mesh);
       }
     }
@@ -734,8 +763,9 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // first enters the box. Z-tested against the wall depth buffer so the
     // cube clips correctly when an actual wall stands between the camera
     // and the placement target.
-    const halfFov = FOV / 2;
-    const halfPlane = Math.tan(halfFov);
+    const aspect = H > 0 ? W / H : 1;
+    const halfFov = VERTICAL_FOV / 2;
+    const halfPlane = Math.tan(halfFov) * aspect;
     const planeX = -dirY * halfPlane;
     const planeY = dirX * halfPlane;
     const ax = tileX * tileSize;
@@ -950,8 +980,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
   function drawSprites(W: number, H: number, fogColor: number, horizonY: number) {
     spritesScratch.length = 0;
-    const halfFov = FOV / 2;
-    const halfPlane = Math.tan(halfFov);
+    // Match the raycaster's HOR+ projection so sprites land
+    // on the same screen-x as the wall slices around them.
+    const aspect = H > 0 ? W / H : 1;
+    const halfFov = VERTICAL_FOV / 2;
+    const halfPlane = Math.tan(halfFov) * aspect;
     const dirX = Math.cos(yaw);
     const dirY = Math.sin(yaw);
     // Camera plane = perpendicular to dir, scaled so the screen edges
@@ -969,6 +1002,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     }
     const flashWindow = 90;
     for (const e of enemies.values()) {
+      // hp=0 enemies are pending an enemy_killed cleanup that
+      // can land a tick or two after enemy_damaged. Skip
+      // rendering them so a V-cycle in the meantime doesn't
+      // carry "dead but still on screen" sprites into FPS.
+      if (e.hp <= 0) continue;
       const v = enemyVisualFor(e.kind);
       // White hit-flash for ~90ms on damage. Sprite is the same shape; just
       // tinted toward white.
@@ -1162,6 +1200,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   }
 
   // Blend a base colour toward fog colour by distance / FOG_FULL_DIST.
+  // World-height multiplier for a building hit. Mirrors iso's
+  // half-height workstation cubes so a workbench / forge / etc
+  // doesn't render as a full wall in FPS. Walls + doors + power
+  // links keep their existing full-height baseline.
+  function stationHeightMultFor(hit: RayHit): number {
+    if (!hit.isBuilding || !hit.buildingKind) return 1.0;
+    const def = BUILDING_REGISTRY[hit.buildingKind];
+    if (!def) return 1.0;
+    if (hit.buildingKind === 'door') return 0.35;
+    if (def.isStation) return 0.5;
+    return 1.0;
+  }
+
   function applyFog(base: number, dist: number, fog: number): number {
     if (dist <= 0) return base;
     const t = Math.min(1, dist / FOG_FULL_DIST);
