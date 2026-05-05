@@ -1,0 +1,28 @@
+{
+  "id": "sun_bleached",
+  "label": "Sun-Bleached Ruins",
+  "dominantHazard": "heat",
+  "palette": { "floor": "#3a2d1c", "wall": "#7c4a1f", "accent": "#fde68a" },
+  "generation": {
+    "roomCountMin": 8,
+    "roomCountMax": 14,
+    "roomSizeMin": 5,
+    "roomSizeMax": 11,
+    "corridorWidth": 2,
+    "branching": 0.35,
+    "propDensity": 0.07,
+    "enemyDensity": 0.04,
+    "lootDensity": 0.5,
+    "hazardIntensity": 0.55
+  },
+  "enemyRoster": [
+    { "id": "armored",      "weight": 1.0 },
+    { "id": "brute_chaser", "weight": 0.6 },
+    { "id": "flame_drone",  "weight": 0.8 }
+  ],
+  "propPalette": [],
+  "lootBias": [
+    { "materialId": "alloy",  "multiplier": 1.4 },
+    { "materialId": "scrap",  "multiplier": 1.1 }
+  ]
+}

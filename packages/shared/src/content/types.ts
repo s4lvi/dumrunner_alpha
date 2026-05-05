@@ -156,6 +156,13 @@ export const BiomeDefSchema = z
 export type BiomeDef = z.infer<typeof BiomeDefSchema>;
 
 // ---------- EnemyDef ----------
+//
+// Faithful port of server/src/ai/types.ts EnemyTemplate, with two
+// editor-friendly extensions:
+//   - `label` for UI display ("Brute Chaser" vs the slug id).
+//   - `biomeAffinity` so the spawn picker can filter by biome.
+// Numeric `color` fields in the server type become hex strings
+// here (JSON-friendly).
 
 export const FactionSchema = z.enum([
   'catacombs',
@@ -169,100 +176,99 @@ export type Faction = z.infer<typeof FactionSchema>;
 const enemyStatsSchema = z
   .object({
     hp: z.number().positive(),
-    contactDamage: z.number().nonnegative(),
-    // px/sec.
+    radius: z.number().positive(),
+    // px/sec; 0 disables movement.
     moveSpeed: z.number().nonnegative(),
-    aggroRadius: z.number().nonnegative(),
-    deaggroRadius: z.number().nonnegative(),
-    bodyRadius: z.number().positive(),
+    // Detect any live player within this radius.
+    senseRadius: z.number().nonnegative(),
   })
   .strict();
 
 const enemyVisualSchema = z
   .object({
-    // Procedural-shape fallback when no texture override exists.
-    // Same triple `EnemyVisual` already uses in shared/visuals.ts.
     shape: z.enum(['circle', 'square', 'triangle']),
     color: hexColorSchema,
     size: z.number().positive(),
   })
   .strict();
 
-const enemyLootSchema = z
+// Movement profile — what the enemy does while it has a target.
+const movementStationarySchema = z
+  .object({ kind: z.literal('stationary') })
+  .strict();
+const movementChaseSchema = z
+  .object({ kind: z.literal('chase') })
+  .strict();
+const movementKiteSchema = z
   .object({
-    materialDrops: z.array(LootDropSchema).optional(),
-    partDropChance: z.number().min(0).max(1).optional(),
-    blueprintDropChance: z.number().min(0).max(1).optional(),
+    kind: z.literal('kite'),
+    minRange: z.number().positive(),
+    maxRange: z.number().positive(),
   })
   .strict();
+// (maxRange ≥ minRange invariant is enforced at the EnemyDef
+// level via .superRefine below — Zod's discriminatedUnion can't
+// accept a refined arm.)
 
-// AI behaviour templates. Each template owns its own parameter
-// shape; the server picks an executor per `kind`. Adding a new
-// template is "add a literal arm here + a server-side handler" —
-// no changes to the editor's other AI types.
-const aiChaserMeleeSchema = z
-  .object({
-    kind: z.literal('chaser_melee'),
-    attackInterval: z.number().positive(),
-    meleeRange: z.number().positive(),
-  })
-  .strict();
-
-const aiRangedPulserSchema = z
-  .object({
-    kind: z.literal('ranged_pulser'),
-    attackInterval: z.number().positive(),
-    preferredRange: z
-      .object({
-        min: z.number().positive(),
-        max: z.number().positive(),
-      })
-      .strict()
-      .refine((r) => r.max >= r.min, {
-        message: 'preferredRange.max must be ≥ preferredRange.min',
-        path: ['max'],
-      }),
-    projectile: ProjectileSpecSchema,
-  })
-  .strict();
-
-const aiSwarmerSchema = z
-  .object({
-    kind: z.literal('swarmer'),
-    // 0..1 — tendency to commit to a target rather than wander.
-    aggression: z.number().min(0).max(1),
-    // 0..1 — how long a swarmer keeps chasing once committed.
-    chaseStickiness: z.number().min(0).max(1),
-  })
-  .strict();
-
-const aiBruteSchema = z
-  .object({
-    kind: z.literal('brute'),
-    chargeWindupMs: z.number().nonnegative(),
-    chargeDamage: z.number().positive(),
-    chargeRange: z.number().positive(),
-  })
-  .strict();
-
-const aiSniperSchema = z
-  .object({
-    kind: z.literal('sniper'),
-    attackInterval: z.number().positive(),
-    // Below this HP fraction, kite away from the player.
-    retreatBelowHpRatio: z.number().min(0).max(1),
-    projectile: ProjectileSpecSchema,
-  })
-  .strict();
-
-export const AiSpecSchema = z.discriminatedUnion('kind', [
-  aiChaserMeleeSchema,
-  aiRangedPulserSchema,
-  aiSwarmerSchema,
-  aiBruteSchema,
-  aiSniperSchema,
+export const MovementSpecSchema = z.discriminatedUnion('kind', [
+  movementStationarySchema,
+  movementChaseSchema,
+  movementKiteSchema,
 ]);
-export type AiSpec = z.infer<typeof AiSpecSchema>;
+export type MovementSpec = z.infer<typeof MovementSpecSchema>;
+
+// Attack templates. An enemy carries a list of these; each is
+// independently rate-gated server-side. Adding a new attack kind
+// is one new arm here + a matching executor in the AI runtime.
+const meleeAttackSchema = z
+  .object({
+    kind: z.literal('melee'),
+    range: z.number().positive(),
+    damagePerSec: z.number().nonnegative(),
+  })
+  .strict();
+
+const projectileAttackSchema = z
+  .object({
+    kind: z.literal('projectile'),
+    range: z.number().positive(),
+    cooldownMs: z.number().nonnegative(),
+    projectileSpeed: z.number().positive(),
+    projectileDamage: z.number().positive(),
+    projectileTtlMs: z.number().positive(),
+    projectileRadius: z.number().positive(),
+    projectileColor: hexColorSchema,
+  })
+  .strict();
+
+export const AoeConeEffectKindSchema = z.enum([
+  'burn_dps',
+  'poison_dps',
+  'slow_pct',
+]);
+export type AoeConeEffectKind = z.infer<typeof AoeConeEffectKindSchema>;
+
+const aoeConeAttackSchema = z
+  .object({
+    kind: z.literal('aoe_cone'),
+    range: z.number().positive(),
+    cooldownMs: z.number().nonnegative(),
+    // Half-arc in radians.
+    arcRad: z.number().positive(),
+    effectKind: AoeConeEffectKindSchema,
+    effectMagnitude: z.number().nonnegative(),
+    effectDurationMs: z.number().nonnegative(),
+    effectLabel: z.string().min(1),
+    coneColor: hexColorSchema,
+  })
+  .strict();
+
+export const AttackSpecSchema = z.discriminatedUnion('kind', [
+  meleeAttackSchema,
+  projectileAttackSchema,
+  aoeConeAttackSchema,
+]);
+export type AttackSpec = z.infer<typeof AttackSpecSchema>;
 
 export const EnemyDefSchema = z
   .object({
@@ -272,11 +278,29 @@ export const EnemyDefSchema = z
     // Cross-reference: BiomeDef.id values this enemy can spawn in.
     biomeAffinity: z.array(idSchema),
     stats: enemyStatsSchema,
-    ai: AiSpecSchema,
+    movement: MovementSpecSchema,
+    attacks: z.array(AttackSpecSchema),
+    // Below this HP/maxHP ratio the enemy transitions to fleeing.
+    // null disables flee behaviour entirely.
+    fleeBelowHpRatio: z.number().min(0).max(1).nullable(),
+    // Hit-stun duration on damage. 0 = stun-immune.
+    stunDurationOnHitMs: z.number().nonnegative(),
     visual: enemyVisualSchema,
-    loot: enemyLootSchema,
+    lootTable: z.array(LootDropSchema),
   })
-  .strict();
+  .strict()
+  .superRefine((def, ctx) => {
+    if (
+      def.movement.kind === 'kite' &&
+      def.movement.maxRange < def.movement.minRange
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'movement.kite.maxRange must be ≥ minRange',
+        path: ['movement', 'maxRange'],
+      });
+    }
+  });
 export type EnemyDef = z.infer<typeof EnemyDefSchema>;
 
 // ---------- PropDef ----------

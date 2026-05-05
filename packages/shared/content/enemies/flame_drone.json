@@ -1,0 +1,36 @@
+{
+  "id": "flame_drone",
+  "label": "Flame Drone",
+  "faction": "sun_bleached",
+  "biomeAffinity": ["sun_bleached"],
+  "stats": {
+    "hp": 65,
+    "radius": 14,
+    "moveSpeed": 105,
+    "senseRadius": 380
+  },
+  "movement": { "kind": "kite", "minRange": 120, "maxRange": 220 },
+  "attacks": [
+    {
+      "kind": "aoe_cone",
+      "range": 180,
+      "cooldownMs": 1500,
+      "arcRad": 0.7,
+      "effectKind": "burn_dps",
+      "effectMagnitude": 8,
+      "effectDurationMs": 4000,
+      "effectLabel": "Burning",
+      "coneColor": "#fb923c"
+    }
+  ],
+  "fleeBelowHpRatio": null,
+  "stunDurationOnHitMs": 200,
+  "visual": { "shape": "circle", "color": "#fb923c", "size": 14 },
+  "lootTable": [
+    { "materialId": "scrap",    "chance": 1.0,  "min": 1, "max": 2 },
+    { "materialId": "wire",     "chance": 0.55, "min": 1, "max": 2 },
+    { "materialId": "circuit",  "chance": 0.30, "min": 1, "max": 1 },
+    { "materialId": "crystal",  "chance": 0.06, "min": 1, "max": 1 },
+    { "materialId": "artifact", "chance": 0.06, "min": 1, "max": 1 }
+  ]
+}

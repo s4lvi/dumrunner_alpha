@@ -21,7 +21,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   BUILDING_REGISTRY,
-  ENEMY_VISUALS,
   type BuildingKind,
   type BuildingState,
   type EnemyState,
@@ -38,8 +37,8 @@ import {
   setOverride,
   subscribe as subscribeOverrides,
 } from '@/lib/textureOverrides';
+import { listEntities } from '@/lib/editorContentClient';
 
-const ENEMY_KINDS = Object.keys(ENEMY_VISUALS);
 const BUILDING_KINDS = Object.keys(BUILDING_REGISTRY) as BuildingKind[];
 
 // World-space tile size for the demo scene. Same as the live game
@@ -70,6 +69,19 @@ export default function EditorPage() {
   const inputRef = useRef({ mx: 0, my: 0, sprint: false });
 
   const [rendererMode, setRendererMode] = useState<RendererMode>('iso');
+  // Enemy ids load from /api/editor/content/enemies so fresh
+  // /editor/enemies authoring shows up here without a code edit.
+  const [enemyIds, setEnemyIds] = useState<string[]>([]);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await listEntities('enemies');
+        setEnemyIds(r.map((e) => e.id));
+      } catch {
+        // No content yet — leave the section empty.
+      }
+    })();
+  }, []);
 
   // V cycles through renderers. Listening at window level so the
   // canvas not having focus doesn't swallow the key.
@@ -102,6 +114,7 @@ export default function EditorPage() {
     const init = buildDemoInit({
       startX: selfPosRef.current.x,
       startY: selfPosRef.current.y,
+      enemyKinds: enemyIds,
       onInput: (mx, my, sprint) => {
         inputRef.current = { mx, my, sprint };
       },
@@ -112,7 +125,8 @@ export default function EditorPage() {
       gameRef.current?.destroy();
       gameRef.current = null;
     };
-  }, [rendererMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rendererMode, enemyIds]);
 
   // Local physics: advance selfPos by intent × speed × dt and push
   // into the renderer via movePlayer. The renderer handles its own
@@ -157,7 +171,13 @@ export default function EditorPage() {
           </p>
         </header>
         <Section title="Enemies">
-          {ENEMY_KINDS.map((id) => (
+          {enemyIds.length === 0 && (
+            <p className="text-[10px] text-zinc-500 px-2">
+              No enemies authored yet. Add some at{' '}
+              <code className="text-zinc-300">/editor/enemies</code>.
+            </p>
+          )}
+          {enemyIds.map((id) => (
             <TextureRow key={`enemy-${id}`} category="enemy" id={id} />
           ))}
         </Section>
@@ -284,10 +304,12 @@ function TextureRow({ category, id }: { category: string; id: string }) {
 function buildDemoInit({
   startX,
   startY,
+  enemyKinds,
   onInput,
 }: {
   startX: number;
   startY: number;
+  enemyKinds: string[];
   onInput: (mx: number, my: number, sprint: boolean) => void;
 }): GameInit {
   const layout: SceneLayout = {
@@ -312,10 +334,10 @@ function buildDemoInit({
     maxShield: 0,
     alive: true,
   };
-  const enemies: EnemyState[] = ENEMY_KINDS.map((kind, i) => ({
+  const enemies: EnemyState[] = enemyKinds.map((kind, i) => ({
     id: `editor_enemy_${i}`,
     kind,
-    x: (i - (ENEMY_KINDS.length - 1) / 2) * TILE * 2,
+    x: (i - (enemyKinds.length - 1) / 2) * TILE * 2,
     y: -6 * TILE,
     hp: 30,
     maxHp: 30,

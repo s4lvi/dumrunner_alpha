@@ -36,6 +36,7 @@ import {
   partPrimaryStat,
   PLAYER_BASE_STATS,
   PROTOCOL_VERSION,
+  setEnemyVisuals,
   SUIT_ATTACHMENT_SLOTS,
   SUIT_SLOT_KINDS,
   type BuildingKind,
@@ -480,6 +481,11 @@ export function Game({ serverId }: { serverId: string }) {
     switch (msg.type) {
       case 'welcome': {
         setStatus({ kind: 'connected', resp });
+        // Hydrate the runtime enemy-visual registry from the
+        // server's JSON-backed templates. Renderers read
+        // enemyVisualFor() against this map; without this call
+        // every kind would resolve to the dummy_target fallback.
+        setEnemyVisuals(msg.enemyVisuals);
         setInventory(msg.inventory);
         setEquipment(msg.equipment);
         setHotbarSelection(msg.hotbarSelection);

@@ -78,6 +78,7 @@ import {
   generateLockedRoomMeta,
 } from './procgen.js';
 import type { SceneLayout } from '@dumrunner/shared';
+import { getEnemyVisualsForWire } from './ai/templates.js';
 
 // Surface is an open scene (no walls) but ships a layout so the client knows
 // where the dungeon entrance is. Walkables are empty → collision is skipped.
@@ -557,6 +558,7 @@ export class World {
       hotbarSelection: conn.hotbarSelection,
       layout: scene.layout,
       knownBlueprints: mergedBlueprints(conn),
+      enemyVisuals: getEnemyVisualsForWire(),
     });
 
     scene.broadcast(

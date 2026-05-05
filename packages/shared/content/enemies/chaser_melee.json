@@ -1,0 +1,26 @@
+{
+  "id": "chaser_melee",
+  "label": "Chaser",
+  "faction": "catacombs",
+  "biomeAffinity": ["catacombs"],
+  "stats": {
+    "hp": 60,
+    "radius": 14,
+    "moveSpeed": 110,
+    "senseRadius": 420
+  },
+  "movement": { "kind": "chase" },
+  "attacks": [
+    { "kind": "melee", "range": 36, "damagePerSec": 25 }
+  ],
+  "fleeBelowHpRatio": null,
+  "stunDurationOnHitMs": 200,
+  "visual": { "shape": "triangle", "color": "#a855f7", "size": 16 },
+  "lootTable": [
+    { "materialId": "scrap",    "chance": 1.0,  "min": 1, "max": 3 },
+    { "materialId": "wire",     "chance": 0.45, "min": 1, "max": 2 },
+    { "materialId": "biotic",   "chance": 0.15, "min": 1, "max": 1 },
+    { "materialId": "artifact", "chance": 0.04, "min": 1, "max": 1 },
+    { "materialId": "key",      "chance": 0.02, "min": 1, "max": 1 }
+  ]
+}

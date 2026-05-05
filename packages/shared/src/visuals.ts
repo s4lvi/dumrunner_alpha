@@ -17,22 +17,32 @@ export type EnemyVisual = {
   size: number;
 };
 
-// Keyed by enemy template id. Templates whose AI/data side land in
-// server/ai/templates.ts SHOULD get an entry here; missing ids fall
-// back to FALLBACK_ENEMY_VISUAL.
+// Mutable enemy-visual registry. Populated at runtime from the
+// JSON content under packages/shared/content/enemies/<id>.json:
+//   - Server: ai/templates.ts initTemplates() calls setEnemyVisuals
+//     after reading the JSON.
+//   - Client: Game.tsx calls setEnemyVisuals on the welcome
+//     message's enemyVisuals payload.
+// Until either side populates, lookups fall back to the seed
+// dummy_target entry below — keeps the renderer from crashing
+// before the wire data arrives.
 export const ENEMY_VISUALS: Record<string, EnemyVisual> = {
-  dummy_target:  { shape: 'square',   color: 0xef4444, size: 18 },
-  chaser_melee:  { shape: 'triangle', color: 0xa855f7, size: 16 },
-  shooter_drone: { shape: 'circle',   color: 0x60a5fa, size: 14 },
-  brute_chaser:  { shape: 'square',   color: 0xb45309, size: 26 },
-  swarmer:       { shape: 'triangle', color: 0xfb7185, size: 12 },
-  armored:       { shape: 'square',   color: 0x4b5563, size: 22 },
+  dummy_target: { shape: 'square', color: 0xef4444, size: 18 },
 };
 
 export const FALLBACK_ENEMY_VISUAL: EnemyVisual = ENEMY_VISUALS.dummy_target;
 
 export function enemyVisualFor(kind: string): EnemyVisual {
   return ENEMY_VISUALS[kind] ?? FALLBACK_ENEMY_VISUAL;
+}
+
+// Replace the visual registry. Called from server/index.ts boot
+// (post-initTemplates) and from Game.tsx welcome handler.
+export function setEnemyVisuals(
+  visuals: Record<string, EnemyVisual>,
+): void {
+  for (const k of Object.keys(ENEMY_VISUALS)) delete ENEMY_VISUALS[k];
+  Object.assign(ENEMY_VISUALS, visuals);
 }
 
 // Part tier colours used by both the top-down loot drop tint and the

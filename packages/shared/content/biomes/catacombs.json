@@ -1,0 +1,28 @@
+{
+  "id": "catacombs",
+  "label": "Irradiated Catacombs",
+  "dominantHazard": "radiation",
+  "palette": { "floor": "#2c2530", "wall": "#5b3a4a", "accent": "#a855f7" },
+  "generation": {
+    "roomCountMin": 10,
+    "roomCountMax": 18,
+    "roomSizeMin": 4,
+    "roomSizeMax": 9,
+    "corridorWidth": 2,
+    "branching": 0.5,
+    "propDensity": 0.08,
+    "enemyDensity": 0.06,
+    "lootDensity": 0.5,
+    "hazardIntensity": 0.6
+  },
+  "enemyRoster": [
+    { "id": "chaser_melee", "weight": 1.0 },
+    { "id": "swarmer",      "weight": 1.5 },
+    { "id": "chem_bloater", "weight": 0.4 }
+  ],
+  "propPalette": [],
+  "lootBias": [
+    { "materialId": "biotic", "multiplier": 1.6 },
+    { "materialId": "wire",   "multiplier": 1.2 }
+  ]
+}

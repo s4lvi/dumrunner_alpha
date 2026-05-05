@@ -1,0 +1,27 @@
+{
+  "id": "brute_chaser",
+  "label": "Brute Chaser",
+  "faction": "sun_bleached",
+  "biomeAffinity": ["sun_bleached"],
+  "stats": {
+    "hp": 180,
+    "radius": 22,
+    "moveSpeed": 70,
+    "senseRadius": 360
+  },
+  "movement": { "kind": "chase" },
+  "attacks": [
+    { "kind": "melee", "range": 50, "damagePerSec": 50 }
+  ],
+  "fleeBelowHpRatio": 0.3,
+  "stunDurationOnHitMs": 80,
+  "visual": { "shape": "square", "color": "#b45309", "size": 26 },
+  "lootTable": [
+    { "materialId": "scrap",    "chance": 1.0,  "min": 2, "max": 4 },
+    { "materialId": "alloy",    "chance": 0.85, "min": 1, "max": 3 },
+    { "materialId": "circuit",  "chance": 0.30, "min": 1, "max": 2 },
+    { "materialId": "crystal",  "chance": 0.10, "min": 1, "max": 1 },
+    { "materialId": "artifact", "chance": 0.12, "min": 1, "max": 1 },
+    { "materialId": "key",      "chance": 0.06, "min": 1, "max": 1 }
+  ]
+}

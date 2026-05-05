@@ -1,15 +1,18 @@
 'use client';
 
 // Enemy editor. Three-pane layout matching the biome editor.
-// AI section switches its parameter form on the discriminated
-// `kind` so each template only shows its own fields.
+// Schema mirrors server's EnemyTemplate: identity + stats + a
+// movement profile (stationary / chase / kite) + a list of
+// attacks (melee / projectile / aoe_cone) + flee + stun + visual
+// + loot.
 
 import { useEffect, useState } from 'react';
 import type {
-  AiSpec,
+  AoeConeEffectKind,
+  AttackSpec,
   EnemyDef,
   Faction,
-  ProjectileSpec,
+  MovementSpec,
 } from '@dumrunner/shared';
 import {
   listEntities,
@@ -36,43 +39,47 @@ const FACTIONS: readonly Faction[] = [
 ] as const;
 
 const SHAPES = ['circle', 'square', 'triangle'] as const;
-
-const AI_KINDS = [
-  'chaser_melee',
-  'ranged_pulser',
-  'swarmer',
-  'brute',
-  'sniper',
+const MOVEMENT_KINDS = ['stationary', 'chase', 'kite'] as const;
+const ATTACK_KINDS = ['melee', 'projectile', 'aoe_cone'] as const;
+const EFFECT_KINDS: readonly AoeConeEffectKind[] = [
+  'burn_dps',
+  'poison_dps',
+  'slow_pct',
 ] as const;
-type AiKind = (typeof AI_KINDS)[number];
 
-function blankProjectile(): ProjectileSpec {
-  return { speed: 600, damage: 8, ttlMs: 1200, radius: 4, color: '#fde047' };
+function blankMovement(kind: MovementSpec['kind']): MovementSpec {
+  if (kind === 'stationary') return { kind };
+  if (kind === 'chase') return { kind };
+  return { kind: 'kite', minRange: 120, maxRange: 220 };
 }
 
-function blankAi(kind: AiKind): AiSpec {
-  switch (kind) {
-    case 'chaser_melee':
-      return { kind, attackInterval: 800, meleeRange: 36 };
-    case 'ranged_pulser':
-      return {
-        kind,
-        attackInterval: 1200,
-        preferredRange: { min: 120, max: 240 },
-        projectile: blankProjectile(),
-      };
-    case 'swarmer':
-      return { kind, aggression: 0.8, chaseStickiness: 0.5 };
-    case 'brute':
-      return { kind, chargeWindupMs: 600, chargeDamage: 30, chargeRange: 80 };
-    case 'sniper':
-      return {
-        kind,
-        attackInterval: 2200,
-        retreatBelowHpRatio: 0.3,
-        projectile: blankProjectile(),
-      };
+function blankAttack(kind: AttackSpec['kind']): AttackSpec {
+  if (kind === 'melee') {
+    return { kind: 'melee', range: 36, damagePerSec: 15 };
   }
+  if (kind === 'projectile') {
+    return {
+      kind: 'projectile',
+      range: 320,
+      cooldownMs: 1200,
+      projectileSpeed: 520,
+      projectileDamage: 12,
+      projectileTtlMs: 1200,
+      projectileRadius: 5,
+      projectileColor: '#fde047',
+    };
+  }
+  return {
+    kind: 'aoe_cone',
+    range: 160,
+    cooldownMs: 1500,
+    arcRad: 0.7,
+    effectKind: 'burn_dps',
+    effectMagnitude: 8,
+    effectDurationMs: 4000,
+    effectLabel: 'Burning',
+    coneColor: '#fb923c',
+  };
 }
 
 function makeBlank(id = 'new_enemy'): EnemyDef {
@@ -81,17 +88,13 @@ function makeBlank(id = 'new_enemy'): EnemyDef {
     label: 'New Enemy',
     faction: 'neutral',
     biomeAffinity: [],
-    stats: {
-      hp: 30,
-      contactDamage: 4,
-      moveSpeed: 80,
-      aggroRadius: 360,
-      deaggroRadius: 600,
-      bodyRadius: 14,
-    },
-    ai: blankAi('chaser_melee'),
+    stats: { hp: 50, radius: 14, moveSpeed: 100, senseRadius: 360 },
+    movement: { kind: 'chase' },
+    attacks: [{ kind: 'melee', range: 36, damagePerSec: 15 }],
+    fleeBelowHpRatio: null,
+    stunDurationOnHitMs: 200,
     visual: { shape: 'circle', color: '#a855f7', size: 14 },
-    loot: {},
+    lootTable: [{ materialId: 'scrap', chance: 1.0, min: 1, max: 2 }],
   };
 }
 
@@ -187,7 +190,7 @@ export default function EnemyEditorPage() {
             />
             <span className="flex-1 truncate">{e.label}</span>
             <span className="text-[9px] text-zinc-600 font-mono">
-              {e.ai.kind.split('_')[0]}
+              {e.movement.kind}
             </span>
           </button>
         ))}
@@ -254,13 +257,13 @@ export default function EnemyEditorPage() {
                   }
                 />
                 <NumberField
-                  label="contact damage"
-                  value={draft.stats.contactDamage}
-                  min={0}
+                  label="body radius"
+                  value={draft.stats.radius}
+                  min={1}
                   onChange={(v) =>
                     setDraft({
                       ...draft,
-                      stats: { ...draft.stats, contactDamage: v },
+                      stats: { ...draft.stats, radius: v },
                     })
                   }
                 />
@@ -275,48 +278,45 @@ export default function EnemyEditorPage() {
                       stats: { ...draft.stats, moveSpeed: v },
                     })
                   }
+                  hint="0 disables movement"
                 />
                 <NumberField
-                  label="body radius"
-                  value={draft.stats.bodyRadius}
-                  min={1}
-                  onChange={(v) =>
-                    setDraft({
-                      ...draft,
-                      stats: { ...draft.stats, bodyRadius: v },
-                    })
-                  }
-                />
-                <NumberField
-                  label="aggro radius"
-                  value={draft.stats.aggroRadius}
+                  label="sense radius"
+                  value={draft.stats.senseRadius}
                   min={0}
-                  step={10}
+                  step={20}
                   onChange={(v) =>
                     setDraft({
                       ...draft,
-                      stats: { ...draft.stats, aggroRadius: v },
-                    })
-                  }
-                />
-                <NumberField
-                  label="deaggro radius"
-                  value={draft.stats.deaggroRadius}
-                  min={0}
-                  step={10}
-                  onChange={(v) =>
-                    setDraft({
-                      ...draft,
-                      stats: { ...draft.stats, deaggroRadius: v },
+                      stats: { ...draft.stats, senseRadius: v },
                     })
                   }
                 />
               </div>
+              <NumberField
+                label="stun duration on hit (ms)"
+                value={draft.stunDurationOnHitMs}
+                min={0}
+                step={20}
+                onChange={(v) =>
+                  setDraft({ ...draft, stunDurationOnHitMs: v })
+                }
+                hint="0 = stun-immune. Tougher enemies use lower values."
+              />
+              <FleeRatioField
+                value={draft.fleeBelowHpRatio}
+                onChange={(v) => setDraft({ ...draft, fleeBelowHpRatio: v })}
+              />
             </FormSection>
 
-            <AiSection
-              ai={draft.ai}
-              onChange={(ai) => setDraft({ ...draft, ai })}
+            <MovementSection
+              movement={draft.movement}
+              onChange={(m) => setDraft({ ...draft, movement: m })}
+            />
+
+            <AttacksSection
+              attacks={draft.attacks}
+              onChange={(a) => setDraft({ ...draft, attacks: a })}
             />
 
             <FormSection title="Visual (procedural fallback)">
@@ -361,84 +361,45 @@ export default function EnemyEditorPage() {
               </p>
             </FormSection>
 
-            <FormSection title="Loot">
-              <NumberField
-                label="part drop chance"
-                value={draft.loot.partDropChance ?? 0}
-                min={0}
-                max={1}
-                step={0.05}
-                onChange={(v) =>
-                  setDraft({
-                    ...draft,
-                    loot: { ...draft.loot, partDropChance: v || undefined },
-                  })
-                }
-              />
-              <NumberField
-                label="blueprint drop chance"
-                value={draft.loot.blueprintDropChance ?? 0}
-                min={0}
-                max={1}
-                step={0.01}
-                onChange={(v) =>
-                  setDraft({
-                    ...draft,
-                    loot: {
-                      ...draft.loot,
-                      blueprintDropChance: v || undefined,
-                    },
-                  })
-                }
-              />
-              <ListField
-                label="material drops"
-                hint="weighted; each row rolls independently."
-                entries={draft.loot.materialDrops ?? []}
-                newEntry={() => ({
-                  materialId: '',
-                  min: 1,
-                  max: 1,
-                  chance: 0.5,
-                })}
-                onChange={(next) =>
-                  setDraft({
-                    ...draft,
-                    loot: {
-                      ...draft.loot,
-                      materialDrops: next.length > 0 ? next : undefined,
-                    },
-                  })
-                }
-                renderRow={(entry, _i, update) => (
-                  <div className="grid grid-cols-[1fr_60px_60px_70px] gap-2">
-                    <TextField
-                      label="materialId"
-                      value={entry.materialId}
-                      monospace
-                      onChange={(v) => update({ ...entry, materialId: v })}
-                    />
-                    <NumberField
-                      label="min"
-                      value={entry.min}
-                      min={0}
-                      onChange={(v) => update({ ...entry, min: v })}
-                    />
-                    <NumberField
-                      label="max"
-                      value={entry.max}
-                      min={0}
-                      onChange={(v) => update({ ...entry, max: v })}
-                    />
-                    <SliderField
-                      label="chance"
-                      value={entry.chance}
-                      onChange={(v) => update({ ...entry, chance: v })}
-                    />
-                  </div>
-                )}
-              />
-            </FormSection>
+            <ListField
+              label="Loot table"
+              hint="each row rolls independently when the enemy dies."
+              entries={draft.lootTable}
+              newEntry={() => ({
+                materialId: '',
+                min: 1,
+                max: 1,
+                chance: 0.5,
+              })}
+              onChange={(next) => setDraft({ ...draft, lootTable: next })}
+              renderRow={(entry, _i, update) => (
+                <div className="grid grid-cols-[1fr_60px_60px_70px] gap-2">
+                  <TextField
+                    label="materialId"
+                    value={entry.materialId}
+                    monospace
+                    onChange={(v) => update({ ...entry, materialId: v })}
+                  />
+                  <NumberField
+                    label="min"
+                    value={entry.min}
+                    min={0}
+                    onChange={(v) => update({ ...entry, min: v })}
+                  />
+                  <NumberField
+                    label="max"
+                    value={entry.max}
+                    min={0}
+                    onChange={(v) => update({ ...entry, max: v })}
+                  />
+                  <SliderField
+                    label="chance"
+                    value={entry.chance}
+                    onChange={(v) => update({ ...entry, chance: v })}
+                  />
+                </div>
+              )}
+            />
           </div>
         )}
       </main>
@@ -460,16 +421,15 @@ export default function EnemyEditorPage() {
             <div className="text-[11px] text-zinc-400 space-y-0.5 font-mono">
               <div>id: {draft.id}</div>
               <div>faction: {draft.faction}</div>
-              <div>ai: {draft.ai.kind}</div>
+              <div>movement: {draft.movement.kind}</div>
+              <div>attacks: {draft.attacks.map((a) => a.kind).join(', ')}</div>
               <div>hp: {draft.stats.hp}</div>
-              <div>damage: {draft.stats.contactDamage}</div>
               <div>speed: {draft.stats.moveSpeed} px/s</div>
               <div>biomes: {draft.biomeAffinity.join(', ') || '(none)'}</div>
             </div>
             <p className="text-[10px] text-zinc-600 leading-snug">
-              Live AI sandbox (Spawn / fire-at-dummy) lands once
-              the server consumes EnemyDef JSON in E3.1. Until
-              then, save and verify in the live game.
+              Live AI sandbox lands once E3.1 wires biome roster
+              spawning. For now, save and verify in the live game.
             </p>
           </div>
         ) : (
@@ -482,195 +442,257 @@ export default function EnemyEditorPage() {
   );
 }
 
-// ---------- AI section: switches param form on discriminated `kind` ----------
+// ---------- Movement section ----------
 
-function AiSection({
-  ai,
+function MovementSection({
+  movement,
   onChange,
 }: {
-  ai: AiSpec;
-  onChange: (ai: AiSpec) => void;
+  movement: MovementSpec;
+  onChange: (m: MovementSpec) => void;
 }) {
   return (
-    <FormSection title="AI">
+    <FormSection title="Movement">
       <EnumField
-        label="behavior"
-        value={ai.kind}
-        options={AI_KINDS}
-        onChange={(k) => onChange(blankAi(k))}
+        label="kind"
+        value={movement.kind}
+        options={MOVEMENT_KINDS}
+        onChange={(k) => onChange(blankMovement(k))}
       />
-      {ai.kind === 'chaser_melee' && (
+      {movement.kind === 'kite' && (
         <div className="grid grid-cols-2 gap-2">
           <NumberField
-            label="attack interval (ms)"
-            value={ai.attackInterval}
-            step={50}
-            min={0}
-            onChange={(v) => onChange({ ...ai, attackInterval: v })}
-          />
-          <NumberField
-            label="melee range (px)"
-            value={ai.meleeRange}
-            min={0}
-            onChange={(v) => onChange({ ...ai, meleeRange: v })}
-          />
-        </div>
-      )}
-      {ai.kind === 'ranged_pulser' && (
-        <>
-          <NumberField
-            label="attack interval (ms)"
-            value={ai.attackInterval}
-            step={50}
-            min={0}
-            onChange={(v) => onChange({ ...ai, attackInterval: v })}
-          />
-          <div className="grid grid-cols-2 gap-2">
-            <NumberField
-              label="preferred range min"
-              value={ai.preferredRange.min}
-              min={0}
-              step={10}
-              onChange={(v) =>
-                onChange({
-                  ...ai,
-                  preferredRange: { ...ai.preferredRange, min: v },
-                })
-              }
-            />
-            <NumberField
-              label="preferred range max"
-              value={ai.preferredRange.max}
-              min={0}
-              step={10}
-              onChange={(v) =>
-                onChange({
-                  ...ai,
-                  preferredRange: { ...ai.preferredRange, max: v },
-                })
-              }
-            />
-          </div>
-          <ProjectileSubform
-            spec={ai.projectile}
-            onChange={(p) => onChange({ ...ai, projectile: p })}
-          />
-        </>
-      )}
-      {ai.kind === 'swarmer' && (
-        <>
-          <SliderField
-            label="aggression"
-            value={ai.aggression}
-            onChange={(v) => onChange({ ...ai, aggression: v })}
-          />
-          <SliderField
-            label="chase stickiness"
-            value={ai.chaseStickiness}
-            onChange={(v) => onChange({ ...ai, chaseStickiness: v })}
-          />
-        </>
-      )}
-      {ai.kind === 'brute' && (
-        <div className="grid grid-cols-2 gap-2">
-          <NumberField
-            label="charge windup (ms)"
-            value={ai.chargeWindupMs}
-            min={0}
-            step={50}
-            onChange={(v) => onChange({ ...ai, chargeWindupMs: v })}
-          />
-          <NumberField
-            label="charge damage"
-            value={ai.chargeDamage}
-            min={0}
-            onChange={(v) => onChange({ ...ai, chargeDamage: v })}
-          />
-          <NumberField
-            label="charge range"
-            value={ai.chargeRange}
+            label="min range"
+            value={movement.minRange}
             min={0}
             step={10}
-            onChange={(v) => onChange({ ...ai, chargeRange: v })}
+            onChange={(v) => onChange({ ...movement, minRange: v })}
+          />
+          <NumberField
+            label="max range"
+            value={movement.maxRange}
+            min={0}
+            step={10}
+            onChange={(v) => onChange({ ...movement, maxRange: v })}
           />
         </div>
-      )}
-      {ai.kind === 'sniper' && (
-        <>
-          <div className="grid grid-cols-2 gap-2">
-            <NumberField
-              label="attack interval (ms)"
-              value={ai.attackInterval}
-              min={0}
-              step={50}
-              onChange={(v) => onChange({ ...ai, attackInterval: v })}
-            />
-            <SliderField
-              label="retreat below HP ratio"
-              value={ai.retreatBelowHpRatio}
-              onChange={(v) => onChange({ ...ai, retreatBelowHpRatio: v })}
-            />
-          </div>
-          <ProjectileSubform
-            spec={ai.projectile}
-            onChange={(p) => onChange({ ...ai, projectile: p })}
-          />
-        </>
       )}
     </FormSection>
   );
 }
 
-function ProjectileSubform({
-  spec,
+// ---------- Attacks section ----------
+
+function AttacksSection({
+  attacks,
   onChange,
 }: {
-  spec: ProjectileSpec;
-  onChange: (next: ProjectileSpec) => void;
+  attacks: AttackSpec[];
+  onChange: (a: AttackSpec[]) => void;
 }) {
   return (
-    <div className="border border-zinc-800 rounded p-2 space-y-1">
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-        projectile
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <NumberField
-          label="speed (px/s)"
-          value={spec.speed}
-          min={0}
-          step={50}
-          onChange={(v) => onChange({ ...spec, speed: v })}
-        />
-        <NumberField
-          label="damage"
-          value={spec.damage}
-          min={0}
-          onChange={(v) => onChange({ ...spec, damage: v })}
-        />
-        <NumberField
-          label="ttl (ms)"
-          value={spec.ttlMs}
-          min={0}
-          step={50}
-          onChange={(v) => onChange({ ...spec, ttlMs: v })}
-        />
-        <NumberField
-          label="radius (px)"
-          value={spec.radius}
-          min={1}
-          onChange={(v) => onChange({ ...spec, radius: v })}
-        />
-      </div>
-      <ColorField
-        label="color"
-        value={spec.color}
-        onChange={(v) => onChange({ ...spec, color: v })}
-      />
-    </div>
+    <ListField<AttackSpec>
+      label="Attacks"
+      hint="Server evaluates attacks in order each tick; melee fires first when in range, then projectiles / cones."
+      entries={attacks}
+      newEntry={() => blankAttack('melee')}
+      onChange={onChange}
+      renderRow={(attack, _i, update) => (
+        <div className="space-y-1 border border-zinc-800 rounded p-2">
+          <EnumField
+            label="kind"
+            value={attack.kind}
+            options={ATTACK_KINDS}
+            onChange={(k) => update(blankAttack(k as AttackSpec['kind']))}
+          />
+          {attack.kind === 'melee' && (
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField
+                label="range (px)"
+                value={attack.range}
+                min={1}
+                onChange={(v) => update({ ...attack, range: v })}
+              />
+              <NumberField
+                label="damage / sec"
+                value={attack.damagePerSec}
+                min={0}
+                onChange={(v) => update({ ...attack, damagePerSec: v })}
+                hint="continuous while target in range"
+              />
+            </div>
+          )}
+          {attack.kind === 'projectile' && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField
+                  label="range (px)"
+                  value={attack.range}
+                  min={1}
+                  step={10}
+                  onChange={(v) => update({ ...attack, range: v })}
+                />
+                <NumberField
+                  label="cooldown (ms)"
+                  value={attack.cooldownMs}
+                  min={0}
+                  step={50}
+                  onChange={(v) => update({ ...attack, cooldownMs: v })}
+                />
+                <NumberField
+                  label="projectile speed"
+                  value={attack.projectileSpeed}
+                  min={1}
+                  step={50}
+                  onChange={(v) =>
+                    update({ ...attack, projectileSpeed: v })
+                  }
+                />
+                <NumberField
+                  label="projectile damage"
+                  value={attack.projectileDamage}
+                  min={0}
+                  onChange={(v) =>
+                    update({ ...attack, projectileDamage: v })
+                  }
+                />
+                <NumberField
+                  label="projectile ttl (ms)"
+                  value={attack.projectileTtlMs}
+                  min={0}
+                  step={50}
+                  onChange={(v) =>
+                    update({ ...attack, projectileTtlMs: v })
+                  }
+                />
+                <NumberField
+                  label="projectile radius"
+                  value={attack.projectileRadius}
+                  min={1}
+                  onChange={(v) =>
+                    update({ ...attack, projectileRadius: v })
+                  }
+                />
+              </div>
+              <ColorField
+                label="projectile color"
+                value={attack.projectileColor}
+                onChange={(v) => update({ ...attack, projectileColor: v })}
+              />
+            </>
+          )}
+          {attack.kind === 'aoe_cone' && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField
+                  label="range (px)"
+                  value={attack.range}
+                  min={1}
+                  step={10}
+                  onChange={(v) => update({ ...attack, range: v })}
+                />
+                <NumberField
+                  label="cooldown (ms)"
+                  value={attack.cooldownMs}
+                  min={0}
+                  step={50}
+                  onChange={(v) => update({ ...attack, cooldownMs: v })}
+                />
+                <NumberField
+                  label="arc (rad)"
+                  value={attack.arcRad}
+                  min={0.05}
+                  step={0.05}
+                  onChange={(v) => update({ ...attack, arcRad: v })}
+                  hint="half-arc; 0.7 ≈ 80°"
+                />
+              </div>
+              <EnumField
+                label="effect kind"
+                value={attack.effectKind}
+                options={EFFECT_KINDS}
+                onChange={(v) =>
+                  update({ ...attack, effectKind: v as AoeConeEffectKind })
+                }
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField
+                  label="effect magnitude"
+                  value={attack.effectMagnitude}
+                  min={0}
+                  step={0.05}
+                  onChange={(v) =>
+                    update({ ...attack, effectMagnitude: v })
+                  }
+                />
+                <NumberField
+                  label="effect duration (ms)"
+                  value={attack.effectDurationMs}
+                  min={0}
+                  step={100}
+                  onChange={(v) =>
+                    update({ ...attack, effectDurationMs: v })
+                  }
+                />
+              </div>
+              <TextField
+                label="effect label"
+                value={attack.effectLabel}
+                onChange={(v) => update({ ...attack, effectLabel: v })}
+                hint="HUD chip text — e.g. Burning, Poisoned, Slowed"
+              />
+              <ColorField
+                label="cone color"
+                value={attack.coneColor}
+                onChange={(v) => update({ ...attack, coneColor: v })}
+              />
+            </>
+          )}
+        </div>
+      )}
+    />
   );
 }
 
-// ---------- biome affinity multi-select (loaded from API) ----------
+// ---------- Misc ----------
+
+function FleeRatioField({
+  value,
+  onChange,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={value !== null}
+          onChange={(e) => onChange(e.target.checked ? 0.3 : null)}
+          className="accent-zinc-500"
+        />
+        <span>flees below HP ratio</span>
+      </label>
+      {value !== null && (
+        <div className="flex items-center gap-2 pl-6">
+          <input
+            type="range"
+            value={value}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className="flex-1"
+          />
+          <span className="font-mono text-[10px] text-zinc-400 w-10 text-right">
+            {value.toFixed(2)}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function BiomeAffinityField({
   value,
@@ -686,7 +708,7 @@ function BiomeAffinityField({
         const r = await listEntities('biomes');
         setBiomeIds(r.map((b) => b.id));
       } catch {
-        // No biomes yet — just show the manual entry input.
+        // No biomes yet — manual entry stays usable.
       }
     })();
   }, []);
@@ -702,7 +724,9 @@ function BiomeAffinityField({
                 key={id}
                 type="button"
                 onClick={() =>
-                  onChange(on ? value.filter((v) => v !== id) : [...value, id])
+                  onChange(
+                    on ? value.filter((v) => v !== id) : [...value, id],
+                  )
                 }
                 className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
                   on

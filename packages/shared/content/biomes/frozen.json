@@ -1,0 +1,26 @@
+{
+  "id": "frozen",
+  "label": "Frozen Vaults",
+  "dominantHazard": "cold",
+  "palette": { "floor": "#1d2c3a", "wall": "#5b8aa6", "accent": "#bae6fd" },
+  "generation": {
+    "roomCountMin": 7,
+    "roomCountMax": 12,
+    "roomSizeMin": 6,
+    "roomSizeMax": 12,
+    "corridorWidth": 3,
+    "branching": 0.25,
+    "propDensity": 0.04,
+    "enemyDensity": 0.04,
+    "lootDensity": 0.55,
+    "hazardIntensity": 0.5
+  },
+  "enemyRoster": [
+    { "id": "shooter_drone", "weight": 1.0 }
+  ],
+  "propPalette": [],
+  "lootBias": [
+    { "materialId": "circuit", "multiplier": 1.3 },
+    { "materialId": "wire",    "multiplier": 1.2 }
+  ]
+}

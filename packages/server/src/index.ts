@@ -21,7 +21,14 @@ import {
 import { env } from './env.js';
 import { supabase } from './supabase.js';
 import { registry } from './registry.js';
+import { initTemplates } from './ai/templates.js';
 import type { World } from './world.js';
+
+// Hydrate the JSON-backed enemy template registry before
+// accepting connections. Crashes on missing content — by design,
+// since a server with no enemy templates can't run a game. See
+// packages/shared/content/enemies/.
+await initTemplates();
 
 // Typed dispatch map for inbound client messages. Each key is a
 // ClientMessage['type']; each value handles ONLY that type (TS narrows

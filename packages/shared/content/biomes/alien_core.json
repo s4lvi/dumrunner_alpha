@@ -1,0 +1,24 @@
+{
+  "id": "alien_core",
+  "label": "Alien Core",
+  "dominantHazard": "toxic",
+  "palette": { "floor": "#1f3536", "wall": "#0e7490", "accent": "#22d3ee" },
+  "generation": {
+    "roomCountMin": 6,
+    "roomCountMax": 11,
+    "roomSizeMin": 6,
+    "roomSizeMax": 14,
+    "corridorWidth": 2,
+    "branching": 0.4,
+    "propDensity": 0.06,
+    "enemyDensity": 0.05,
+    "lootDensity": 0.6,
+    "hazardIntensity": 0.7
+  },
+  "enemyRoster": [],
+  "propPalette": [],
+  "lootBias": [
+    { "materialId": "crystal",  "multiplier": 1.6 },
+    { "materialId": "artifact", "multiplier": 1.4 }
+  ]
+}

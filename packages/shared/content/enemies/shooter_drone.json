@@ -1,0 +1,35 @@
+{
+  "id": "shooter_drone",
+  "label": "Shooter Drone",
+  "faction": "frozen",
+  "biomeAffinity": ["frozen"],
+  "stats": {
+    "hp": 50,
+    "radius": 12,
+    "moveSpeed": 130,
+    "senseRadius": 520
+  },
+  "movement": { "kind": "kite", "minRange": 180, "maxRange": 280 },
+  "attacks": [
+    {
+      "kind": "projectile",
+      "range": 320,
+      "cooldownMs": 1200,
+      "projectileSpeed": 520,
+      "projectileDamage": 12,
+      "projectileTtlMs": 1200,
+      "projectileRadius": 5,
+      "projectileColor": "#60a5fa"
+    }
+  ],
+  "fleeBelowHpRatio": null,
+  "stunDurationOnHitMs": 250,
+  "visual": { "shape": "circle", "color": "#60a5fa", "size": 14 },
+  "lootTable": [
+    { "materialId": "scrap",    "chance": 0.8,  "min": 1, "max": 2 },
+    { "materialId": "wire",     "chance": 0.85, "min": 1, "max": 3 },
+    { "materialId": "circuit",  "chance": 0.45, "min": 1, "max": 2 },
+    { "materialId": "artifact", "chance": 0.05, "min": 1, "max": 1 },
+    { "materialId": "key",      "chance": 0.04, "min": 1, "max": 1 }
+  ]
+}

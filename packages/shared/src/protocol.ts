@@ -709,6 +709,14 @@ export type ServerMessage =
       // Blueprint ids the player currently has access to (per-cycle +
       // persistent, merged). Used by the client to enable/disable recipes.
       knownBlueprints: string[];
+      // Enemy visual registry derived from the JSON content
+      // (packages/shared/content/enemies/*.json). Client
+      // populates the runtime ENEMY_VISUALS map from this so a
+      // newly-authored enemy renders without a deploy.
+      enemyVisuals: Record<
+        string,
+        { shape: 'square' | 'circle' | 'triangle'; color: number; size: number }
+      >;
     }
   | {
       // Sent when the player transitions between scenes (stairs, extract pad,
