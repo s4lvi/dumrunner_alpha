@@ -39,11 +39,11 @@ import {
   addWeapon,
   buildingHordePriority,
   buildingMaxHp,
-  computeWeaponEffect,
   computeWeaponImbues,
   consumeAmmo,
   consumePlaceable,
   countAmmo,
+  effectiveWeaponStats,
   isStationKind,
   swapSlotsBetween,
   weaponFamily,
@@ -53,7 +53,6 @@ import {
   MAX_INACCURACY_RAD,
   MELEE_STATS,
   TURRET_VARIANTS,
-  WEAPON_STATS,
 } from './combat.js';
 import { TEMPLATES, SURFACE_SPAWNS } from './ai/templates.js';
 import {
@@ -274,6 +273,10 @@ export type SceneSnapshot = {
     // hydrate. Optional for backwards compatibility with snapshots
     // written before storage chests existed.
     output?: import('@dumrunner/shared').InventorySlot[];
+    // Per-bench tier (Phase 2.2). Persisted so Mk3 benches stay
+    // Mk3 across server restarts. Optional for backward compat
+    // with snapshots written before Phase 2.
+    benchTier?: 1 | 2 | 3 | 4;
   }>;
   nextEnemyId: number;
   nextProjectileId: number;
@@ -497,10 +500,17 @@ export class Scene {
           saved.output.length > 0
             ? saved.output
             : emptyBufferForKind(saved.kind);
+        // Default benchTier to 1 for Weapon Benches that pre-date
+        // Phase 2.2 (no field in the saved snapshot). Other kinds
+        // leave it undefined.
+        const benchTier =
+          saved.benchTier ??
+          (saved.kind === 'weapon_bench' ? 1 : undefined);
         this.buildings.set(saved.id, {
           ...saved,
           lastFireAt: 0,
           output: restoredOutput,
+          benchTier,
         });
       }
     }
@@ -633,6 +643,10 @@ export class Scene {
       maxHp,
       lastFireAt: 0,
       output: emptyBufferForKind(kind),
+      // Weapon Bench starts at Mk1; gets lifted via the
+      // upgrade_workstation message + a Bench Upgrade item from the
+      // Forge. Other building kinds leave benchTier undefined.
+      benchTier: kind === 'weapon_bench' ? 1 : undefined,
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
@@ -691,15 +705,18 @@ export class Scene {
   ): void {
     const slot = conn.inventory[conn.hotbarSelection];
     if (!slot || slot.kind !== 'weapon') return;
-    const stats = WEAPON_STATS[family];
-    // Mods + piece affixes on the weapon scale the base WEAPON_STATS.
-    // computeWeaponEffect returns a fully-defaulted multiplier set so
-    // the math below stays branch-free.
-    const eff = computeWeaponEffect(slot.weapon);
-    const fireInterval = stats.fireIntervalMs * eff.fireIntervalMult;
-    const damage = stats.damage * eff.damageMult;
-    const projectileSpeed = stats.projectileSpeed + eff.projectileSpeedAdd;
-    const spreadRad = stats.spreadRad * eff.spreadMult;
+    // effectiveWeaponStats applies BOTH the per-weapon-tier base
+    // scaling (Phase 2.2) AND the attachment effects (mods + piece
+    // affixes, including tier-mismatch from Phase 2.3). Reading
+    // through it keeps the server's fire path in lockstep with the
+    // client's stats panel — no chance of drift.
+    const stats = effectiveWeaponStats(slot.weapon);
+    if (!stats) return; // melee — caller already gated this
+    const fireInterval = stats.fireIntervalMs;
+    const damage = stats.damage;
+    const projectileSpeed = stats.projectileSpeed;
+    const spreadRad = stats.spreadRad;
+    void family;
     // Imbues from incendiary / chem / cryo mods. Each pellet
     // carries them so a 6-pellet shotgun blast lays on the status
     // generously.
@@ -770,9 +787,8 @@ export class Scene {
     if (!conn || !conn.alive) return;
     const slot = conn.inventory[conn.hotbarSelection];
     if (!slot || slot.kind !== 'weapon') return;
-    const family = weaponFamily(slot.weapon.weaponId);
-    if (family === 'melee') return;
-    const stats = WEAPON_STATS[family];
+    const stats = effectiveWeaponStats(slot.weapon);
+    if (!stats) return; // melee
     const now = Date.now();
     if (now < conn.reloadingUntil) return; // already reloading
     const mag = slot.weapon.magazineRemaining ?? stats.magazineSize;
@@ -800,9 +816,8 @@ export class Scene {
       conn.reloadingUntil = 0;
       const slot = conn.inventory[conn.hotbarSelection];
       if (!slot || slot.kind !== 'weapon') continue;
-      const family = weaponFamily(slot.weapon.weaponId);
-      if (family === 'melee') continue;
-      const stats = WEAPON_STATS[family];
+      const stats = effectiveWeaponStats(slot.weapon);
+      if (!stats) continue; // melee
       const mag = slot.weapon.magazineRemaining ?? stats.magazineSize;
       const need = stats.magazineSize - mag;
       if (need <= 0) continue;
@@ -819,7 +834,7 @@ export class Scene {
       this.broadcast({
         type: 'weapon_reloaded',
         characterId: conn.characterId,
-        magazineRemaining: slot.weapon.magazineRemaining,
+        magazineRemaining: slot.weapon.magazineRemaining ?? stats.magazineSize,
       });
       void completedAt; // reserved for future reload telemetry
     }
@@ -1079,6 +1094,8 @@ export class Scene {
 
       // Transfer every non-empty slot from the corpse into the looter's
       // inventory, using the right helper per kind so stacks merge.
+      // Every InventorySlot variant must be handled here — missing
+      // cases silently destroy items at the corpse-to-looter handoff.
       for (const slot of c.inventory) {
         switch (slot.kind) {
           case 'empty':
@@ -1097,6 +1114,12 @@ export class Scene {
             break;
           case 'placeable':
             addPlaceable(closest.inventory, slot.buildingKind, slot.count);
+            break;
+          case 'attachment':
+            addAttachment(closest.inventory, slot.instance);
+            break;
+          case 'consumable':
+            addConsumable(closest.inventory, slot.consumableId, slot.count);
             break;
         }
       }
@@ -2417,6 +2440,53 @@ export class Scene {
     return building;
   }
 
+  // Sandbox playtest helper. Drops a starter set of workstations on
+  // the surface so the tester doesn't have to hand-craft + place
+  // each one to start exercising Phase 2's flows. Idempotent — for
+  // each spec, only places a building if no building of that kind
+  // already exists on the surface (lets the player demolish and
+  // re-place; only re-spawns on a fresh world). Skips a spec if its
+  // tile is already occupied by a different building.
+  ensurePlaytestStations(
+    specs: { kind: BuildingKind; tileX: number; tileY: number }[]
+  ): void {
+    if (this.kind !== 'surface') return;
+    const existingKinds = new Set<BuildingKind>();
+    const occupiedTiles = new Set<string>();
+    for (const b of this.buildings.values()) {
+      existingKinds.add(b.kind);
+      occupiedTiles.add(`${b.tileX},${b.tileY}`);
+    }
+    for (const spec of specs) {
+      if (existingKinds.has(spec.kind)) continue;
+      if (occupiedTiles.has(`${spec.tileX},${spec.tileY}`)) continue;
+      const maxHp = buildingMaxHp(spec.kind);
+      const id = `b${this.nextBuildingId++}`;
+      const building: BuildingRuntime = {
+        id,
+        kind: spec.kind,
+        tileX: spec.tileX,
+        tileY: spec.tileY,
+        width: 1,
+        height: 1,
+        hp: maxHp,
+        maxHp,
+        lastFireAt: 0,
+        output: emptyBufferForKind(spec.kind),
+        benchTier: spec.kind === 'weapon_bench' ? 1 : undefined,
+      };
+      this.buildings.set(id, building);
+      occupiedTiles.add(`${spec.tileX},${spec.tileY}`);
+      existingKinds.add(spec.kind);
+      this.broadcast({
+        type: 'building_placed',
+        building: toBuildingState(building),
+      });
+      ensureBuildingAsset(spec.kind);
+    }
+    this.bindings.onBuildingsChanged();
+  }
+
   // Open (remove) a door building AND every adjacent door connected to
   // it via 4-connected adjacency. A 2-wide corridor produces 2 adjacent
   // door tiles that the player perceives as a single door — flood-fill
@@ -2448,6 +2518,18 @@ export class Scene {
   getBuilding(id: string): BuildingState | null {
     const b = this.buildings.get(id);
     return b ? { ...b } : null;
+  }
+
+  // Phase 2.2: lift a workstation building's tier. Mutates the live
+  // state and re-broadcasts building_placed so every client picks up
+  // the new tier (the assembly modal reads benchTier off the live
+  // building snapshot).
+  setBuildingTier(id: string, tier: 1 | 2 | 3 | 4): boolean {
+    const b = this.buildings.get(id);
+    if (!b) return false;
+    b.benchTier = tier;
+    this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
+    return true;
   }
 
   // Returns the first alive building of the given kind, or null. Used to
@@ -2683,10 +2765,14 @@ function toCorpseState(c: CorpseRuntime): CorpseState {
 }
 
 function toBuildingState(b: BuildingRuntime): BuildingState {
-  // Output is only sent on the wire when it has any non-empty slot —
-  // saves bytes for non-station buildings and stations with empty
-  // buffers. Client treats undefined as "no output to render."
+  // For stations (workbench / forge / etc) we only ship `output`
+  // when something's in the buffer — saves bytes when most stations
+  // are idle. Storage chests always ship the full 16-slot array so
+  // the open-chest modal can render an empty grid; otherwise the
+  // client thinks the chest has zero slots.
+  const isChest = b.kind === 'storage_chest';
   const hasOutput = b.output.some((s) => s.kind !== 'empty');
+  const includeOutput = isChest || hasOutput;
   return {
     id: b.id,
     kind: b.kind,
@@ -2696,7 +2782,8 @@ function toBuildingState(b: BuildingRuntime): BuildingState {
     height: b.height,
     hp: b.hp,
     maxHp: b.maxHp,
-    ...(hasOutput ? { output: b.output.map((s) => ({ ...s })) } : {}),
+    ...(includeOutput ? { output: b.output.map((s) => ({ ...s })) } : {}),
+    ...(b.benchTier !== undefined ? { benchTier: b.benchTier } : {}),
   };
 }
 

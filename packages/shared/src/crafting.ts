@@ -19,7 +19,9 @@ import {
   addAmmo,
   addAttachment,
   addConsumable,
+  addMaterial,
   addPlaceable,
+  addUpgrade,
   addWeapon,
   consumeAmmo,
   consumeMaterial,
@@ -34,6 +36,7 @@ import {
   type Inventory,
   type InventorySlot,
   type MaterialKind,
+  type UpgradeKind,
   type WeaponKind,
 } from './inventory';
 import type { BuildingKind, WorkstationKind } from './protocol';
@@ -50,7 +53,14 @@ export type RecipeOutput =
   | { kind: 'ammo'; ammoId: AmmoKind; count: number }
   | { kind: 'weapon'; weaponId: WeaponKind }
   | { kind: 'attachment'; defId: string; count: number }
-  | { kind: 'consumable'; consumableId: ConsumableKind; count: number };
+  | { kind: 'consumable'; consumableId: ConsumableKind; count: number }
+  // Material output supports the Forge alloy recipes (Phase 2):
+  // raw scrap-tier inputs → higher-tier alloy materials. Stack-
+  // merges in the inventory like any other material drop.
+  | { kind: 'material'; materialId: MaterialKind; count: number }
+  // Workstation upgrade items (Phase 2.2). Crafted at the Forge,
+  // consumed when applied to a target workstation building.
+  | { kind: 'upgrade'; upgradeId: UpgradeKind; count: number };
 
 export type Recipe = {
   id: string;
@@ -115,6 +125,90 @@ export const RECIPES: Record<string, Recipe> = {
     blueprintId: null,
     craftTimeMs: 30_000,
   },
+  // Forge recipes — alloy production. Three tiers; output feeds
+  // bench-tier upgrade items and high-tier weapon attachments.
+  // The base 'forge_alloy' recipe lets a fresh player bootstrap
+  // alloy without farming armored/brute kills; the higher tiers
+  // are only craftable at the Forge.
+  forge_alloy: {
+    id: 'forge_alloy',
+    name: 'Alloy Plate (1)',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 12 },
+      { kind: 'material', materialId: 'wire', count: 4 },
+    ],
+    output: { kind: 'material', materialId: 'alloy', count: 1 },
+    workstation: 'forge',
+    blueprintId: null,
+    craftTimeMs: 18_000,
+  },
+  forge_alloy_mk3: {
+    id: 'forge_alloy_mk3',
+    name: 'Refined Alloy (1)',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 4 },
+      { kind: 'material', materialId: 'circuit', count: 2 },
+    ],
+    output: { kind: 'material', materialId: 'alloy_mk3', count: 1 },
+    workstation: 'forge',
+    blueprintId: null,
+    craftTimeMs: 30_000,
+  },
+  forge_alloy_mk4: {
+    id: 'forge_alloy_mk4',
+    name: 'Precision Alloy (1)',
+    inputs: [
+      { kind: 'material', materialId: 'alloy_mk3', count: 4 },
+      { kind: 'material', materialId: 'crystal', count: 1 },
+      { kind: 'material', materialId: 'artifact', count: 1 },
+    ],
+    output: { kind: 'material', materialId: 'alloy_mk4', count: 1 },
+    workstation: 'forge',
+    blueprintId: null,
+    craftTimeMs: 60_000,
+  },
+  // Weapon Bench upgrade items. Apply at the bench (right-click →
+  // Apply) to lift it to the next tier. Each tier consumes its
+  // own alloy stratum: Mk2 from base alloy, Mk3 from Refined,
+  // Mk4 from Precision.
+  forge_bench_upgrade_mk2: {
+    id: 'forge_bench_upgrade_mk2',
+    name: 'Weapon Bench Mk2 Upgrade',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 8 },
+      { kind: 'material', materialId: 'circuit', count: 4 },
+    ],
+    output: { kind: 'upgrade', upgradeId: 'weapon_bench_mk2', count: 1 },
+    workstation: 'forge',
+    blueprintId: null,
+    craftTimeMs: 45_000,
+  },
+  forge_bench_upgrade_mk3: {
+    id: 'forge_bench_upgrade_mk3',
+    name: 'Weapon Bench Mk3 Upgrade',
+    inputs: [
+      { kind: 'material', materialId: 'alloy_mk3', count: 6 },
+      { kind: 'material', materialId: 'circuit', count: 6 },
+      { kind: 'material', materialId: 'crystal', count: 1 },
+    ],
+    output: { kind: 'upgrade', upgradeId: 'weapon_bench_mk3', count: 1 },
+    workstation: 'forge',
+    blueprintId: null,
+    craftTimeMs: 75_000,
+  },
+  forge_bench_upgrade_mk4: {
+    id: 'forge_bench_upgrade_mk4',
+    name: 'Weapon Bench Mk4 Upgrade',
+    inputs: [
+      { kind: 'material', materialId: 'alloy_mk4', count: 4 },
+      { kind: 'material', materialId: 'crystal', count: 2 },
+      { kind: 'material', materialId: 'artifact', count: 2 },
+    ],
+    output: { kind: 'upgrade', upgradeId: 'weapon_bench_mk4', count: 1 },
+    workstation: 'forge',
+    blueprintId: null,
+    craftTimeMs: 120_000,
+  },
   electronics_bench: {
     id: 'electronics_bench',
     name: 'Electronics Bench',
@@ -137,6 +231,32 @@ export const RECIPES: Record<string, Recipe> = {
       { kind: 'material', materialId: 'wire', count: 6 },
     ],
     output: { kind: 'placeable', buildingKind: 'weapon_bench', count: 1 },
+    workstation: 'workbench',
+    blueprintId: null,
+    craftTimeMs: 30_000,
+  },
+  precision_mill: {
+    id: 'precision_mill',
+    name: 'Precision Machining Mill',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 30 },
+      { kind: 'material', materialId: 'alloy', count: 8 },
+      { kind: 'material', materialId: 'circuit', count: 4 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'precision_mill', count: 1 },
+    workstation: 'workbench',
+    blueprintId: null,
+    craftTimeMs: 35_000,
+  },
+  suit_bench: {
+    id: 'suit_bench',
+    name: 'Suit Assembly Bench',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 25 },
+      { kind: 'material', materialId: 'alloy', count: 8 },
+      { kind: 'material', materialId: 'wire', count: 4 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'suit_bench', count: 1 },
     workstation: 'workbench',
     blueprintId: null,
     craftTimeMs: 30_000,
@@ -319,9 +439,12 @@ export const RECIPES: Record<string, Recipe> = {
     blueprintId: 'bp_rifle',
     craftTimeMs: 60_000,
   },
-  // Sniper / Heavy / Energy — late-game ranged. Crafted at the
-  // Weapon Bench so they sit a tier above the Workbench-built
-  // Pistol/SMG/Shotgun/Rifle.
+  // Sniper / Heavy / Energy — late-game ranged. All base weapons
+  // craft at the Workbench (the bench split moved assembly /
+  // tier-up to the Weapon Bench + Precision Mill, so all chassis
+  // crafting is centralised at the Workbench for symmetry).
+  // Phase 2's bench-tier upgrades will gate higher-tier
+  // assembly per-bench; the chassis recipe stays at the workbench.
   sniper: {
     id: 'sniper',
     name: 'Sniper Rifle',
@@ -331,7 +454,7 @@ export const RECIPES: Record<string, Recipe> = {
       { kind: 'material', materialId: 'crystal', count: 1 },
     ],
     output: { kind: 'weapon', weaponId: 'sniper' },
-    workstation: 'weapon_bench',
+    workstation: 'workbench',
     blueprintId: 'bp_sniper',
     craftTimeMs: 75_000,
   },
@@ -344,7 +467,7 @@ export const RECIPES: Record<string, Recipe> = {
       { kind: 'material', materialId: 'circuit', count: 3 },
     ],
     output: { kind: 'weapon', weaponId: 'heavy' },
-    workstation: 'weapon_bench',
+    workstation: 'workbench',
     blueprintId: 'bp_heavy',
     craftTimeMs: 80_000,
   },
@@ -357,13 +480,14 @@ export const RECIPES: Record<string, Recipe> = {
       { kind: 'material', materialId: 'wire', count: 6 },
     ],
     output: { kind: 'weapon', weaponId: 'energy' },
-    workstation: 'weapon_bench',
+    workstation: 'workbench',
     blueprintId: 'bp_energy',
     craftTimeMs: 70_000,
   },
-  // Melee weapons. Sword + Hammer at the Workbench, energy_blade
-  // at the Weapon Bench since it slots into the late-tier weapon
-  // bench progression alongside sniper / heavy / energy carbine.
+  // Melee weapons. All four melee chassis (knife / sword / hammer
+  // / energy_blade) craft at the Workbench for symmetry with
+  // ranged. Knife is hand-craftable so a player who loses their
+  // starter never ends up melee-less.
   sword: {
     id: 'sword',
     name: 'Sword',
@@ -397,9 +521,20 @@ export const RECIPES: Record<string, Recipe> = {
       { kind: 'material', materialId: 'alloy', count: 4 },
     ],
     output: { kind: 'weapon', weaponId: 'energy_blade' },
-    workstation: 'weapon_bench',
+    workstation: 'workbench',
     blueprintId: 'bp_energy_blade',
     craftTimeMs: 60_000,
+  },
+  // Knife — starter melee, hand-craftable from raw scrap so a
+  // player who loses theirs (drop / death / despawn) is never
+  // permanently melee-less. No blueprint required.
+  knife: {
+    id: 'knife',
+    name: 'Knife',
+    inputs: [{ kind: 'material', materialId: 'scrap', count: 6 }],
+    output: { kind: 'weapon', weaponId: 'knife' },
+    workstation: null,
+    blueprintId: null,
   },
   // Ammo recipes for the new families.
   sniper_rounds: {
@@ -697,6 +832,32 @@ export function listRecipes(): Recipe[] {
   return Object.values(RECIPES);
 }
 
+// Materials consumed when tier-upping a weapon at the Precision
+// Machining Mill. Indexed by *current* tier — TIER_UP_COSTS[1] is
+// what you pay to go T1 → T2. No entry for tier 4 (cap). Lives in
+// shared so the client can render the cost line in the mill modal
+// alongside the Tier Up button.
+export const TIER_UP_COSTS: Record<
+  1 | 2 | 3,
+  { materialId: MaterialKind; count: number }[]
+> = {
+  1: [
+    { materialId: 'alloy', count: 6 },
+    { materialId: 'circuit', count: 2 },
+  ],
+  2: [
+    { materialId: 'alloy', count: 12 },
+    { materialId: 'circuit', count: 5 },
+    { materialId: 'crystal', count: 1 },
+  ],
+  3: [
+    { materialId: 'alloy', count: 24 },
+    { materialId: 'circuit', count: 10 },
+    { materialId: 'crystal', count: 3 },
+    { materialId: 'artifact', count: 2 },
+  ],
+};
+
 // ---------- recipe IO dispatch helpers ----------
 //
 // The server's craft handlers used to repeat the same N-branch if/else
@@ -756,6 +917,10 @@ export function recipeOutputToSlot(out: RecipeOutput): InventorySlot {
       };
     case 'consumable':
       return { kind: 'consumable', consumableId: out.consumableId, count: out.count };
+    case 'material':
+      return { kind: 'material', materialId: out.materialId, count: out.count };
+    case 'upgrade':
+      return { kind: 'upgrade', upgradeId: out.upgradeId, count: out.count };
   }
 }
 
@@ -780,6 +945,10 @@ export function addRecipeOutputToInventory(
       return addAttachment(inv, out.defId, 'Mk1', out.count);
     case 'consumable':
       return addConsumable(inv, out.consumableId, out.count);
+    case 'material':
+      return addMaterial(inv, out.materialId, out.count) === 0;
+    case 'upgrade':
+      return addUpgrade(inv, out.upgradeId, out.count);
   }
 }
 
@@ -1038,7 +1207,8 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     id: 'bp_aff_shield_25',
     recipeId: 'craft_aff_shield_25',
     displayName: 'Hardened Plating',
-    description: '+25 max shield. Slots into a suit plating piece.',
+    description:
+      '+25 max shield (rolled). Slots into a suit plating piece via the Suit Assembly Bench.',
     cost: 5,
     tier: 'uncommon',
   },
@@ -1046,7 +1216,8 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     id: 'bp_aff_speed_5',
     recipeId: 'craft_aff_speed_5',
     displayName: 'Servomotor Tune',
-    description: '+5% movement speed. Slots into a suit utility mod.',
+    description:
+      '+5% movement speed (rolled). Slots into a suit utility mod via the Suit Assembly Bench.',
     cost: 5,
     tier: 'uncommon',
   },

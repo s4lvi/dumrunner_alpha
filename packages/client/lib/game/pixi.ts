@@ -9,6 +9,8 @@ import {
   Text,
   type Texture,
 } from "pixi.js";
+import { buildingsToMinimapList, type MinimapSnapshot } from './minimap';
+import { subscribe as subscribeOverrides } from '../textureOverrides';
 import {
   circleFits,
   enemyVisualFor,
@@ -69,6 +71,16 @@ export type GameInit = {
     nearest: BuildingKind | null;
     nearestDoorId: string | null;
     nearestChestId: string | null;
+    // Highest-tier weapon bench in range. 0 if no bench in range.
+    // Mirrors the server's nearestWeaponBenchTier check so the
+    // assembly UI can grey out weapons above this tier.
+    weaponBenchTier: number;
+    // Ids of every weapon bench in range, with their tiers. The
+    // upgrade-apply right-click flow uses this to find a bench
+    // matching the upgrade's targetTier - 1 (mk2 upgrade → Mk1
+    // bench). Renderer pushes all in-range benches; the parent
+    // picks one by tier when an upgrade is applied.
+    weaponBenches: { id: string; tier: number }[];
   }) => void;
   // Optional asset_gen-backed sprite resolver. Renderer asks the host
   // for a PNG url keyed by enemy template id; returning null falls back
@@ -101,7 +113,6 @@ export type GameHandle = {
     shield?: number,
     maxShield?: number,
   ): void;
-  setSelfStamina(stamina: number, maxStamina: number): void;
   setPlayerDead(characterId: string): void;
   respawnPlayer(
     characterId: string,
@@ -156,11 +167,10 @@ export type GameHandle = {
     characterId: string;
     displayName: string;
   }[];
-  // Paint the minimap into the host's <canvas>. World-coords are
-  // mapped to canvas pixels via worldRadius. Cheap to call at 10 Hz;
-  // the renderer reads from its own entity maps so this is just a
-  // 2D ctx pass.
-  paintMinimap(canvas: HTMLCanvasElement, worldRadius: number): void;
+  // Renderer-agnostic snapshot consumed by the React Minimap
+  // component (see lib/game/minimap.ts). Visibility flags reflect
+  // each renderer's LOS / fog state at the time of the call.
+  getMinimapSnapshot(): MinimapSnapshot;
   destroy(): void;
 };
 
@@ -204,8 +214,6 @@ const DEAD_COLOR = 0x444444;
 const PROJECTILE_COLOR = 0xfafafa;
 const MOVE_SPEED = 220; // px/sec
 const NETWORK_TICK_HZ = 20;
-const PISTOL_FIRE_INTERVAL_MS = 250;
-const KNIFE_SWING_INTERVAL_MS = 400;
 
 type RenderedPlayer = {
   data: Player;
@@ -305,18 +313,16 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   let serverSelfX = init.self.x;
   let serverSelfY = init.self.y;
   let selfAlive = init.self.alive;
-  let selfHp = init.self.hp;
-  let selfMaxHp = init.self.maxHp;
-  let selfStamina = init.self.stamina;
-  let selfMaxStamina = init.self.maxStamina;
-  let selfShield = init.self.shield;
-  let selfMaxShield = init.self.maxShield;
+  // selfHp / selfShield / selfStamina were previously kept in the
+  // renderer to drive the on-screen HP/Shield/Stamina bars. The
+  // bars now live in React (HudOverlay in Game.tsx), so these are
+  // gone — Game.tsx owns that state via player_damaged /
+  // player_stamina / player_respawned message handlers.
   // Last input sent to the server. Re-sent on change or every NETWORK_TICK_HZ.
   let lastSentInputX = 0;
   let lastSentInputY = 0;
   let lastSentSprint = false;
   let lastSentAt = 0;
-  let lastFireAt = 0;
 
   const RECONCILE_LERP_PER_SEC = 8; // smoothing rate toward server position
   const RECONCILE_SNAP_THRESHOLD = 120; // px — beyond this, hard-snap to server
@@ -346,61 +352,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   };
   const particles: Particle[] = [];
 
-  // HUD elements (screen space).
-  const shieldBarBg = new Graphics();
-  const shieldBarFill = new Graphics();
-  const hpBarBg = new Graphics();
-  const hpBarFill = new Graphics();
-  const staminaBarBg = new Graphics();
-  const staminaBarFill = new Graphics();
-  // Inline X/Y labels rendered ON TOP of each bar, centred. Replaces the
-  // old "HP 100/100" text floating above the HP bar.
-  const hpText = new Text({
-    text: "",
-    style: {
-      fill: "#ffffff",
-      fontSize: 11,
-      fontFamily: "system-ui, sans-serif",
-      fontWeight: "bold",
-      stroke: { color: "#000000", width: 2 },
-    },
-  });
-  const staminaText = new Text({
-    text: "",
-    style: {
-      fill: "#fef3c7",
-      fontSize: 9,
-      fontFamily: "system-ui, sans-serif",
-      fontWeight: "bold",
-      stroke: { color: "#000000", width: 2 },
-    },
-  });
-  const shieldText = new Text({
-    text: "",
-    style: {
-      fill: "#cffafe",
-      fontSize: 9,
-      fontFamily: "system-ui, sans-serif",
-      fontWeight: "bold",
-      stroke: { color: "#000000", width: 2 },
-    },
-  });
-  hpText.anchor.set(0.5, 0.5);
-  staminaText.anchor.set(0.5, 0.5);
-  shieldText.anchor.set(0.5, 0.5);
-  const deadOverlay = new Container();
-  const deadText = new Text({
-    text: "YOU ARE DOWN — respawning…",
-    style: {
-      fill: "#ef4444",
-      fontSize: 28,
-      fontFamily: "system-ui, sans-serif",
-      fontWeight: "700",
-    },
-  });
-  deadText.anchor.set(0.5);
-  deadOverlay.addChild(deadText);
-  deadOverlay.visible = false;
+  // Last-seen self HP/shield, used purely for damage-drop detection
+  // (screen shake + floating damage number on hit). The actual HUD
+  // bars are rendered by React via HudOverlay in Game.tsx.
+  let lastSelfHp = init.self.hp;
+  let lastSelfShield = init.self.shield;
 
   // Input state.
   const keys = new Set<string>();
@@ -500,19 +456,6 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       world.addChild(fxLayer);
       app.stage.addChild(world);
       app.stage.addChild(ui);
-      ui.addChild(
-        shieldBarBg,
-        shieldBarFill,
-        hpBarBg,
-        hpBarFill,
-        staminaBarBg,
-        staminaBarFill,
-        hpText,
-        staminaText,
-        shieldText,
-        deadOverlay,
-      );
-      drawHpBar();
 
       // Initial scene render.
       renderLayout(init.layout);
@@ -530,7 +473,6 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       for (const op of queued) op();
 
       centerCamera();
-      layoutUi();
 
       app.ticker.add(({ deltaMS }) => {
         if (destroyed) return;
@@ -595,30 +537,20 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       // — clicks place/demolish buildings instead. Also gated on having
       // a weapon selected; otherwise the click is a no-op.
       //
+      // We send every frame and let the server enforce per-weapon
+      // timing (mag, reload, fire interval). Any client-side throttle
+      // would cap weapons whose real fire rate is faster than the
+      // throttle, making firing rate view-dependent. Matches fps.ts.
+      //
       // The muzzle flash is NOT triggered here. It's driven off the
       // server's projectile_spawned event for the local player so the
-      // visual cadence matches the actual fire rate (which the client
-      // doesn't know — it varies per weapon family + mods + affixes)
-      // and so empty-mag / reloading / out-of-ammo states don't flash.
-      // Knife slash is similarly server-driven via weapon_swung.
-      //
-      // The local rate-limit here just throttles how often we tell the
-      // server we're holding the trigger. The server enforces real
-      // weapon timing.
+      // visual cadence matches the actual fire rate.
       if (mouseDown && buildKind === null && equippedWeapon !== null) {
-        const now = performance.now();
-        const interval =
-          equippedWeapon === "knife"
-            ? KNIFE_SWING_INTERVAL_MS
-            : PISTOL_FIRE_INTERVAL_MS;
-        if (now - lastFireAt >= interval) {
-          const aim = mouseToWorld();
-          const fdx = aim.x - selfX;
-          const fdy = aim.y - selfY;
-          if (Math.hypot(fdx, fdy) > 1) {
-            init.sendFire(fdx, fdy);
-            lastFireAt = now;
-          }
+        const aim = mouseToWorld();
+        const fdx = aim.x - selfX;
+        const fdy = aim.y - selfY;
+        if (Math.hypot(fdx, fdy) > 1) {
+          init.sendFire(fdx, fdy);
         }
       }
     }
@@ -731,7 +663,6 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     }
 
     centerCamera();
-    layoutUi();
 
     // Outbound input. Send on input-change immediately so key releases reach
     // the server fast; otherwise heartbeat at NETWORK_TICK_HZ. Once dead, we
@@ -754,16 +685,6 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       lastSentAt = now;
     }
 
-    // Local prediction of stamina so the bar updates smoothly between
-    // server broadcasts. Server is authoritative — its msgs override.
-    if (selfAlive) {
-      const moving = inputX !== 0 || inputY !== 0;
-      if (sprint && moving && selfStamina > 0) {
-        selfStamina = Math.max(0, selfStamina - 35 * dt);
-      } else {
-        selfStamina = Math.min(selfMaxStamina, selfStamina + 25 * dt);
-      }
-    }
   }
 
   function mouseToWorld(): { x: number; y: number } {
@@ -789,94 +710,6 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       Math.round(w / 2 - selfX + sx),
       Math.round(h / 2 - selfY + sy),
     );
-  }
-
-  function layoutUi() {
-    const w = app.renderer.width;
-    const h = app.renderer.height;
-    const barH = 16;
-    const stamH = 8;
-    const shieldH = 8;
-    const margin = 16;
-    const gap = 4;
-    // Bottom-left stack: shield (top, when present) → HP (main) → stamina (thin).
-    const hpY = h - margin - barH - stamH - gap;
-    const stamY = hpY + barH + gap;
-    const shieldY = hpY - shieldH - gap;
-    hpBarBg.position.set(margin, hpY);
-    hpBarFill.position.set(margin, hpY);
-    staminaBarBg.position.set(margin, stamY);
-    staminaBarFill.position.set(margin, stamY);
-    shieldBarBg.position.set(margin, shieldY);
-    shieldBarFill.position.set(margin, shieldY);
-    // Inline labels — centred over their respective bars.
-    const barW = 220;
-    hpText.position.set(margin + barW / 2, hpY + barH / 2);
-    staminaText.position.set(margin + barW / 2, stamY + stamH / 2);
-    shieldText.position.set(margin + barW / 2, shieldY + shieldH / 2);
-    drawHpBar();
-
-    // Dead overlay centred.
-    deadOverlay.position.set(w / 2, h / 2);
-  }
-
-  function drawHpBar() {
-    const barW = 220;
-    const barH = 16;
-    const stamH = 8;
-    const shieldH = 8;
-
-    hpBarBg.clear();
-    hpBarBg
-      .roundRect(0, 0, barW, barH, 4)
-      .fill({ color: 0x1f2937 })
-      .stroke({ color: 0x374151, width: 1 });
-    const hpRatio = selfMaxHp > 0 ? Math.max(0, selfHp / selfMaxHp) : 0;
-    hpBarFill.clear();
-    hpBarFill.roundRect(2, 2, (barW - 4) * hpRatio, barH - 4, 3).fill({
-      color: hpRatio > 0.4 ? 0x22c55e : hpRatio > 0.2 ? 0xeab308 : 0xef4444,
-    });
-
-    // Stamina (thin, yellow).
-    staminaBarBg.clear();
-    staminaBarBg
-      .roundRect(0, 0, barW, stamH, 3)
-      .fill({ color: 0x1f2937 })
-      .stroke({ color: 0x374151, width: 1 });
-    const stamRatio =
-      selfMaxStamina > 0 ? Math.max(0, selfStamina / selfMaxStamina) : 0;
-    staminaBarFill.clear();
-    staminaBarFill
-      .roundRect(2, 2, (barW - 4) * stamRatio, stamH - 4, 2)
-      .fill({ color: 0xfde68a });
-
-    // Shield (cyan, only visible when maxShield > 0).
-    shieldBarBg.clear();
-    shieldBarFill.clear();
-    if (selfMaxShield > 0) {
-      shieldBarBg.visible = true;
-      shieldBarFill.visible = true;
-      shieldBarBg
-        .roundRect(0, 0, barW, shieldH, 3)
-        .fill({ color: 0x1f2937 })
-        .stroke({ color: 0x374151, width: 1 });
-      const sRatio = Math.max(0, selfShield / selfMaxShield);
-      shieldBarFill
-        .roundRect(2, 2, (barW - 4) * sRatio, shieldH - 4, 2)
-        .fill({ color: 0x22d3ee });
-    } else {
-      shieldBarBg.visible = false;
-      shieldBarFill.visible = false;
-    }
-
-    hpText.text = `${Math.round(selfHp)} / ${Math.round(selfMaxHp)}`;
-    staminaText.text = `${Math.round(selfStamina)} / ${Math.round(selfMaxStamina)}`;
-    if (selfMaxShield > 0) {
-      shieldText.visible = true;
-      shieldText.text = `${Math.round(selfShield)} / ${Math.round(selfMaxShield)}`;
-    } else {
-      shieldText.visible = false;
-    }
   }
 
   // ---------- combat effects ----------
@@ -1020,12 +853,16 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     label.position.set(0, -28);
     container.addChild(label);
 
-    // Mini HP bar above player.
+    // Mini HP bar above remote players. Self's HP is shown by the
+    // screen-space HudOverlay instead — a floating bar over your
+    // own head is redundant.
     const hpBg = new Graphics();
-    hpBg.roundRect(-18, -22, 36, 4, 2).fill({ color: 0x1f2937 });
-    container.addChild(hpBg);
     const hpFill = new Graphics();
-    container.addChild(hpFill);
+    if (!isSelf) {
+      hpBg.roundRect(-18, -22, 36, 4, 2).fill({ color: 0x1f2937 });
+      container.addChild(hpBg);
+      container.addChild(hpFill);
+    }
 
     playersLayer.addChild(container);
 
@@ -1110,6 +947,22 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // promise is cached during in-flight loads to dedupe concurrent
   // first-spawns of the same kind.
   const enemyTextureCache = new Map<string, Promise<Texture | null>>();
+
+  // When a texture override changes (developer uploaded a sprite
+  // via /editor), drop any already-resolved sprites from existing
+  // enemies and re-run the resolver so they pick up the new
+  // texture without a scene reload. Mirrors iso's behaviour.
+  const unsubOverrides = subscribeOverrides(() => {
+    for (const [, re] of enemies) {
+      if (re.sprite) {
+        re.container.removeChild(re.sprite);
+        re.sprite.destroy();
+        re.sprite = undefined;
+        re.body.visible = true;
+      }
+      void resolveEnemySprite(re, re.data.kind);
+    }
+  });
 
   async function resolveEnemySprite(
     re: RenderedEnemy,
@@ -1356,6 +1209,65 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         .rect(w * 0.74, h * 0.52, w * 0.14, h * 0.28)
         .fill({ color: 0xb45309 })
         .stroke({ color: 0x78350f, width: 1 });
+    } else if (b.kind === "suit_bench") {
+      // Suit Assembly Bench: deep-blue base with a stylised suit
+      // silhouette (head + chest plate) on top + a cyan plating
+      // accent line. Distinct from the Weapon Bench's pistol motif
+      // and the Precision Mill's spindle disc.
+      body.rect(0, 0, w, h).fill({ color: 0x1e3a8a });
+      body.rect(0, 0, w, h).stroke({ color: 0x0c1126, width: 2 });
+      // Bench top.
+      body.rect(w * 0.1, h * 0.18, w * 0.8, h * 0.22).fill({ color: 0x1e293b });
+      // Suit head.
+      body
+        .circle(w * 0.5, h * 0.5, w * 0.08)
+        .fill({ color: 0xcbd5e1 })
+        .stroke({ color: 0x1e293b, width: 1 });
+      // Chest plate.
+      body
+        .rect(w * 0.36, h * 0.6, w * 0.28, h * 0.22)
+        .fill({ color: 0x94a3b8 })
+        .stroke({ color: 0x1e293b, width: 1 });
+      // Cyan plating accent.
+      body
+        .moveTo(w * 0.42, h * 0.7)
+        .lineTo(w * 0.58, h * 0.7)
+        .stroke({ color: 0x22d3ee, width: 1.5 });
+    } else if (b.kind === "precision_mill") {
+      // Precision Machining Mill: dark steel base with a stylised
+      // central spindle (lathe head) and a yellow indicator light.
+      // Reads as "you upgrade weapon tier here" — distinct from the
+      // weapon bench's gunsmith pistol silhouette.
+      body.rect(0, 0, w, h).fill({ color: 0x1e293b });
+      body.rect(0, 0, w, h).stroke({ color: 0x000000, width: 2 });
+      // Lower housing.
+      body
+        .rect(w * 0.18, h * 0.6, w * 0.64, h * 0.28)
+        .fill({ color: 0x475569 })
+        .stroke({ color: 0x0f172a, width: 1 });
+      // Spindle disc.
+      body
+        .circle(w * 0.5, h * 0.42, w * 0.2)
+        .fill({ color: 0x94a3b8 })
+        .stroke({ color: 0x1e293b, width: 1 });
+      body.circle(w * 0.5, h * 0.42, w * 0.07).fill({ color: 0xfbbf24 });
+      // Spokes.
+      body
+        .moveTo(w * 0.5, h * 0.22)
+        .lineTo(w * 0.5, h * 0.34)
+        .stroke({ color: 0xcbd5e1, width: 1.5 });
+      body
+        .moveTo(w * 0.5, h * 0.5)
+        .lineTo(w * 0.5, h * 0.62)
+        .stroke({ color: 0xcbd5e1, width: 1.5 });
+      body
+        .moveTo(w * 0.3, h * 0.42)
+        .lineTo(w * 0.42, h * 0.42)
+        .stroke({ color: 0xcbd5e1, width: 1.5 });
+      body
+        .moveTo(w * 0.58, h * 0.42)
+        .lineTo(w * 0.7, h * 0.42)
+        .stroke({ color: 0xcbd5e1, width: 1.5 });
     } else if (b.kind === "electronics_bench") {
       // Electronics bench: green PCB-like surface with a yellow LED.
       body.rect(0, 0, w, h).fill({ color: 0x064e3b });
@@ -1680,6 +1592,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           nearest: null,
           nearestDoorId: null,
           nearestChestId: null,
+          weaponBenchTier: 0,
+          weaponBenches: [],
         });
       }
       return;
@@ -1692,6 +1606,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     let nearestDoorDsq = Infinity;
     let nearestChestId: string | null = null;
     let nearestChestDsq = Infinity;
+    // Max weapon-bench tier among all benches in range. The server
+    // takes the same max when validating assemble_weapon, so the UI
+    // gating reads from the same model.
+    let weaponBenchTier = 0;
+    const weaponBenches: { id: string; tier: number }[] = [];
     for (const rb of buildings.values()) {
       const b = rb.data;
       const cx = (b.tileX + b.width / 2) * tileSize;
@@ -1713,6 +1632,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         b.kind !== "forge" &&
         b.kind !== "electronics_bench" &&
         b.kind !== "weapon_bench" &&
+        b.kind !== "precision_mill" &&
+        b.kind !== "suit_bench" &&
         b.kind !== "artifact_uplink" &&
         b.kind !== "storage_chest"
       ) {
@@ -1728,6 +1649,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           nearestChestDsq = dsq;
           nearestChestId = b.id;
         }
+        if (b.kind === "weapon_bench") {
+          const t = b.benchTier ?? 1;
+          if (t > weaponBenchTier) weaponBenchTier = t;
+          weaponBenches.push({ id: b.id, tier: t });
+        }
       }
     }
     const key =
@@ -1737,7 +1663,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       "|" +
       (nearestDoorId ?? "") +
       "|" +
-      (nearestChestId ?? "");
+      (nearestChestId ?? "") +
+      "|" +
+      String(weaponBenchTier) +
+      "|" +
+      weaponBenches.map((b) => `${b.id}:${b.tier}`).join(",");
     if (key !== lastWorkstationKey) {
       lastWorkstationKey = key;
       init.onNearWorkstationsChanged({
@@ -1745,6 +1675,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         nearest: nearestKind,
         nearestDoorId,
         nearestChestId,
+        weaponBenchTier,
+        weaponBenches,
       });
     }
   }
@@ -2168,14 +2100,14 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         drawPlayerHpBar(p);
       }
       if (characterId === init.self.characterId) {
-        const prevTotal = selfHp + selfShield;
-        const newTotal = hp + (shield ?? selfShield);
+        // Damage delta drives screen shake + floating damage number.
+        // We track lastSelfHp/Shield internally for this; the on-
+        // screen HP/Shield bars come from React (HudOverlay).
+        const prevTotal = lastSelfHp + lastSelfShield;
+        const newTotal = hp + (shield ?? lastSelfShield);
         const selfDamage = Math.max(0, prevTotal - newTotal);
-        selfHp = hp;
-        selfMaxHp = maxHp;
-        if (shield !== undefined) selfShield = shield;
-        if (maxShield !== undefined) selfMaxShield = maxShield;
-        drawHpBar();
+        lastSelfHp = hp;
+        if (shield !== undefined) lastSelfShield = shield;
         if (selfDamage > 0) {
           triggerShake(Math.min(14, 4 + selfDamage * 0.3));
           spawnDamageNumber(selfX, selfY - 22, selfDamage, "#fca5a5");
@@ -2183,11 +2115,6 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       } else if (damageAmount > 0 && p) {
         spawnDamageNumber(p.data.x, p.data.y - 22, damageAmount, "#fca5a5");
       }
-    },
-    setSelfStamina(stamina: number, maxStamina: number) {
-      selfStamina = stamina;
-      selfMaxStamina = maxStamina;
-      drawHpBar();
     },
     setPlayerDead(characterId: string) {
       const p = players.get(characterId);
@@ -2200,9 +2127,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       }
       if (characterId === init.self.characterId) {
         selfAlive = false;
-        selfHp = 0;
-        deadOverlay.visible = true;
-        drawHpBar();
+        lastSelfHp = 0;
       }
     },
     respawnPlayer(
@@ -2235,17 +2160,18 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         selfY = y;
         serverSelfX = x;
         serverSelfY = y;
-        selfHp = hp;
-        selfMaxHp = maxHp;
-        if (stamina !== undefined) selfStamina = stamina;
-        if (maxStamina !== undefined) selfMaxStamina = maxStamina;
-        if (shield !== undefined) selfShield = shield;
-        if (maxShield !== undefined) selfMaxShield = maxShield;
+        lastSelfHp = hp;
+        if (shield !== undefined) lastSelfShield = shield;
         selfAlive = true;
         lastSentInputX = 0;
         lastSentInputY = 0;
-        deadOverlay.visible = false;
-        drawHpBar();
+        // stamina/maxStamina/maxHp/maxShield args are unused now that
+        // React owns the HP/Stamina/Shield bars — kept in the
+        // signature for API stability.
+        void stamina;
+        void maxStamina;
+        void maxHp;
+        void maxShield;
       }
     },
     showWeaponSwung(
@@ -2256,23 +2182,33 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     ) {
       const p = players.get(characterId);
       if (!p) return;
-      // For now: render a brief slash arc as a particle in front of the player.
-      if (weaponId !== "knife") return;
+      // Per-weapon reach + colour. Mirrors MELEE_STATS in shared so
+      // the visual matches what the server actually swept. Unknown
+      // melee kinds fall back to knife defaults.
+      const profile: Record<
+        string,
+        { reach: number; color: number; width: number }
+      > = {
+        knife:        { reach: 60, color: 0xe2e8f0, width: 4 },
+        sword:        { reach: 90, color: 0xfde047, width: 5 },
+        hammer:       { reach: 80, color: 0xf97316, width: 7 },
+        energy_blade: { reach: 80, color: 0x22d3ee, width: 5 },
+      };
+      const v = profile[weaponId] ?? profile.knife;
       const len = Math.hypot(dirX, dirY) || 1;
       const ux = dirX / len;
       const uy = dirY / len;
-      const reach = 60;
       const slash = new Graphics();
       slash
         .moveTo(p.data.x + ux * 16, p.data.y + uy * 16)
-        .lineTo(p.data.x + ux * reach, p.data.y + uy * reach)
-        .stroke({ color: 0xfde68a, width: 4 });
+        .lineTo(p.data.x + ux * v.reach, p.data.y + uy * v.reach)
+        .stroke({ color: v.color, width: v.width });
       fxLayer.addChild(slash);
       particles.push({
         obj: slash,
         vx: 0,
         vy: 0,
-        life: 140,
+        life: 160,
         age: 0,
         fadeOut: true,
       });
@@ -2430,11 +2366,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         selfY = state.self.y;
         serverSelfX = state.self.x;
         serverSelfY = state.self.y;
-        selfHp = state.self.hp;
-        selfMaxHp = state.self.maxHp;
+        lastSelfHp = state.self.hp;
+        lastSelfShield = state.self.shield;
         selfAlive = state.self.alive;
-        deadOverlay.visible = !selfAlive;
-        drawHpBar();
 
         // Repopulate from the new scene's state.
         addOrUpdatePlayer(state.self, true);
@@ -2448,98 +2382,29 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         if ((state.layout?.tileSize ?? 0) <= 0) buildKind = null;
       });
     },
-    paintMinimap(canvas: HTMLCanvasElement, worldRadius: number) {
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const w = canvas.width;
-      const h = canvas.height;
-      const cx = w / 2;
-      const cy = h / 2;
-      const scale = Math.min(w, h) / (worldRadius * 6);
-
-      ctx.clearRect(0, 0, w, h);
-
-      // Background panel.
-      ctx.fillStyle = "rgba(10, 12, 18, 0.85)";
-      ctx.fillRect(0, 0, w, h);
-
-      const tileSize = currentLayout?.tileSize ?? 32;
-
-      // Walkables (rooms + corridors). World-space rects map into
-      // canvas-space relative to selfX/selfY at the centre.
-      if (currentLayout && currentLayout.walkables.length > 0) {
-        ctx.fillStyle = "rgba(82, 82, 91, 0.45)";
-        for (const r of currentLayout.walkables) {
-          const x = (r.x - selfX) * scale + cx;
-          const y = (r.y - selfY) * scale + cy;
-          ctx.fillRect(x, y, r.w * scale, r.h * scale);
-        }
-      } else {
-        // Open scene (surface) — draw a faint grid disc so the
-        // player has spatial reference even without walls.
-        ctx.fillStyle = "rgba(82, 82, 91, 0.18)";
-        ctx.beginPath();
-        ctx.arc(cx, cy, Math.min(w, h) / 2 - 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Buildings — colour by kind so the player can read the base
-      // layout at a glance.
-      for (const rb of buildings.values()) {
-        const b = rb.data;
-        const x = (b.tileX * tileSize - selfX) * scale + cx;
-        const y = (b.tileY * tileSize - selfY) * scale + cy;
-        const sw = Math.max(2, b.width * tileSize * scale);
-        const sh = Math.max(2, b.height * tileSize * scale);
-        ctx.fillStyle =
-          b.kind === "power_link"
-            ? "#06b6d4"
-            : b.kind === "storage_chest"
-              ? "#fbbf24"
-              : b.kind === "wall"
-                ? "#71717a"
-                : b.kind.startsWith("turret")
-                  ? "#a78bfa"
-                  : b.kind === "door"
-                    ? "#fde68a"
-                    : "#22c55e";
-        ctx.fillRect(x, y, sw, sh);
-      }
-
-      // Other players — green dots; enemies in LoS — red dots.
-      for (const p of players.values()) {
-        if (p.data.characterId === init.self.characterId) continue;
-        if (!p.container.visible) continue;
-        const x = (p.data.x - selfX) * scale + cx;
-        const y = (p.data.y - selfY) * scale + cy;
-        ctx.fillStyle = "#34d399";
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      for (const e of enemies.values()) {
-        if (!e.container.visible || e.data.hp <= 0) continue;
-        const x = (e.data.x - selfX) * scale + cx;
-        const y = (e.data.y - selfY) * scale + cy;
-        ctx.fillStyle = "#ef4444";
-        ctx.beginPath();
-        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Self — bright arrow at the centre.
-      ctx.fillStyle = "#fde047";
-      ctx.beginPath();
-      ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#000";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // Frame.
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+    getMinimapSnapshot(): MinimapSnapshot {
+      return {
+        selfX,
+        selfY,
+        selfId: init.self.characterId,
+        tileSize: currentLayout?.tileSize ?? 32,
+        walkables: currentLayout?.walkables ?? [],
+        buildings: buildingsToMinimapList(
+          [...buildings.values()].map((rb) => rb.data),
+        ),
+        players: [...players.values()].map((p) => ({
+          characterId: p.data.characterId,
+          x: p.data.x,
+          y: p.data.y,
+          visible: p.container.visible,
+        })),
+        enemies: [...enemies.values()].map((e) => ({
+          x: e.data.x,
+          y: e.data.y,
+          hp: e.data.hp,
+          visible: e.container.visible,
+        })),
+      };
     },
     nearbyPlayers(radiusPx: number) {
       const r2 = radiusPx * radiusPx;
@@ -2590,6 +2455,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     destroy() {
       destroyed = true;
+      unsubOverrides();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("mouseup", onMouseUp);

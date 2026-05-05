@@ -224,6 +224,36 @@ export type EffectiveWeaponStats = RangedWeaponStats & {
   inaccuracyHalfRad: number;
 };
 
+// Per-weapon-tier base-stat scaling. Tier-up at the Precision Mill
+// previously only changed the number of attachment slots — the
+// chassis itself was static. With these multipliers, each tier-up
+// is *also* a chassis upgrade: more damage, faster cadence, larger
+// magazine, slightly tighter shots, faster projectile.
+//
+// Conservative-ish: T4 is ~45% more damage than T1 at 15% faster
+// cadence, +6 mag, +6% accuracy, +15% projectile speed. Spread is
+// reduced inversely so tier-up tightens the shot pattern. Multi-
+// plicative with attachment effects (which also scale via
+// computeWeaponEffect).
+function tierStatScale(tier: 1 | 2 | 3 | 4): {
+  damage: number;
+  fireInterval: number;
+  magazineSize: number;
+  accuracy: number;
+  projectileSpeed: number;
+  spread: number;
+} {
+  const step = tier - 1; // 0..3
+  return {
+    damage: 1 + 0.15 * step,
+    fireInterval: 1 - 0.05 * step,
+    magazineSize: step * 2, // additive — flat +mag per tier
+    accuracy: step * 0.02, // additive — capped at 1.0 below
+    projectileSpeed: 1 + 0.05 * step,
+    spread: 1 - 0.05 * step,
+  };
+}
+
 export function effectiveWeaponStats(
   weapon: WeaponItem
 ): EffectiveWeaponStats | null {
@@ -231,14 +261,23 @@ export function effectiveWeaponStats(
   if (family === 'melee') return null;
   const base = WEAPON_STATS[family];
   const eff = computeWeaponEffect(weapon);
-  const fireIntervalMs = base.fireIntervalMs * eff.fireIntervalMult;
+  const tier = tierStatScale(weapon.tier);
+  const fireIntervalMs = base.fireIntervalMs * tier.fireInterval * eff.fireIntervalMult;
+  const damage = base.damage * tier.damage * eff.damageMult;
+  const projectileSpeed =
+    base.projectileSpeed * tier.projectileSpeed + eff.projectileSpeedAdd;
+  const spreadRad = base.spreadRad * tier.spread * eff.spreadMult;
+  const accuracy = Math.min(1, base.accuracy + tier.accuracy);
+  const magazineSize = base.magazineSize + tier.magazineSize;
   return {
     ...base,
-    damage: base.damage * eff.damageMult,
+    damage,
     fireIntervalMs,
-    projectileSpeed: base.projectileSpeed + eff.projectileSpeedAdd,
-    spreadRad: base.spreadRad * eff.spreadMult,
+    projectileSpeed,
+    spreadRad,
+    accuracy,
+    magazineSize,
     shotsPerSecond: 1000 / Math.max(1, fireIntervalMs),
-    inaccuracyHalfRad: (1 - base.accuracy) * MAX_INACCURACY_RAD,
+    inaccuracyHalfRad: (1 - accuracy) * MAX_INACCURACY_RAD,
   };
 }

@@ -44,17 +44,23 @@ import {
   consumeConsumable,
   consumeMaterial,
   consumeRecipeInput,
+  consumeUpgrade,
   countMaterial,
+  countUpgrade,
   hasRecipeInput,
   KEY_ARTIFACT_COST,
+  UPGRADES,
   recipeOutputToSlot,
   RECIPES,
   salvageRefund,
+  SUIT_ATTACHMENT_SLOTS,
   TIER_MOD_SLOTS,
   TIER_PIECE_SLOTS,
+  TIER_UP_COSTS,
   weaponFamily as weaponFamilyOf,
-  type MaterialKind,
+  type AttachmentInstance,
   type WeaponPieceKind,
+  type WeaponPieces,
   type WeaponTier,
 } from '@dumrunner/shared';
 import { supabase } from './supabase.js';
@@ -156,26 +162,9 @@ const TRANSITION_COOLDOWN_MS = 800;
 // Reading at use-time (instead of caching here) keeps the table in shared
 // as the single source of truth.
 
-// Materials consumed when tier-upping a weapon. Index by current tier
-// (e.g. TIER_UP_COSTS[1] is the cost to go from T1 → T2). T4 is the
-// cap; no entry there.
-const TIER_UP_COSTS: Record<number, { materialId: MaterialKind; count: number }[]> = {
-  1: [
-    { materialId: 'alloy', count: 6 },
-    { materialId: 'circuit', count: 2 },
-  ],
-  2: [
-    { materialId: 'alloy', count: 12 },
-    { materialId: 'circuit', count: 5 },
-    { materialId: 'crystal', count: 1 },
-  ],
-  3: [
-    { materialId: 'alloy', count: 24 },
-    { materialId: 'circuit', count: 10 },
-    { materialId: 'crystal', count: 3 },
-    { materialId: 'artifact', count: 2 },
-  ],
-};
+// TIER_UP_COSTS now lives in shared/crafting.ts so the client can
+// surface the cost in the Precision Machining Mill modal without
+// duplicating the table.
 
 // Starter blueprints granted on connect / re-granted at every cycle reset.
 // The artifact-trade store is the real source of new blueprints; only
@@ -393,6 +382,30 @@ export class World {
         }
       }
       scene.hydrate(sceneSnap);
+    }
+
+    // Playtest sandbox: drop a starter set of workstations on the
+    // surface so the tester doesn't have to hand-craft + place each
+    // station to start exercising Phase 2 flows. Idempotent — only
+    // adds a station kind if it doesn't already exist on the
+    // surface, so the player can demolish + rebuild without the
+    // server overwriting their layout.
+    if (this.worldConfig.isPlaytest) {
+      const surface = this.scenes.get(SURFACE_SCENE_ID);
+      if (surface) {
+        // A row 2 tiles south of the Power Link, separated by 2-tile
+        // gaps so the player can walk between stations.
+        surface.ensurePlaytestStations([
+          { kind: 'workbench', tileX: 0, tileY: 2 },
+          { kind: 'forge', tileX: 2, tileY: 2 },
+          { kind: 'electronics_bench', tileX: 4, tileY: 2 },
+          { kind: 'weapon_bench', tileX: 6, tileY: 2 },
+          { kind: 'suit_bench', tileX: 8, tileY: 2 },
+          { kind: 'precision_mill', tileX: 10, tileY: 2 },
+          { kind: 'artifact_uplink', tileX: 12, tileY: 2 },
+          { kind: 'storage_chest', tileX: 14, tileY: 2 },
+        ]);
+      }
     }
   }
 
@@ -1382,6 +1395,57 @@ export class World {
     );
   }
 
+  // Highest Weapon Bench tier in range of the player. Returns 0 if
+  // no bench in range. Used by handleAssembleWeapon to gate weapon
+  // tier — Mk1 bench can only assemble Mk1 weapons, etc. If multiple
+  // benches are in range (player built more than one), the highest
+  // tier wins.
+  private nearestWeaponBenchTier(conn: Connection): number {
+    if (conn.sceneId !== SURFACE_SCENE_ID) return 0;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (!surface) return 0;
+    const nearby = surface.findBuildingsNearby(
+      conn.x,
+      conn.y,
+      'weapon_bench',
+      COMBAT.CRAFT_STATION_RANGE_PX
+    );
+    let best = 0;
+    for (const b of nearby) {
+      const t = b.benchTier ?? 1;
+      if (t > best) best = t;
+    }
+    return best;
+  }
+
+  // Precision Machining Mill — separate station that hosts the
+  // tier-up flow. Weapon Bench used to gate tier-up; that role moved
+  // here so the bench can focus on assembly.
+  private isNearPrecisionMill(conn: Connection): boolean {
+    if (conn.sceneId !== SURFACE_SCENE_ID) return false;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    return !!surface?.hasBuildingNearby(
+      conn.x,
+      conn.y,
+      'precision_mill',
+      COMBAT.CRAFT_STATION_RANGE_PX
+    );
+  }
+
+  // Suit Assembly Bench — Phase 2.5 sibling of the Weapon Bench.
+  // Hosts the suit-attachment assembly modal; gates
+  // handleAssembleSuitPart.
+  private isNearSuitBench(conn: Connection): boolean {
+    if (conn.sceneId !== SURFACE_SCENE_ID) return false;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    return !!surface?.hasBuildingNearby(
+      conn.x,
+      conn.y,
+      'suit_bench',
+      COMBAT.CRAFT_STATION_RANGE_PX
+    );
+  }
+
   handleAttachWeaponAffix(
     characterId: string,
     weaponInventoryIdx: number,
@@ -1556,11 +1620,13 @@ export class World {
   handleTierUpWeapon(characterId: string, weaponInventoryIdx: number): void {
     const conn = this.connections.get(characterId);
     if (!conn) return;
-    if (!this.isNearWeaponBench(conn)) return;
+    // Tier-up is gated on the Precision Machining Mill; the Weapon
+    // Bench focuses on assembly only.
+    if (!this.isNearPrecisionMill(conn)) return;
     const slot = conn.inventory[weaponInventoryIdx];
     if (!slot || slot.kind !== 'weapon') return;
     if (slot.weapon.tier >= 4) return;
-    const cost = TIER_UP_COSTS[slot.weapon.tier];
+    const cost = TIER_UP_COSTS[slot.weapon.tier as 1 | 2 | 3];
     if (!cost) return;
     for (const c of cost) {
       if (countMaterial(conn.inventory, c.materialId) < c.count) return;
@@ -1569,6 +1635,331 @@ export class World {
       consumeMaterial(conn.inventory, c.materialId, c.count);
     }
     slot.weapon.tier = (slot.weapon.tier + 1) as WeaponTier;
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Atomic weapon assembly. Player has staged a target piece+mod
+  // configuration in the Weapon Bench UI; on commit, server diffs
+  // against the current weapon by AttachmentInstance.id and either
+  // applies the whole transaction or rejects it. Each attachment is
+  // identified by its instance id (unique post-Sprint C); the client
+  // sends ids the server can verify against either the live weapon
+  // (kept attachments) or the player's inventory (newly attached).
+  handleAssembleWeapon(
+    characterId: string,
+    weaponInventoryIdx: number,
+    pieces: Partial<Record<WeaponPieceKind, string | null | undefined>>,
+    mods: string[]
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (!this.isNearWeaponBench(conn)) return;
+    const slot = conn.inventory[weaponInventoryIdx];
+    if (!slot || slot.kind !== 'weapon') return;
+    const weapon = slot.weapon;
+    const family = weaponFamilyOf(weapon.weaponId);
+    if (family === 'melee') return;
+
+    // Bench-tier gate (Phase 2.2). The player must be in range of
+    // a Weapon Bench whose tier ≥ the weapon's tier. Multiple
+    // benches in range pick the highest tier. The client UI greys
+    // out un-assemblable weapons; this is the authoritative check.
+    const benchTier = this.nearestWeaponBenchTier(conn);
+    if (weapon.tier > benchTier) {
+      this.sendDirect(conn.ws, {
+        type: 'error',
+        message: 'bench_tier_too_low',
+      });
+      return;
+    }
+
+    const allowedPieces = TIER_PIECE_SLOTS[weapon.tier];
+    const modCap = TIER_MOD_SLOTS[weapon.tier];
+    if (mods.length > modCap) return;
+
+    const PIECE_KEYS: WeaponPieceKind[] = ['frame', 'grip', 'magazine', 'barrel'];
+    // Reject any piece target that targets a slot the current tier
+    // doesn't expose (e.g. trying to attach to 'barrel' on a T1).
+    for (const piece of PIECE_KEYS) {
+      const target = pieces[piece];
+      if (target === undefined) continue;
+      if (!allowedPieces.includes(piece) && target !== null) return;
+    }
+
+    // Working clones — every mutation lands here first; we copy back
+    // to the live state only if every step succeeds. Slots are shallow-
+    // copied so the live inventory isn't aliased mid-validation.
+    const workingInv: typeof conn.inventory = conn.inventory.map((s) =>
+      ({ ...s })
+    );
+
+    const pullFromInv = (instanceId: string): AttachmentInstance | null => {
+      for (let i = 0; i < workingInv.length; i++) {
+        const s = workingInv[i];
+        if (s.kind === 'attachment' && s.instance.id === instanceId) {
+          const inst = s.instance;
+          workingInv[i] = { kind: 'empty' };
+          return inst;
+        }
+      }
+      return null;
+    };
+    const pushToInv = (instance: AttachmentInstance): boolean => {
+      for (let i = 0; i < workingInv.length; i++) {
+        if (workingInv[i].kind === 'empty') {
+          workingInv[i] = { kind: 'attachment', instance };
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const workingPieces: WeaponPieces = { ...weapon.pieces };
+    for (const piece of PIECE_KEYS) {
+      const target = pieces[piece];
+      if (target === undefined) continue;
+      const current = workingPieces[piece] ?? null;
+
+      if (target === null) {
+        if (current) {
+          if (!pushToInv(current)) return;
+          workingPieces[piece] = null;
+        }
+        continue;
+      }
+      // target is a string instance id.
+      if (current && current.id === target) continue; // unchanged
+
+      if (current) {
+        if (!pushToInv(current)) return;
+        workingPieces[piece] = null;
+      }
+      const inst = pullFromInv(target);
+      if (!inst) return;
+      const def = ATTACHMENT_DEFS[inst.defId];
+      if (!def || def.kind !== 'weapon_affix') return;
+      if (def.pieceKind !== piece) return;
+      if (def.family !== null && def.family !== family) return;
+      workingPieces[piece] = inst;
+    }
+
+    // Mods: process target ids in order. For each, prefer matching a
+    // still-attached mod by id (kept); otherwise pull from inventory.
+    // Anything still in the existing-mod pool at the end is detached.
+    const remainingExisting: AttachmentInstance[] = [...weapon.mods];
+    const workingMods: AttachmentInstance[] = [];
+    for (const targetId of mods) {
+      const keepIdx = remainingExisting.findIndex((m) => m.id === targetId);
+      if (keepIdx >= 0) {
+        workingMods.push(remainingExisting[keepIdx]);
+        remainingExisting.splice(keepIdx, 1);
+        continue;
+      }
+      const inst = pullFromInv(targetId);
+      if (!inst) return;
+      const def = ATTACHMENT_DEFS[inst.defId];
+      if (!def || def.kind !== 'weapon_mod') return;
+      if (def.family !== null && def.family !== family) return;
+      workingMods.push(inst);
+    }
+    for (const m of remainingExisting) {
+      if (!pushToInv(m)) return;
+    }
+
+    // All validation passed — commit. Mutating `slot.weapon` directly
+    // is safe because the inventory slot still points at the same
+    // weapon object; clients re-render off `inventory_changed`.
+    for (let i = 0; i < workingInv.length; i++) {
+      conn.inventory[i] = workingInv[i];
+    }
+    weapon.pieces = workingPieces;
+    weapon.mods = workingMods;
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Atomic suit-part assembly. Mirrors handleAssembleWeapon for the
+  // suit-side: target attachment list arrives by AttachmentInstance
+  // id, server diffs against the live equipped part, validates
+  // every newly-attached id is in inventory + every detached id has
+  // somewhere to land in inventory, applies the whole transaction
+  // or rejects. Recomputes suit stats on commit so the HP/shield/
+  // stamina/speed bonuses surface immediately.
+  handleAssembleSuitPart(
+    characterId: string,
+    suitSlot: SuitSlotKind,
+    attachments: string[]
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (!this.isNearSuitBench(conn)) return;
+    const part = conn.equipment[suitSlot];
+    if (!part) {
+      this.sendDirect(conn.ws, {
+        type: 'error',
+        message: 'suit_slot_empty',
+      });
+      return;
+    }
+
+    // Per-tier slot cap. A Mk1 part can only host 1 attachment;
+    // higher tiers expose more slots. The client UI gates this
+    // too, but server is authoritative.
+    const slotCap = SUIT_ATTACHMENT_SLOTS[part.tier];
+    if (attachments.length > slotCap) {
+      this.sendDirect(conn.ws, {
+        type: 'error',
+        message: 'suit_slot_cap',
+      });
+      return;
+    }
+
+    // Working clones — every mutation lands here first; commit
+    // only if every step succeeds. Same diff-and-rollback pattern
+    // as handleAssembleWeapon.
+    const workingInv: typeof conn.inventory = conn.inventory.map((s) => ({
+      ...s,
+    }));
+    const pullFromInv = (
+      instanceId: string
+    ): import('@dumrunner/shared').AttachmentInstance | null => {
+      for (let i = 0; i < workingInv.length; i++) {
+        const s = workingInv[i];
+        if (s.kind === 'attachment' && s.instance.id === instanceId) {
+          const inst = s.instance;
+          workingInv[i] = { kind: 'empty' };
+          return inst;
+        }
+      }
+      return null;
+    };
+    const pushToInv = (
+      instance: import('@dumrunner/shared').AttachmentInstance
+    ): boolean => {
+      for (let i = 0; i < workingInv.length; i++) {
+        if (workingInv[i].kind === 'empty') {
+          workingInv[i] = { kind: 'attachment', instance };
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // Walk the diff. For each target id, prefer keeping a still-
+    // attached attachment with that id; otherwise pull from
+    // inventory. Anything left in remainingExisting at the end is
+    // detached back into inventory.
+    const remainingExisting = [...(part.appliedAttachments ?? [])];
+    const workingAttachments: import('@dumrunner/shared').AttachmentInstance[] =
+      [];
+    for (const targetId of attachments) {
+      const keepIdx = remainingExisting.findIndex((a) => a.id === targetId);
+      if (keepIdx >= 0) {
+        workingAttachments.push(remainingExisting[keepIdx]);
+        remainingExisting.splice(keepIdx, 1);
+        continue;
+      }
+      const inst = pullFromInv(targetId);
+      if (!inst) return;
+      const def = ATTACHMENT_DEFS[inst.defId];
+      if (!def || def.kind !== 'suit_affix') return;
+      if (def.slotKind !== suitSlot) return;
+      workingAttachments.push(inst);
+    }
+    for (const a of remainingExisting) {
+      if (!pushToInv(a)) return; // no room — reject the whole transaction
+    }
+
+    // Commit. Suit stats recompute via recomputePlayerStats so the
+    // player's maxHp / maxShield / etc. update immediately; the
+    // helper also broadcasts player_damaged + equipment_changed.
+    for (let i = 0; i < workingInv.length; i++) {
+      conn.inventory[i] = workingInv[i];
+    }
+    part.appliedAttachments = workingAttachments;
+    conn.inventoryDirty = true;
+    this.recomputePlayerStats(conn);
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+    this.sendDirect(conn.ws, {
+      type: 'equipment_changed',
+      equipment: conn.equipment,
+    });
+  }
+
+  // Apply a workstation upgrade item to a target building. The item
+  // is found by id in the player's inventory; the building is found
+  // by id in the current scene. Validates: building exists, player
+  // in range, building.kind matches the upgrade's targetBuilding,
+  // and building.benchTier === upgrade.targetTier - 1 (tiers must
+  // step in order; no skipping). On success, building.benchTier
+  // becomes the upgrade's targetTier and one item is consumed.
+  handleUpgradeWorkstation(
+    characterId: string,
+    buildingId: string,
+    upgradeId: string
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (!surface) return;
+
+    const def = UPGRADES[upgradeId as keyof typeof UPGRADES];
+    if (!def) return;
+
+    const b = surface.getBuilding(buildingId);
+    if (!b) return;
+    if (b.kind !== def.targetBuilding) return;
+
+    // Proximity — same range as crafting stations.
+    const tileSize = surface.layout?.tileSize ?? 32;
+    const cx = (b.tileX + b.width / 2) * tileSize;
+    const cy = (b.tileY + b.height / 2) * tileSize;
+    const dx = conn.x - cx;
+    const dy = conn.y - cy;
+    if (
+      dx * dx + dy * dy >
+      COMBAT.CRAFT_STATION_RANGE_PX * COMBAT.CRAFT_STATION_RANGE_PX
+    ) {
+      this.sendDirect(conn.ws, { type: 'error', message: 'upgrade_too_far' });
+      return;
+    }
+
+    // Tier-step gate. Mk1 → Mk2 only; Mk2 → Mk3 only; etc. No
+    // skipping — the player has to apply each successive upgrade.
+    const currentTier = b.benchTier ?? 1;
+    if (def.targetTier !== currentTier + 1) {
+      this.sendDirect(conn.ws, {
+        type: 'error',
+        message: 'upgrade_wrong_tier',
+      });
+      return;
+    }
+
+    // Inventory check + consume.
+    if (countUpgrade(conn.inventory, def.id) < 1) {
+      this.sendDirect(conn.ws, {
+        type: 'error',
+        message: 'upgrade_not_owned',
+      });
+      return;
+    }
+    consumeUpgrade(conn.inventory, def.id, 1);
+
+    // Apply. Re-broadcast building_placed so every client sees the
+    // new benchTier; the renderer + UI key off it.
+    surface.setBuildingTier(buildingId, def.targetTier);
+
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {
       type: 'inventory_changed',

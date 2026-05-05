@@ -101,6 +101,30 @@ export const BUILDING_REGISTRY: Record<BuildingKind, BuildingDef> = {
     isWorkstation: true,
     parallelSlots: 1,
   },
+  // Precision Machining Mill — vendor-shaped station (modal opens on
+  // E, but it accepts no recipes). Hosts the tier-up flow that used
+  // to live on the Weapon Bench. Hand-crafted at the Workbench so a
+  // brand-new player can stand up the assembly + tier-up pair as
+  // soon as they have the alloy/circuit budget.
+  precision_mill: {
+    label: 'Precision Machining Mill',
+    maxHp: 180,
+    hordePriority: 25,
+    isStation: true,
+    isWorkstation: false,
+  },
+  // Suit Assembly Bench — vendor-shaped sibling of the Weapon
+  // Bench, but for suit parts. Hosts the assembly modal that
+  // attaches/detaches suit_affix instances to equipped suit parts.
+  // No recipes target it; attachments are crafted at the
+  // Electronics Bench.
+  suit_bench: {
+    label: 'Suit Assembly Bench',
+    maxHp: 160,
+    hordePriority: 25,
+    isStation: true,
+    isWorkstation: false,
+  },
   artifact_uplink: {
     label: 'Artifact Uplink',
     maxHp: 200,

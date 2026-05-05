@@ -115,6 +115,97 @@ The dungeon contains four biomes for the alpha. Each biome has its own environme
 
 Within any band, the last floor (the fifth) hosts a faction champion (themed to that band's biome) guarding the stairs down. Artifacts (the only Alien-tier source) become more common with depth and drop most reliably from faction champions.
 
+### Props (planned)
+
+Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, terminals, trees, rocks, scrap heaps, alien growths, broken furniture. Server-authoritative, destructible by attacks, biome-themed. Scope: pure set-dressing first, then a thin layer of interactive specials (explosive barrels, lootable crates, EMP terminals). Implementation lands alongside the **E3 Dungeon overhaul** because prop spawn rules are biome-coupled — see Roadmap.
+
+**Design intent.**
+
+- **Density makes the world.** Empty floor tiles read as a placeholder dungeon; props are how a room reads as "a sun-bleached marketplace" vs "a frozen alien chamber" without bespoke per-room art.
+- **Destructible by default.** Anything visible is a tile the player can shoot, melee, or grenade. High-HP for most kinds (props eat ammo; sustained fire breaks them eventually); a few low-HP exceptions (explosive barrels, fragile crystals).
+- **No HP bar.** Floating bars over a room's worth of barrels would be visual noise. Damage is communicated by hit-flash + chip-off particles + "thunk" SFX. Players learn HP through play, not from a readout.
+- **Loot pull, not loot push.** Most props drop nothing or low-value scrap. A few kinds (cargo containers, terminals) have meaningful loot tables to reward map awareness without making prop-breaking the dominant resource loop.
+
+**Initial roster** (alpha plan; biome integration adds the natural ones).
+
+| Kind | Solid? | HP | On break | Notes |
+|------|--------|----|----------|-------|
+| `barrel` | yes | 40 | 30% scrap×1 | Generic industrial. Common across biomes. |
+| `explosive_barrel` | yes | 5 | AoE damage 60 in 96px (player + enemies) | The exception to the high-HP rule. Visually distinct (red banding). |
+| `crate` | yes | 60 | scrap×3 + 20% material roll | Lootable. Wood/metal variant per biome. |
+| `cargo_container` | yes | 120 | alloy×1 + 40% part roll | High-value, takes a magazine to crack. |
+| `conduit` | yes | 30 | nothing | Pure decoration; hides power-ish theming. |
+| `terminal` | yes | 80 | 5% blueprint roll | Telegraphs as "interactable looking" but isn't — pure breakable. |
+| `tree` | yes | 80 | scrap×2 (biomatter once a wood material lands) | Sun-Bleached / Catacombs only. |
+| `rock` | yes | 150 | scrap×1 (mineral once a stone material lands) | All biomes. |
+| `pillar` | yes | ∞ | n/a | Indestructible cover. Architectural. |
+| `grass_tuft` | no | 5 | nothing | Walk-through, instantly destructible. Adds Sun-Bleached texture. |
+
+**Schema.**
+
+```ts
+type PropKind =
+  | 'barrel' | 'explosive_barrel'
+  | 'crate' | 'cargo_container'
+  | 'conduit' | 'terminal'
+  | 'tree' | 'rock' | 'pillar'
+  | 'grass_tuft';
+
+type PropState = {
+  id: string;
+  kind: PropKind;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+};
+
+type PropDef = {
+  maxHp: number;
+  solid: boolean;            // blocks movement + projectiles
+  onDestroy?: 'explode' | 'drop_loot';
+  explodeRadius?: number;
+  explodeDamage?: number;
+  lootTable?: LootRoll[];     // shared with corpse loot rolls
+};
+
+const PROP_REGISTRY: Record<PropKind, PropDef> = { /* ... */ };
+```
+
+Lives alongside `BUILDING_REGISTRY` in `packages/shared/src/props.ts`. PropState is read-only client-side (no equivalent of `build_request`) — props are placed by the dungeon generator, not by players.
+
+**Wire protocol additions.**
+
+- `props: PropState[]` on `welcome` + `scene_changed` payloads.
+- `prop_damaged { id, hp }` server → client, on every damage tick.
+- `prop_destroyed { id }` server → client, on HP ≤ 0. Loot drops + `explosive_barrel` AoE damage are server-side, broadcast via the existing `loot_spawned` / `player_damaged` / `enemy_damaged` messages.
+
+**Combat integration.**
+
+- Server: extend the projectile-tick collision pass to include props alongside enemies + buildings. Server-side hp tracking; on hit, decrement, broadcast `prop_damaged` (throttled to ~10 Hz like enemy hp).
+- Melee: same — extend swingMelee target list.
+- Solid props block movement and projectiles via existing `circleFits` / segment-collision helpers (treated like a 1-tile wall for that check). Non-solid (`grass_tuft`) skips both.
+- `explosive_barrel.onDestroy = 'explode'`: AoE damage to players + enemies + adjacent props (chain explosions are fun and read clearly).
+
+**Renderer integration.**
+
+- All three views render props as billboard sprites — same path as enemies, same texture-override pipeline (see `lib/textureOverrides.ts`). New `prop` category in `/editor`'s side panel surfaces every PropKind for upload.
+- **No HP bar** — explicitly skip the `hpBar` Graphics that `EnemySprite` carries. Hit-flash overlay (white tint, 90 ms decay) reuses the enemy hit-flash code path so damage feels readable without the bar.
+- Iso depth-sorts props with everything else via `worldX + worldY` z-index. FPS uses the same per-column sprite path as enemies. Top-down fits a static `Sprite` per prop into `lootLayer` (or a new `propsLayer`) — they don't move, so no per-frame transform updates.
+
+**Spawning (biome-coupled).**
+
+- Each `BiomeDef` declares a **prop palette** with weighted spawn entries: `{ kind, weight, allowDoorway: boolean, naturalOnly: boolean }`.
+- Generator pass after rooms+corridors: walk every walkable tile, roll against the room's biome palette at a per-biome density (Sun-Bleached high — debris everywhere; Frozen sparse — empty halls). Reject placement if the tile is a doorway / spawn pad / interactable footprint.
+- **Naturalness gating.** `naturalOnly: true` props (trees, rocks, grass) only spawn in surface / outdoor-feeling rooms; industrial props (terminals, conduits) only in alien / vault rooms. Catacombs sits in between — both palettes, leaning industrial.
+- Same world-seed determinism as enemies + scatter loot — every player on the cycle sees the same prop layout for floor N.
+
+**Editor support.**
+
+- New `prop` category in the `/editor` side panel (parallel to `enemy` and `building`). Each PropKind from PROP_REGISTRY gets a row.
+- Renderer hooks consult `getOverride('prop', kind)` to swap procedural billboard for textured sprite — same flow as enemies.
+- Stored alongside enemies + buildings under `public/textures/prop/<kind>.png`.
+
 ## Death & Loot
 
 - **Bag-loot stakes.** On death, the player's **inventory bag** drops as a corpse — every loose item, every part, every material stack, every ammo pile, every placeable. **Equipped gear** (chassis, plating, life-support, utility mod, cargo grid) **stays on the player.** "What you're wearing" is yours; "what you were carrying" is up for grabs.
@@ -239,9 +330,9 @@ Affixes are bonus stat lines drawn from a per-slot pool. Each affix is one of:
 
 #### Affix System — Alpha Implementation
 
-The alpha ships **two parallel affix paths** plus a unified attachment system that bridges them:
+Two parallel paths, both folded into the same stat accumulator:
 
-**1. Rolled affixes on dropped suit parts.** Five affix kinds live in `AFFIX_DEFS`, all usable on any suit slot. They roll *automatically* on dropped `CarriedPart` instances — the player doesn't craft them. Each has a flavored display name shown alongside the technical effect:
+**1. Rolled affixes on dropped parts.** Five affix kinds live in `AFFIX_DEFS`, usable on any suit slot. They roll *automatically* on dropped `CarriedPart` instances — the player doesn't craft them, and they're permanent on that part instance. Each has a flavored display name:
 
 | Affix id | Flavor name | Effect | Roll range (Mk1 base × tier mult) |
 |----------|-------------|--------|-----------------------------------|
@@ -253,13 +344,15 @@ The alpha ships **two parallel affix paths** plus a unified attachment system th
 
 Tier multiplier curve: Mk1 ×1, Mk2 ×2.2, Mk3 ×4, Mk4 ×7, Alien ×12.
 
-**2. Crafted attachments via the `ATTACHMENT_DEFS` registry.** Three attachment kinds (`weapon_mod`, `weapon_affix`, `suit_affix`) live in one registry. Each carries a fixed effect, a `description`, a clean `displayName`, and a Borderlands-style `adjective` that gets stitched into a weapon's name when equipped. Players craft attachments at the Weapon Bench (weapon mods/affixes) or Electronics Bench (suit affixes), then attach via the bench UI. Attached mods/affixes are removable — detaching returns the attachment to inventory.
+**2. Crafted attachments via `ATTACHMENT_DEFS` (per-instance rolls, Sprint C).** Three attachment kinds: `weapon_mod`, `weapon_affix`, `suit_affix`. Crafted attachments are *unique instances* (`AttachmentInstance` with rolled stats inside per-class `ATTACHMENT_STAT_RANGES`) — two Compensators in the bag are not interchangeable. The class registry defines what *can* roll; each crafted instance picks a roll, scaled by tier. Same shape across all three kinds; only the slot a finished instance bolts into differs.
 
-**Weapon affixes** are piece-bound: each weapon has up to four piece slots (`frame`, `grip`, `magazine`, `barrel`), with the slot count gated by tier (T1 unlocks frame; +1 piece per tier-up). At most one affix per piece. **Weapon mods** sit in a separate slot list, also tier-gated (T1 = 0 mod slots, T4 = 3). **Suit affixes** attach to equipped suit parts via the Suit Affix panel in the inventory; they need an Electronics Bench in range to attach/detach.
+- **Weapon mods** sit in a free mod-slot list on the weapon. Slot count tier-gated (T1 = 0, T4 = 3).
+- **Weapon piece affixes** are piece-bound: at most one per `frame / grip / magazine / barrel` slot. Slot count tier-gated (T1 = frame only, T4 = all four).
+- **Suit-part affixes** are *piece-bound to a specific equipped suit part*. They bolt onto a particular plating / utility-mod / etc. via `CarriedPart.appliedAttachments`, mirroring how weapon mods bolt onto a `WeaponItem`. The two shipped suit affix classes (`aff_shield_25` "Hardened Plating", `aff_speed_5` "Servomotor Tune") have no UI surface for the alpha — they're modeled but unused. The proper home is a dedicated **Suit Assembly Bench** mirroring the Weapon Bench (Phase 2.5 — see Roadmap).
 
-**Stat composition.** `computeWeaponEffect(weapon)` walks every piece affix + mod and returns one resolved multiplier set (damage / fire-interval / spread / projectile-speed). Server's fire path applies them; client's tooltip shows the resulting "effective" stats so the player sees real numbers, not the bare baseline. Suit affix effects fold into `computeSuitStats` the same way alongside primary slot stats and rolled affixes.
+**Stat composition.** `computeWeaponEffect(weapon)` walks every piece affix instance + mod instance and returns one resolved multiplier set (damage / fire-interval / spread / projectile-speed). Server's fire path applies them; client's tooltip + Weapon Bench stats panel show the resulting "effective" stats so the player sees real numbers, not the bare baseline. Suit affix effects fold into `computeSuitStats` alongside the primary slot stat and rolled affixes — `appliedAttachments` is read via `attachmentInstanceSuitEffect` for per-instance rolls.
 
-Adding a new attachment is **one entry in `ATTACHMENT_DEFS`** + a recipe + a blueprint catalog row.
+Adding a new attachment class is one entry in `ATTACHMENT_DEFS` + (optional) `ATTACHMENT_STAT_RANGES` row + a recipe + a blueprint catalog row.
 
 ### Item Naming
 
@@ -299,11 +392,13 @@ Crafting consumes typed component stacks scavenged from the world. Each enemy te
 |----------|------|--------|-----|
 | **Scrap** | 1 | Every enemy, every floor | Universal ingredient — walls, basic stations, ammo, every weapon recipe |
 | **Wire** | 1 | Drones, dungeon scatter | Electronics tier recipes, every weapon recipe |
-| **Alloy Plate** | 2 | Brutes / armored, mid+ floors | Heavy-tier defenses, turrets, weapon mods |
-| **Circuit Board** | 2 | Drones, mid+ floors | Electronics bench, turret core, AP/overclock mods |
-| **Biotic Tissue** | 2 | Chasers (rare), deep floors | Medkits; reserved for future bio-tech recipes |
-| **Resonant Crystal** | 3 | Brutes (rare), deep floors | Artifact uplink, AP-core mod, end-tier recipes |
-| **Artifact** | 3 | Kill-drop only (chaser 4% / drone 5% / brute 12% / armored 9% / swarmer none / others rare) | Currency at the Artifact Uplink — buys blueprints + keys |
+| **Alloy Plate** | 2 | Brutes / armored mid+ floors *or* Forge (12 scrap + 4 wire) | Heavy-tier defenses, turrets, weapon mods, Forge feedstock |
+| **Refined Alloy** | 3 | Forge only (4 alloy + 2 circuit) | Weapon Bench Mk3 upgrade, high-tier weapon attachments |
+| **Precision Alloy** | 4 | Forge only (4 refined alloy + 1 crystal + 1 artifact) | Weapon Bench Mk4 upgrade, top-tier weapon attachments |
+| **Circuit Board** | 2 | Drones, mid+ floors | Electronics bench, turret core, AP/overclock mods, alloy refining |
+| **Biotic Tissue** | 2 | Chasers (rare), deep floors | Medkits, stims, overcharge kits |
+| **Resonant Crystal** | 3 | Brutes (rare), deep floors | Artifact uplink, AP-core mod, precision-alloy synthesis |
+| **Artifact** | 3 | Kill-drop only (chaser 4% / drone 5% / brute 12% / armored 9% / swarmer none / others rare) | Currency at the Artifact Uplink (blueprints, keys); precision-alloy synthesis |
 | **Key** | 2 | Kill-drop (~2-6%) + buyable at Uplink (1 artifact each) | Opens locked dungeon doors |
 
 The registry (`MATERIALS` in shared) is one entry per material; adding a new component is one line plus loot-table tuning.
@@ -316,10 +411,11 @@ Crafting in the alpha is **station-driven, blueprint-gated, and (planned) time-a
 
 | Station | Tier | Crafted at | Recipes |
 |---------|------|------------|---------|
-| **Workbench** | Basic | Hand-craft (no station) | Forge, Electronics Bench, Weapon Bench, Artifact Uplink, all base weapons (pistol/SMG/shotgun/rifle), all ammo types, medkits |
-| **Forge** | Mid | Workbench | Heavy alloy items (planned) |
-| **Electronics Bench** | Mid | Workbench | Auto-Turret + per-family turret variants, suit affix attachments (shield, speed) |
-| **Weapon Bench** | Mid | Workbench | Weapon mods + weapon-piece affixes; manage attached mods/affixes; tier-up weapons (T1→T4) |
+| **Workbench** | Basic | Hand-craft (no station) | Forge, Electronics Bench, Weapon Bench, Precision Machining Mill, Artifact Uplink, all base weapons, all ammo types, medkits |
+| **Forge** | Mid | Workbench | **Alloy production** — converts scrap-tier feedstock into the higher-tier alloys (Refined Alloy, Precision Alloy) consumed by Weapon Bench tier-upgrade items and high-tier attachment recipes. Also a craftable path to base Alloy Plate so a player without late-floor kills isn't gated on lucky drops. |
+| **Electronics Bench** | Mid | Workbench | Auto-Turret + per-family turret variants; consumable-tier kits (large medkit, stim, overcharge); suit affix attachments. |
+| **Weapon Bench** | Mid | Workbench | **Weapon assembly only** — crafts mods + weapon-piece affixes; assembles them onto base weapons via the assembly modal. **No tier-up here** — that lives at the Precision Machining Mill. |
+| **Precision Machining Mill** | Mid | Workbench | **Vendor-shaped** (no recipes) — modal lists every non-melee weapon in the player's inventory and tier-ups it (T1 → T4) for a tier-scaled material cost. |
 | **Artifact Uplink** | Mid | Workbench (requires 1 crystal) | **Vendor only** (no crafting): blueprint shop + keys shop. Tabbed UI. |
 
 **Hand-crafted basics.** Walls and the first Workbench are craftable from inventory anywhere — bootstrap so a fresh character can always build out a base.
@@ -351,6 +447,35 @@ The upgrade path is the long-term answer to "I want to mass-produce ammo while t
 **Station output buffers.** Crafted output does **not** drop straight into the player's inventory. Each station has an 8-slot output buffer that completed jobs deposit into (stack-merging materials / ammo / placeables of the same id). The player walks up, opens the modal, and taps **Take All** — every output slot across nearby stations of that kind transfers to their bag. Fallback: if a station was destroyed mid-craft (or the buffer is somehow saturated), the output spills directly to the requesting player so the craft is never silently lost.
 
 This is what makes "queue and go scavenge" feel right — you come back to a stocked rack of finished gear, not an inventory you have to micromanage during the dive.
+
+### Weapon Assembly & Tier Progression
+
+Weapon modification is split across two stations so each surface has a single, focused job.
+
+**Weapon Bench — assembly.** A weapon is a base chassis (its `weaponId`) plus rolled procedural attachments slotted into pieces and mod slots. The bench's modal:
+
+1. Lists every non-melee weapon in the player's inventory (any tier).
+2. When a weapon is selected, renders a **labeled slot grid**: four piece tiles (Frame · Grip · Magazine · Barrel — locked-out tiles past the weapon's tier) and a row of mod slots (count = `TIER_MOD_SLOTS[tier]`).
+3. Clicking a filled slot stages a detach. Clicking an empty slot opens an inline chooser of compatible attachments — sourced from inventory **and** the weapon's currently-attached pieces, so the player can re-route a previously-detached attachment without first reverting.
+4. A live `WeaponStatsPanel` underneath renders the *staged* configuration's effective stats, with green/red diff against the live weapon's current stats.
+5. **Assemble** is dim until the staged configuration differs from the live weapon (compared by `AttachmentInstance.id`) and the player is in range. Clicking Assemble fires a single atomic `assemble_weapon` message.
+
+**Atomic assembly transaction.** The server:
+
+1. Clones the player's inventory and the target weapon.
+2. Walks each piece slot the message specifies; for any change, detaches the current attachment back into the working inventory, then consumes the requested instance from the working inventory and slots it. Validates the def kind (`weapon_affix` with the correct `pieceKind`), family compatibility, and tier-allowed piece slots.
+3. Walks the target mod list in order — keeps still-attached mods whose ids appear in the target, detaches anything not in the target back into inventory, consumes new mods from inventory.
+4. If any step fails (missing inventory instance, no room to detach, def mismatch, family mismatch), the **entire transaction is rejected** and the player's live state is unchanged. On success, the working state is committed and an `inventory_changed` is broadcast.
+
+This atomicity matters because the staged-changes model invites the player to plan a multi-step rework — detach two pieces, attach three new ones, swap a mod — and a half-applied state would be confusing. There's a single commit point.
+
+**Precision Machining Mill — tier progression.** A vendor-shaped station with no recipes; its modal hosts the tier-up flow. Each non-melee weapon in inventory gets a row showing the next-tier label and the materials cost from `TIER_UP_COSTS` (tier-scaled: T1→T2 ~6 alloy + 2 circuit; T3→T4 includes crystal + artifact). Tiering up preserves all attached pieces and mods; the new tier just exposes additional piece slots and mod slots.
+
+**Tier-mismatch.** Any tier of attachment can be slotted onto any tier of weapon. When tiers don't match, a small penalty folds into the resolved stats: each attachment's deviation from neutral (1.0 for multipliers, 0 for additive) is scaled by `1 - 0.05 × |attachmentTier − weaponTier|`, capped at 0.80. So a Mk3 attachment on a T1 weapon delivers 90% of its bonus; an Alien attachment on a T1 weapon delivers 80%. Same direction either way — a Mk1 attachment on a T4 weapon is also penalised because the precision chassis expects matching parts. Math lives in `computeWeaponEffect`; the cap means a strong roll always beats an empty slot.
+
+**Bench-tier upgrade items.** A fresh Weapon Bench is Mk1 and can only assemble Mk1 weapons. Higher tiers are unlocked by crafting a `bench_upgrade_mkN` item at the Forge (consuming the matching alloy stratum: Mk2 from base alloy, Mk3 from Refined Alloy, Mk4 from Precision Alloy) and applying it to the bench via right-click → Apply on the upgrade item. Each step is single-tier — a Mk1 bench needs the Mk2 upgrade first; you can't skip from Mk1 to Mk3. Per-building tier persists in the world snapshot. The Forge's alloy loop is now load-bearing rather than vestigial.
+
+**Per-tier weapon base-stat scaling.** The weapon's tier is a real chassis upgrade, not just an attachment-slot count bump. `effectiveWeaponStats` applies a per-tier multiplier on top of the family base stats: each tier-up adds +15% damage, –5% fire interval, +2 magazine, +2% accuracy, +5% projectile speed, and –5% spread. So a T4 weapon hits 45% harder, fires 15% faster, and is noticeably tighter than the T1 of the same family — even before attachments. Tier-mismatch math (above) still applies to attachments on top of this base scaling.
 
 ### Artifacts & The Earth Trade Tree
 
@@ -606,8 +731,10 @@ The hardest risk to get out of the way was realtime sync over websockets between
 - Affix system shipped — two paths under one roof:
   - **Rolled affixes** on dropped CarriedParts (5 kinds, tier-scaled, stack into the suit stats accumulator). Each has a flavored display name (Adrenal Surge, Pulsewall Aegis, etc.).
   - **Crafted attachments** via `ATTACHMENT_DEFS`: weapon mods, weapon affixes, suit affixes. 8 weapon mods + 2 weapon affixes + 2 suit affixes shipping. Each carries a Borderlands-style adjective for weapon name composition.
-- 4 base weapons (pistol/SMG/shotgun/rifle) craftable at Workbench, blueprint-gated. Player starts with `bp_pistol`. Tier-up at Weapon Bench (T1→T4) preserves attached mods/affixes.
-- Workstation buildings (workbench, forge, electronics_bench, **weapon_bench**) + Artifact Uplink + 4 turret variants (pistol-tier baseline + per-family with weapon-as-component recipes).
+- 7 base weapon families (pistol/SMG/shotgun/rifle/sniper/heavy/energy) + 4 melee (knife/sword/hammer/energy_blade), all blueprint-gated. Player starts with `bp_pistol`. Tier-up (T1→T4) preserves attached pieces and mods.
+- Workstation buildings (workbench, forge, electronics_bench, **weapon_bench**, **precision_mill**) + Artifact Uplink + 4 turret variants (pistol-tier baseline + per-family with weapon-as-component recipes).
+- **Weapon Bench redesign (Phase 1).** Bench is now assembly-only: picker lists every non-melee weapon, labeled slot grid (4 piece tiles + N mod tiles), inline candidate chooser, live `WeaponStatsPanel` with green/red diff, atomic Assemble button. Tier-up moved to its own **Precision Machining Mill**.
+- **Atomic `assemble_weapon` server message.** Single transaction encoding the target piece + mod configuration (instance ids). Server clones inventory + weapon, walks the diff by `AttachmentInstance.id`, validates def/family/tier compatibility, and either commits the whole transaction or rejects it — no half-applied state.
 - Recipe schema with workstation + blueprintId + 5 input/output kinds. Per-station crafting modals (2-column UI, blueprint list left, requirements detail right). Async crafting with parallel slots + 8-slot output buffer + Take All. Inventory's "Field Craft" tab for hand-craftable basics.
 - **Craft queue** — up to 5 jobs per station (active + queued). Materials deduct at enqueue; queued rows render greyed; oldest queued promotes when an active completes. Power-aware: jobs sit in queue while the Link is over-capacity, slip in as headroom returns.
 - **Storage chests** — 16-slot bidirectional buckets, hand-craftable for 15 scrap + 4 alloy. Click-to-transfer modal (your inventory ↔ chest). Contents persist across cycles + game-server restarts via the world snapshot. Activity-bound rooms hide them in the public lobby just like the rest of the row.
@@ -646,58 +773,243 @@ The hardest risk to get out of the way was realtime sync over websockets between
 **Asset generation pipeline (separate package)**
 - `@dumrunner/asset_gen`: HTTP service that generates sprite PNGs on demand via OpenAI's image API. Stable cache-key dedup. Live game posts `/v1/assets/generate` for entities it doesn't have yet; client fetches `/v1/assets/index` at boot to build a kind→texture map. Single-call animation sheet (one image-edit call → wide canvas → trim+slice into N frames) replaces the legacy per-frame N-call pipeline.
 
-### Active / Next Up
+### Roadmap
 
-The post-alpha roadmap lives in `docs/sprints.md` with effort
-estimates, dependencies, and concrete plans-of-attack for each
-item. Headlines:
+The post-alpha plan grouped by phase. Each phase is internally
+ordered (top items unblock bottom items). Phases run in order
+unless explicitly noted.
 
-**Sprint A — quick wins.** Spawn-in-walls bug; death recovery when
-the base is destroyed mid-perihelion; drop-rate retune so every
-recipe input is reachable in real playtime.
+#### Phase 1.x — pre-Phase-2 cleanup (next session)
 
-**Sprint B — drop loop + status pipe + minimap.** Drop / give items
-between players; a generic status-effect pipe powering stims,
-overcharge kits, multiple medkit tiers (load-bearing for Sprint D's
-environmental ammo); a corner-mounted minimap for both top-down
-and FPS views.
+Audit-driven fixes that close real bugs and orphan UX before the
+Phase 2 system pass touches the same surfaces. Total ~1–2 hours.
 
-**Sprint C — procedural attachments.** Replace the static
-`ATTACHMENT_DEFS` registry with a class registry + per-instance
-rolled stats. Every dropped/crafted attachment becomes unique.
-Single biggest commit; unblocks meaningful versions of salvage,
-weapon assembly UI, and infinite mod variety.
+- **Fix corpse-pickup data loss.** `Scene.handleCorpsePickups`
+  switch is missing `attachment` and `consumable` kinds — both
+  silently destroyed on transfer. Two-line fix.
+- **Hide orphan suit-affix blueprints.** `bp_aff_shield_25` /
+  `bp_aff_speed_5` removed from `BLUEPRINT_CATALOG` (or hidden
+  via a `hidden: true` flag) until Phase 2.5 ships the Suit
+  Assembly Bench. Three-line fix.
+- **Move sniper / heavy / energy / energy_blade crafting to the
+  Workbench.** Aligns with the bench's "assembly only" framing
+  and removes the "where is this crafted?" surprise. Six-line
+  edit in `crafting.ts`.
+- **Hand-craftable knife** (or respawn re-grant). Closes the
+  permanent-melee-gap when a player loses their starter knife
+  with no recipe to replace it.
+- **Audio stinger on `horde_started`.** No music swap or SFX
+  fires today; HUD-only red-pulse undersells the moment.
+- **Drop or scope `title=` fallback.** Click-to-inspect is the
+  fast path; native `title=` slow-tooltip is now redundant
+  inside the inventory modal and visibly slow inside Discord's
+  iframe.
+- **Fix `migrateLegacyAttachmentSlots` over-expansion** (pre-
+  Sprint-C saves only). Cap output to `inv.length` — drop
+  overflow or recompact via existing empty slots.
+- **Forge buildable status.** Until Phase 2's alloy recipes
+  land, either remove the Forge from the buildable list or wire
+  a stub recipe so the modal isn't empty.
 
-**Sprint D — content built on procedural attachments.**
-- Salvage system (return ~20% of cost; suit affix `salvage_yield_pct`
-  scales the rate).
-- Remaining ranged weapons (sniper, heavy, energy) + melee
-  progression as a real combat verb.
-- Environmental ammo (`incendiary`, `chem`, `emp`) + AoE-status
-  enemies (flamethrower drone, chem bloater).
-- Weapon assembly UI: drag-drop pieces at the Weapon Bench with a
-  live ghost-stats preview.
+#### ~~Phase 2~~ — Forge + bench tiers + tier-mismatch (shipped)
 
-**Sprint E — UX overhauls.** Blueprint tree progression with
-workstation-tier upgrades and a Path-of-Exile-style passive UI.
-Mobile controls (virtual stick + fire + hotbar). Dungeon overhaul
-via Wave Function Collapse with biome palettes (mechanical /
-organic / cave / open).
+All three pieces of the system pass landed:
 
-**Hazard system** still on deck (radiation, toxic, cold, heat) —
-biome-specific environmental damage ticks gated by life-support
-resists. Lands naturally with Sprint E's biome palettes.
+1. **Forge alloy production.** Three Forge recipes producing
+   `alloy` (12 scrap + 4 wire), `alloy_mk3` (4 alloy + 2 circuit),
+   and `alloy_mk4` (4 alloy_mk3 + 1 crystal + 1 artifact). The
+   Forge buildable recipe restored at the Workbench. Tiered
+   alloys feed bench-tier upgrades + (future) high-tier
+   attachment recipes.
+2. **Weapon Bench tier-upgrade items.** Per-building
+   `benchTier: 1|2|3|4` on `BuildingState`. New
+   `upgrade_workstation` server message + `handleUpgradeWorkstation`
+   handler. New `UpgradeKind` inventory slot variant + Forge
+   recipes (`forge_bench_upgrade_mk{2,3,4}`). The Weapon Bench
+   modal shows the bench tier in the header; weapons above the
+   bench tier are greyed out in the picker; Assemble disabled
+   with a cap-too-low hint. Right-click an upgrade item to
+   "Apply to Bench" — the renderer exposes the in-range bench
+   ids + tiers so the menu finds the matching-tier bench
+   automatically. PROTOCOL_VERSION 36 → 37.
+3. **Tier-mismatch math.** Lives in `computeWeaponEffect`. Each
+   attachment's deviation-from-neutral is scaled by
+   `1 - 0.05 × |attachmentTier − weaponTier|`, capped at 0.80.
+   Mk3 attachment on T1 weapon → 90% effectiveness; Alien on
+   T1 → 80%. Same direction either way. Suit-side mismatch
+   lands with Phase 2.5's Suit Assembly Bench.
 
-**Discord Developer Portal config + first end-to-end test.** Code
-is shipped (web OAuth + Activity SDK, instance-bound rooms);
-waiting on Portal setup + a real Discord call to validate the
-flow. See `docs/discord-integration.md` for the manual steps.
+#### ~~Phase 2.5~~ — Suit Assembly Bench (shipped)
 
-### Deferred Past Alpha
+Mirror of the Weapon Bench redesign for suit parts. Closes the
+orphaned `aff_shield_25` / `aff_speed_5` blueprints — they craft
+into instances that the Suit Assembly Bench can now attach to
+equipped suit parts.
 
-- Full weapon part-assembly drops (the part ontology in [Items & Procedural Generation](#items--procedural-generation)). Today's loop is mod / affix attachments + tier-up; the part-driven assembly is the long-term direction.
-- Faction champions / boss enemies + the artifact-as-Alien-tier-part path.
-- Earth tech-tree unlocks (currently the artifact uplink only trades blueprints; "Ship to Earth" + "Burn as ingredient" fates land later).
-- Cargo grid (Tetris-style) inventory model. Today's slot inventory grows linearly with cargo tier; the actual W×H grid lands later.
-- Pixel-art textures (the asset_gen pipeline ships the runtime; comprehensive coverage of all entities + animations is its own roadmap).
-- Mobile (Capacitor) + desktop (Electron) wrappers.
+- New building kind `suit_bench` (HP 160, station, not workstation).
+  Hand-craftable at the Workbench (25 scrap + 8 alloy + 4 wire).
+- Per-part attachment slot cap: `SUIT_ATTACHMENT_SLOTS[PartTier]`
+  → Mk1=1, Mk2=2, Mk3=3, Mk4=4, Alien=4.
+- New atomic server message `assemble_suit_part { suitSlot,
+  attachments: instanceId[] }` + `handleAssembleSuitPart`. Same
+  diff-and-commit pattern as `assemble_weapon` — clone equipment +
+  inventory, walk diff by `AttachmentInstance.id`, validate def
+  kind / `slotKind` matches the target slot, recompute suit stats
+  via `recomputePlayerStats` on commit (so HP/shield/stamina/speed
+  caps update + broadcasts go out).
+- New `SuitAssemblyPanel` mirror of `WeaponAssemblyPanel`: picker
+  over equipped suit parts (with tier badge), labeled slot grid
+  sized by part tier, inline chooser of compatible instances from
+  inventory + the part's currently-attached pool, live
+  `SuitStatsPanel` showing current → staged diff.
+- Suit-side tier-mismatch via `suitTierMismatchScale` (mirror of
+  weapon-side curve, both directions, capped at 0.80) — the
+  `appliedAttachments` fold in `computeSuitStats` scales each
+  attachment's effect by `(attachment.tier vs part.tier)`.
+- `bp_aff_shield_25` / `bp_aff_speed_5` restored in
+  `BLUEPRINT_CATALOG`. PROTOCOL_VERSION 37 → 38.
+
+#### Sprint E — UX overhauls
+
+Three never-started original asks. Independent; each ships on
+its own timeline.
+
+**E1. Blueprint progression tree.** Replace the flat
+`BLUEPRINT_CATALOG` listing with a DAG: unlocking the Workbench
+exposes Tier-1 nodes; crafting a "Forge Uplink" upgrade exposes
+Tier-2 nodes under the Forge; etc. Recipes gain a `stationTier`
+requirement. UI: pannable tree visualisation, Path-of-Exile-
+style passive-tree feel, nodes coloured by state (locked /
+unlockable / unlocked). Workstation-tier upgrades from Phase 2
+plug into this naturally.
+
+**E2. Mobile controls.** Detected via `matchMedia('(hover: none)
+and (pointer: coarse)')` at mount. `MobileControls` overlay:
+virtual stick bottom-left (feeds the existing `input` ws
+message), virtual fire button bottom-right, button row for
+reload / use / interact, hamburger for inventory. FPS view
+needs a touch-look gesture (right-half drag for aim + auto-fire
+on tap) — trickier; can ship with top-down only at first.
+
+**E3. Dungeon overhaul / WFC + biomes + hazards.** The biggest
+single piece on the board; defer to last. Multiple coupled
+sub-deliverables:
+- `Biome` enum keyed to the 4-biome lore set (Sun-Bleached /
+  Catacombs / Frozen / Alien Core). Each ships a tile palette,
+  room-shape constraints, enemy bias, scatter-loot bias.
+- WFC procgen replacing the current rectangular-rooms-and-
+  corridors layout (`procgen.ts` rewrite, ~600 LOC). Adjacency
+  rules per tile, propagation, backtracking.
+- Per-biome enemy roster + scatter-loot material bias (organic
+  drops biotic; mechanical drops circuit; cave drops crystal).
+- Renderer per-tile sprite support; asset_gen catalog needs
+  biome-tile sprites.
+- **Hazard system** lands here: radiation / toxic / cold / heat
+  ticks gated by Life-Support resists. Adds resist fields to
+  `CarriedPart` for life-support parts; adds per-floor hazard
+  spec; server tick applies environmental damage scaled by
+  resist gap. Folds the "depth gating via life-support tier"
+  loop the GDD describes.
+- **Props system** ships in lockstep with the biome palettes
+  (full design under [Dungeon → Props](#props-planned)). New
+  shared `PROP_REGISTRY`, server-side prop entities with HP +
+  destruction handling, three-renderer billboard pass (no HP
+  bar, hit-flash on damage), per-biome prop palettes feeding
+  the generator. Explosive barrel + lootable cargo container
+  + biome-flavoured scenery (trees, rocks, conduits, terminals).
+  Editor's `prop` category mirrors `enemy` / `building` so art
+  iteration uses the same upload flow.
+
+#### Deferred past alpha
+
+These are reserved-place-in-the-design items, not actively
+scheduled. Listed so the next agent doesn't re-discover them.
+
+- **Full weapon part-assembly drops.** The part ontology in
+  [Items & Procedural Generation](#items--procedural-generation)
+  describes `Frame / Barrel / Grip / Magazine` as *dropped
+  parts*, not just attachment slots. Today's loop is mod / affix
+  attachments + tier-up; the part-driven assembly is the long-
+  term direction once procedural attachments + suit assembly
+  land.
+- **Faction champions / boss enemies** + the
+  artifact-as-Alien-tier-part path.
+- **Earth tech-tree unlocks.** Currently the Artifact Uplink
+  only trades blueprints. The "Ship to Earth" + "Burn as
+  ingredient" fates land later.
+- **Cargo grid (Tetris-style) inventory model.** Today's slot
+  inventory grows linearly with cargo tier; the actual W×H grid
+  lands later.
+- **Wall repair.** Right-click "Repair" consuming a fraction of
+  the recipe cost. Quality-of-life; not blocking.
+- **Loot drop TTL polish.** Current 90s expiry is short for
+  tactical pacing. Consider 180s or scaling by floor depth.
+- **Manual loot pickup** (E to grab) replacing auto-walk-into-it.
+  Better fit for the deliberate tactical-extraction tone.
+- **Heavy-class bullet variants.** The Heavy Slug Cannon currently
+  fires a generic round (just chunkier radius / orange tint). Add
+  per-projectile visual variants (slug, HE, incendiary tracer) +
+  optionally per-variant on-impact behaviour (small AoE, knockback,
+  proximity burst). Either tied to ammo subtypes (`heavy_slugs_he`,
+  `heavy_slugs_incendiary`) or a weapon-mod that swaps the
+  projectile shape. Lands when heavy weapons get more than the
+  single-shape sample.
+- **Demolish confirm** for high-value buildings (workstations,
+  Power Link).
+- **"Abandon corpse"** option for stuck players (sprints A2 v2
+  deferred polish).
+- **Melee customization.** Pieces / mods / tier-up apply to
+  ranged only today. If melee is meant to be "a real combat
+  verb," eventually it needs its own piece system or shared
+  mod compatibility.
+- **Pixel-art textures** — comprehensive coverage of all
+  entities + animations is its own roadmap (the asset_gen
+  pipeline + runtime is shipped; the catalog is incremental).
+- **Mobile (Capacitor) + desktop (Electron) wrappers.**
+
+#### Pending external work
+
+- **Discord Developer Portal config + first end-to-end test.**
+  Code is shipped (web OAuth + Activity SDK, instance-bound
+  rooms); waiting on Portal setup + a real Discord call to
+  validate the flow. See `docs/discord-integration.md` for the
+  manual steps.
+- **Add prewarm labels** for D3 enemies (`flame_drone`,
+  `chem_bloater`) and `precision_mill` in
+  `assetGenClient.ENEMY_LABELS`. Falls back to auto-generated
+  labels today — works, but produces less-specific prompts.
+
+### Architectural notes for the next agent
+
+- **Sprint A–D + Phase 1 all shipped together.** The previous
+  `docs/sprints.md` plan is now mostly cleared. The Roadmap
+  above supersedes it.
+- **Sprint C (procedural attachments) is the keystone:** every
+  dropped / crafted attachment is a unique `AttachmentInstance`
+  with rolled stats inside a class. Per-class roll ranges live
+  in `ATTACHMENT_STAT_RANGES` in `shared/inventory.ts`. Bare
+  `defId` references to attachments are gone — all consumers
+  pass the instance.
+- **Migration runs on character hydrate**
+  (`server/src/index.ts:migrateLegacyAttachmentSlots`) for
+  legacy `defId/count` slots and bare-id weapon pieces / mods.
+  If you change attachment shapes again, update the migration.
+  Pre-Phase-2 cleanup includes a fix for an over-expansion bug
+  there.
+- **`PROTOCOL_VERSION` is 36** (bumped during Phase 1 for
+  `assemble_weapon`). Bump on any wire-shape change.
+- **`BUILDING_REGISTRY`** is the single source of truth for HP,
+  horde priority, parallel slots, station / workstation flags,
+  and label. Every per-kind lookup goes through it.
+- **`WeaponAssemblyPanel` + atomic `assemble_weapon`** are the
+  template for the Phase 2.5 Suit Assembly Bench. Mirror the
+  pattern; the diff-and-commit logic generalises cleanly.
+- **Playtest mode** (`is_playtest` boolean on servers, migration
+  `0010_servers_playtest.sql`) — every join rebuilds inventory
+  + equipment from `buildPlaytest{Inventory,Equipment}()`.
+  Treat it as a sandbox; persistence within a single session
+  only.
+- **Auto-deploy:** GitHub Actions `fly-deploy.yml` runs on
+  pushes that touch `packages/server`, `packages/shared`,
+  `packages/asset_gen`, workspace manifests, or `fly.toml`.
+  Vercel handles client deploys automatically.

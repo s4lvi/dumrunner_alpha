@@ -22,7 +22,20 @@
 // (rooms + corridors of varying size), not a 1-bit grid map. Step is small
 // enough (TILE/4) that wall hit positions look pixel-stable.
 
-import { Application, Container, Graphics, Text } from 'pixi.js';
+import {
+  Application,
+  Assets,
+  Container,
+  Graphics,
+  Mesh,
+  MeshGeometry,
+  Text,
+  type Texture,
+} from 'pixi.js';
+import {
+  getOverride,
+  subscribe as subscribeOverrides,
+} from '../textureOverrides';
 import type {
   BuildingState,
   CorpseState,
@@ -39,6 +52,7 @@ import {
   TIER_COLORS_NUM,
 } from '@dumrunner/shared';
 import type { GameHandle, GameInit, SceneState } from './pixi';
+import { buildingsToMinimapList, type MinimapSnapshot } from './minimap';
 
 // ---------- tuning ----------
 const FOV = (Math.PI / 180) * 70; // 70deg horizontal FOV
@@ -165,8 +179,52 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // ---------- lifecycle ----------
   const root = new Container();
   const wallLayer = new Graphics();
+  // Textured wall columns. Sits above wallLayer (sky+floor+solid)
+  // so textured strips render on top of the solid fallback for
+  // columns whose hit kind has a texture override.
+  const wallTexLayer = new Container();
   const spriteLayer = new Graphics();
+  // Textured sprite columns (enemies). Same per-column z-test as
+  // the flat-color sprite pass; rendered as one Mesh per visible
+  // stripe so the texture's vertical column lines up with the
+  // billboard's screen column.
+  const spriteTexLayer = new Container();
   const hudLayer = new Graphics();
+
+  // Texture cache for the FPS wall pass. Mirrors the iso renderer's
+  // override-aware lookup (lib/textureOverrides). Cached Textures
+  // persist across frames; loads are async and the wall just stays
+  // in solid-fill mode until the texture resolves.
+  const fpsTexCache = new Map<string, Texture>();
+  const fpsTexLoading = new Set<string>();
+  function getFpsOverrideTexture(
+    category: string,
+    id: string,
+  ): Texture | null {
+    const url = getOverride(category, id);
+    if (!url) return null;
+    const cached = fpsTexCache.get(url);
+    if (cached) return cached;
+    if (!fpsTexLoading.has(url)) {
+      fpsTexLoading.add(url);
+      void (async () => {
+        try {
+          const tex = (await Assets.load(url)) as Texture;
+          fpsTexCache.set(url, tex);
+        } catch {
+          /* swallow */
+        } finally {
+          fpsTexLoading.delete(url);
+        }
+      })();
+    }
+    return null;
+  }
+  const unsubFpsOverrides = subscribeOverrides(() => {
+    // Force a tex re-resolve next render. No work needed beyond
+    // the cache check — render() reads getFpsOverrideTexture
+    // every frame.
+  });
   // Inline X/Y labels rendered on top of each status bar.
   const hpText = new Text({
     text: '',
@@ -202,7 +260,9 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   staminaText.anchor.set(0.5, 0.5);
   shieldText.anchor.set(0.5, 0.5);
   root.addChild(wallLayer);
+  root.addChild(wallTexLayer);
   root.addChild(spriteLayer);
+  root.addChild(spriteTexLayer);
   root.addChild(hudLayer);
   root.addChild(hpText);
   root.addChild(staminaText);
@@ -392,6 +452,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           nearest: null,
           nearestDoorId: null,
           nearestChestId: null,
+          weaponBenchTier: 0,
+          weaponBenches: [],
         });
       }
       return;
@@ -405,6 +467,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     let nearestDoorDsq = Infinity;
     let nearestChestId: string | null = null;
     let nearestChestDsq = Infinity;
+    let weaponBenchTier = 0;
+    const weaponBenches: { id: string; tier: number }[] = [];
     for (const b of buildings.values()) {
       const cx = (b.tileX + b.width / 2) * tileSize;
       const cy = (b.tileY + b.height / 2) * tileSize;
@@ -425,6 +489,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         b.kind !== 'forge' &&
         b.kind !== 'electronics_bench' &&
         b.kind !== 'weapon_bench' &&
+        b.kind !== 'precision_mill' &&
+        b.kind !== 'suit_bench' &&
         b.kind !== 'artifact_uplink' &&
         b.kind !== 'storage_chest'
       ) {
@@ -440,6 +506,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           nearestChestDsq = dsq;
           nearestChestId = b.id;
         }
+        if (b.kind === 'weapon_bench') {
+          const t = b.benchTier ?? 1;
+          if (t > weaponBenchTier) weaponBenchTier = t;
+          weaponBenches.push({ id: b.id, tier: t });
+        }
       }
     }
     const key =
@@ -449,7 +520,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       '|' +
       (nearestDoorId ?? '') +
       '|' +
-      (nearestChestId ?? '');
+      (nearestChestId ?? '') +
+      '|' +
+      String(weaponBenchTier) +
+      '|' +
+      weaponBenches.map((b) => `${b.id}:${b.tier}`).join(',');
     if (key !== lastStationKey) {
       lastStationKey = key;
       init.onNearWorkstationsChanged({
@@ -457,6 +532,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         nearest: nearestKind,
         nearestDoorId,
         nearestChestId,
+        weaponBenchTier,
+        weaponBenches,
       });
     }
   }
@@ -472,6 +549,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
     wallLayer.clear();
     spriteLayer.clear();
+    // Drop last frame's textured meshes. Cheap — typical counts
+    // are sub-500 quads across walls + sprites.
+    wallTexLayer.removeChildren();
+    spriteTexLayer.removeChildren();
 
     // Per-scene horizon palette: bright dusk on the surface, dark void in
     // a dungeon. Both gradients meet at the horizon line so walls & sprites
@@ -549,8 +630,41 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // Distance fog: blend the wall toward the horizon colour so the far
       // edge of vision fades out instead of clipping to a flat hue.
       const color = applyFog(baseColor, perp, palette.fog);
-
+      // Solid-fill column always renders as a base layer. Textured
+      // wall strips are layered on top in wallTexLayer when an
+      // override exists for this hit's kind.
       wallLayer.rect(screenX, top, COLUMN_STEP_PX, lineH).fill({ color });
+
+      // Texture pass. Resolve the right override (per-kind for
+      // player buildings, fallback to 'wall' for dungeon walls).
+      // Each column samples a single texel column from the
+      // texture, stretched to the projected line height — the
+      // standard Wolfenstein-style raycaster texturing.
+      const texKind = hit.isBuilding ? hit.buildingKind ?? 'wall' : 'wall';
+      const tex = getFpsOverrideTexture('building', texKind);
+      if (tex) {
+        const texW = tex.width || 1;
+        // Width of a single texel-column in UV space, plus a tiny
+        // bias so the quad isn't degenerate when texW is small.
+        const uvX = Math.max(0, Math.min(0.999, hit.wallU));
+        const uvX2 = Math.min(1, uvX + 1 / texW);
+        const positions = new Float32Array([
+          screenX, top,
+          screenX + COLUMN_STEP_PX, top,
+          screenX + COLUMN_STEP_PX, top + lineH,
+          screenX, top + lineH,
+        ]);
+        const uvs = new Float32Array([
+          uvX, 0,
+          uvX2, 0,
+          uvX2, 1,
+          uvX, 1,
+        ]);
+        const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+        const geom = new MeshGeometry({ positions, uvs, indices });
+        const mesh = new Mesh({ geometry: geom, texture: tex });
+        wallTexLayer.addChild(mesh);
+      }
     }
 
     drawSprites(W, H, palette.fog, horizonY);
@@ -816,8 +930,23 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // closer to the floor; everything is anchored at the horizon (no pitch).
     height: number;
     distSq: number;
+    // Optional override key. When set + a matching texture exists,
+    // the sprite renders as a textured billboard (per-column UV
+    // strip with z-test); otherwise falls back to the flat-color
+    // column path.
+    texCategory?: 'enemy' | 'building';
+    texId?: string;
   };
   const spritesScratch: Sprite[] = [];
+
+  // Spritesheet for enemy textures uses the wall layer's mesh
+  // approach. Reuses the same fpsTexCache as walls so a single
+  // upload at /editor lights up both worlds.
+  // (See getFpsOverrideTexture above.)
+  // The textured-sprite quads go into a dedicated layer (drawn
+  // above the solid-fill spriteLayer) so existing sprite code
+  // can keep emitting solid columns underneath as a fallback.
+
 
   function drawSprites(W: number, H: number, fogColor: number, horizonY: number) {
     spritesScratch.length = 0;
@@ -849,7 +978,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         hitT > 0
           ? blendColor(v.color, 0xffffff, hitT * 0.85)
           : v.color;
-      pushSprite(e.x, e.y, color, v.size * 2);
+      pushSprite(e.x, e.y, color, v.size * 2, 'enemy', e.kind);
     }
     for (const c of corpses.values()) {
       pushSprite(c.x, c.y, CORPSE_COLOR, CORPSE_SIZE);
@@ -933,24 +1062,71 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // recede instead of popping at full saturation.
       const fogged = applyFog(s.color, transformY, fogColor);
 
+      // Optional texture for this sprite. If present, each visible
+      // stripe gets a Mesh quad with a vertical UV slice; otherwise
+      // fall back to flat-color rects.
+      const tex =
+        s.texCategory && s.texId
+          ? getFpsOverrideTexture(s.texCategory, s.texId)
+          : null;
+      const texW = tex ? tex.width || 1 : 0;
+
       // Per-column z-test. Iterate at the column step so we match the wall
-      // pass; for each visible stripe, paint a rect.
+      // pass; for each visible stripe, paint either a textured quad or
+      // a flat-color rect.
       const startStripe = Math.max(0, drawLeft);
       const endStripe = Math.min(W, drawRight);
       for (let stripe = startStripe; stripe < endStripe; stripe += COLUMN_STEP_PX) {
         const colIdx = Math.floor(stripe / COLUMN_STEP_PX);
         if (colIdx < 0 || colIdx >= zBuffer.length) continue;
         if (transformY >= zBuffer[colIdx]) continue;
-        spriteLayer
-          .rect(stripe, drawTop, COLUMN_STEP_PX, spriteH)
-          .fill({ color: fogged });
+        if (tex) {
+          // u runs 0..1 across the sprite's screen footprint.
+          const u = (stripe - drawLeft) / Math.max(1, spriteW);
+          const uvX = Math.max(0, Math.min(0.999, u));
+          const uvX2 = Math.min(1, uvX + 1 / texW);
+          const positions = new Float32Array([
+            stripe, drawTop,
+            stripe + COLUMN_STEP_PX, drawTop,
+            stripe + COLUMN_STEP_PX, drawTop + spriteH,
+            stripe, drawTop + spriteH,
+          ]);
+          const uvs = new Float32Array([
+            uvX, 0,
+            uvX2, 0,
+            uvX2, 1,
+            uvX, 1,
+          ]);
+          const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+          const geom = new MeshGeometry({ positions, uvs, indices });
+          spriteTexLayer.addChild(new Mesh({ geometry: geom, texture: tex }));
+        } else {
+          spriteLayer
+            .rect(stripe, drawTop, COLUMN_STEP_PX, spriteH)
+            .fill({ color: fogged });
+        }
       }
     }
 
-    function pushSprite(x: number, y: number, color: number, height: number) {
+    function pushSprite(
+      x: number,
+      y: number,
+      color: number,
+      height: number,
+      texCategory?: 'enemy' | 'building',
+      texId?: string,
+    ) {
       const dx = x - selfX;
       const dy = y - selfY;
-      spritesScratch.push({ x, y, color, height, distSq: dx * dx + dy * dy });
+      spritesScratch.push({
+        x,
+        y,
+        color,
+        height,
+        distSq: dx * dx + dy * dy,
+        texCategory,
+        texId,
+      });
     }
   }
 
@@ -1006,7 +1182,18 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     return (r << 16) | (g << 8) | bl;
   }
 
-  type RayHit = { dist: number; faceNS: boolean; isBuilding: boolean };
+  // wallU: fractional position along the wall face the ray hit
+  // (0..1, west→east on N/S faces, north→south on E/W faces).
+  // Drives the texture-column sampling for textured walls.
+  // buildingKind: only set when isBuilding is true; lets the
+  // texture pass pick the right per-kind override.
+  type RayHit = {
+    dist: number;
+    faceNS: boolean;
+    isBuilding: boolean;
+    wallU: number;
+    buildingKind: import('@dumrunner/shared').BuildingKind | null;
+  };
 
   // Proper grid DDA. Walks the ray tile-by-tile and stops at the first
   // tile that's a wall. Hit distance is the perpendicular-corrected ray
@@ -1074,16 +1261,35 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const cx = (mx + 0.5) * tileSize;
       const cy = (my + 0.5) * tileSize;
       const insideWalkable = !hasWalkables || isInsideAny(layout.walkables, cx, cy);
-      const isBuilding = isBuildingTile(mx, my);
+      const buildingKind = buildingKindAt(mx, my);
+      const isBuilding = buildingKind !== null;
       if (!insideWalkable || isBuilding) {
-        return { dist, faceNS, isBuilding };
+        // Hit point in world coords. Texture-column sampling
+        // picks the fractional offset along the wall face.
+        const hitX = ox + dx * dist;
+        const hitY = oy + dy * dist;
+        let wallU: number;
+        if (faceNS) {
+          // Crossed a horizontal (N/S) face — texture spans
+          // along x within the tile.
+          wallU = ((hitX % tileSize) + tileSize) % tileSize;
+          wallU /= tileSize;
+        } else {
+          wallU = ((hitY % tileSize) + tileSize) % tileSize;
+          wallU /= tileSize;
+        }
+        return { dist, faceNS, isBuilding, wallU, buildingKind };
       }
     }
     return null;
   }
 
-  function isBuildingTile(mx: number, my: number): boolean {
-    if (buildings.size === 0) return false;
+
+  function buildingKindAt(
+    mx: number,
+    my: number,
+  ): import('@dumrunner/shared').BuildingKind | null {
+    if (buildings.size === 0) return null;
     for (const b of buildings.values()) {
       if (
         mx >= b.tileX &&
@@ -1091,11 +1297,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         my >= b.tileY &&
         my < b.tileY + b.height
       ) {
-        return true;
+        return b.kind;
       }
     }
-    return false;
+    return null;
   }
+
 
   // ---------- GameHandle implementation ----------
 
@@ -1155,9 +1362,6 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       p.maxHp = maxHp;
       if (shield !== undefined) p.shield = shield;
       if (maxShield !== undefined) p.maxShield = maxShield;
-    },
-    setSelfStamina() {
-      // No HUD in the FPS view yet — the React HUD overlay handles it.
     },
     setPlayerDead(characterId) {
       const p = players.get(characterId);
@@ -1269,94 +1473,31 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     swapScene(state) {
       applySceneState(state);
     },
-    paintMinimap(canvas: HTMLCanvasElement, worldRadius: number) {
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      const w = canvas.width;
-      const h = canvas.height;
-      const cx = w / 2;
-      const cy = h / 2;
-      const scale = Math.min(w, h) / (worldRadius * 2);
-
-      ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = 'rgba(10, 12, 18, 0.85)';
-      ctx.fillRect(0, 0, w, h);
-
-      const tileSize = layout?.tileSize ?? 32;
-
-      if (layout && layout.walkables.length > 0) {
-        ctx.fillStyle = 'rgba(82, 82, 91, 0.45)';
-        for (const r of layout.walkables) {
-          const x = (r.x - selfX) * scale + cx;
-          const y = (r.y - selfY) * scale + cy;
-          ctx.fillRect(x, y, r.w * scale, r.h * scale);
-        }
-      } else {
-        ctx.fillStyle = 'rgba(82, 82, 91, 0.18)';
-        ctx.beginPath();
-        ctx.arc(cx, cy, Math.min(w, h) / 2 - 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      for (const b of buildings.values()) {
-        const x = (b.tileX * tileSize - selfX) * scale + cx;
-        const y = (b.tileY * tileSize - selfY) * scale + cy;
-        const sw = Math.max(2, b.width * tileSize * scale);
-        const sh = Math.max(2, b.height * tileSize * scale);
-        ctx.fillStyle =
-          b.kind === 'power_link'
-            ? '#06b6d4'
-            : b.kind === 'storage_chest'
-              ? '#fbbf24'
-              : b.kind === 'wall'
-                ? '#71717a'
-                : b.kind.startsWith('turret')
-                  ? '#a78bfa'
-                  : b.kind === 'door'
-                    ? '#fde68a'
-                    : '#22c55e';
-        ctx.fillRect(x, y, sw, sh);
-      }
-
-      for (const p of players.values()) {
-        if (p.characterId === init.self.characterId) continue;
-        const x = (p.x - selfX) * scale + cx;
-        const y = (p.y - selfY) * scale + cy;
-        ctx.fillStyle = '#34d399';
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      for (const e of enemies.values()) {
-        if (e.hp <= 0) continue;
-        const x = (e.x - selfX) * scale + cx;
-        const y = (e.y - selfY) * scale + cy;
-        ctx.fillStyle = '#ef4444';
-        ctx.beginPath();
-        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Self + facing arrow (FPS view has an angle, top-down doesn't).
-      const facing = (yaw ?? 0);
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(facing);
-      ctx.fillStyle = '#fde047';
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, -5);
-      ctx.lineTo(4, 4);
-      ctx.lineTo(-4, 4);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+    getMinimapSnapshot(): MinimapSnapshot {
+      return {
+        selfX,
+        selfY,
+        selfId: init.self.characterId,
+        tileSize: layout?.tileSize ?? 32,
+        walkables: layout?.walkables ?? [],
+        buildings: buildingsToMinimapList(
+          [...buildings.values()],
+        ),
+        players: [...players.values()].map((p) => ({
+          characterId: p.characterId,
+          x: p.x,
+          y: p.y,
+          // FPS doesn't apply LOS-based hiding to remote players,
+          // so they're all visible on the minimap.
+          visible: true,
+        })),
+        enemies: [...enemies.values()].map((e) => ({
+          x: e.x,
+          y: e.y,
+          hp: e.hp,
+          visible: true,
+        })),
+      };
     },
     nearbyPlayers(radiusPx: number) {
       const r2 = radiusPx * radiusPx;
@@ -1399,6 +1540,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       };
     },
     destroy() {
+      unsubFpsOverrides();
       detachInputListeners();
       if (document.pointerLockElement === app.canvas) {
         document.exitPointerLock?.();

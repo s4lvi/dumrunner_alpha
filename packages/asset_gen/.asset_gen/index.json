@@ -2904,6 +2904,492 @@
         "reasons": []
       },
       "createdAt": "2026-05-03T04:35:29.312Z"
+    },
+    {
+      "assetId": "asset_ecddca564cc4491bac6cb5ce3c4e54cb",
+      "cacheKey": "f7102777551c23151d769499242befd15bd3ff8f815000419aa1e00bac18b52b",
+      "request": {
+        "requestId": "building:forge",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "forge",
+          "label": "forge",
+          "buildingKind": "forge"
+        },
+        "visualBrief": {
+          "subject": "player-built forge",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_ecddca564cc4491bac6cb5ce3c4e54cb.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 10,
+          "y": 6,
+          "w": 44,
+          "h": 49
+        },
+        "averageColors": [
+          "#574a4b"
+        ]
+      },
+      "family": {
+        "familyId": "family_7501b6c1a9586db8f45b",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-04T03:07:18.492Z"
+    },
+    {
+      "assetId": "asset_6412ca6bb06e4cb6aa647e82d23fc567",
+      "cacheKey": "c04c4b362f8a0bd5a692e39c0b9601b2d8f2ef171e4fef019b6587f036605a4f",
+      "request": {
+        "requestId": "building:weapon_bench",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "weapon_bench",
+          "label": "weapon bench",
+          "buildingKind": "weapon_bench"
+        },
+        "visualBrief": {
+          "subject": "player-built weapon bench",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_6412ca6bb06e4cb6aa647e82d23fc567.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 9,
+          "y": 13,
+          "w": 47,
+          "h": 35
+        },
+        "averageColors": [
+          "#5f5458"
+        ]
+      },
+      "family": {
+        "familyId": "family_df388914e32be9441c25",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-04T03:07:31.642Z"
+    },
+    {
+      "assetId": "asset_9db6fa98bf284b5a83f501d78e4a7480",
+      "cacheKey": "cd327e82c874f8bf8c87a6257f61455032da56a3abdd30f8419df627b58ccadf",
+      "request": {
+        "requestId": "building:turret_shotgun",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "turret_shotgun",
+          "label": "turret shotgun",
+          "buildingKind": "turret_shotgun"
+        },
+        "visualBrief": {
+          "subject": "player-built turret shotgun",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_9db6fa98bf284b5a83f501d78e4a7480.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 13,
+          "y": 11,
+          "w": 41,
+          "h": 40
+        },
+        "averageColors": [
+          "#514d50"
+        ]
+      },
+      "family": {
+        "familyId": "family_d582a41d48611431a45a",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-04T03:09:13.813Z"
+    },
+    {
+      "assetId": "asset_35dbed288880415e924b473117283e20",
+      "cacheKey": "6592d58932eddb101ef6cd532ec45a9b795bafa46c9b53edbf6531ac5ef1f964",
+      "request": {
+        "requestId": "building:storage_chest",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "storage_chest",
+          "label": "storage chest",
+          "buildingKind": "storage_chest"
+        },
+        "visualBrief": {
+          "subject": "player-built storage chest",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_35dbed288880415e924b473117283e20.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 10,
+          "y": 11,
+          "w": 43,
+          "h": 41
+        },
+        "averageColors": [
+          "#625c56"
+        ]
+      },
+      "family": {
+        "familyId": "family_8895711da1ae9806346e",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-04T03:14:34.480Z"
+    },
+    {
+      "assetId": "asset_2b0a102e71e24a01bcb8512b2b670ee4",
+      "cacheKey": "f38659cefd71da6813c3292b51f50e0845c259df1b43a29f05fcbb2819066b0a",
+      "request": {
+        "requestId": "building:precision_mill",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "precision_mill",
+          "label": "precision mill",
+          "buildingKind": "precision_mill"
+        },
+        "visualBrief": {
+          "subject": "player-built precision mill",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_2b0a102e71e24a01bcb8512b2b670ee4.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 10,
+          "y": 11,
+          "w": 46,
+          "h": 41
+        },
+        "averageColors": [
+          "#4c5058"
+        ]
+      },
+      "family": {
+        "familyId": "family_f55e9343d4d1a135e494",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-04T19:04:08.862Z"
+    },
+    {
+      "assetId": "asset_18e20308072b46b9a772902e4b109390",
+      "cacheKey": "88b07d2beff35f0482611ed34cb230b1401a9a5e87e3b9a619fa52ee128f1a5b",
+      "request": {
+        "requestId": "building:suit_bench",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "suit_bench",
+          "label": "suit bench",
+          "buildingKind": "suit_bench"
+        },
+        "visualBrief": {
+          "subject": "player-built suit bench",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_18e20308072b46b9a772902e4b109390.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "opaqueBounds": {
+          "x": 10,
+          "y": 8,
+          "w": 44,
+          "h": 46
+        },
+        "averageColors": [
+          "#4a4542"
+        ]
+      },
+      "family": {
+        "familyId": "family_530c0b4c74adaa12fb04",
+        "variantType": "building",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated building asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-05T00:50:51.626Z"
     }
   ],
   "jobs": [
@@ -4731,6 +5217,324 @@
       "error": null,
       "createdAt": "2026-05-03T04:35:19.045Z",
       "updatedAt": "2026-05-03T04:35:29.314Z"
+    },
+    {
+      "jobId": "job_59748dcf43e345e7be5576bac64380b3",
+      "status": "approved",
+      "cacheKey": "f7102777551c23151d769499242befd15bd3ff8f815000419aa1e00bac18b52b",
+      "request": {
+        "requestId": "building:forge",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "forge",
+          "label": "forge",
+          "buildingKind": "forge"
+        },
+        "visualBrief": {
+          "subject": "player-built forge",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_ecddca564cc4491bac6cb5ce3c4e54cb",
+      "error": null,
+      "createdAt": "2026-05-04T03:07:04.639Z",
+      "updatedAt": "2026-05-04T03:07:18.493Z"
+    },
+    {
+      "jobId": "job_5cec714f905a4521a73f733025ce94b8",
+      "status": "approved",
+      "cacheKey": "c04c4b362f8a0bd5a692e39c0b9601b2d8f2ef171e4fef019b6587f036605a4f",
+      "request": {
+        "requestId": "building:weapon_bench",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "weapon_bench",
+          "label": "weapon bench",
+          "buildingKind": "weapon_bench"
+        },
+        "visualBrief": {
+          "subject": "player-built weapon bench",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_6412ca6bb06e4cb6aa647e82d23fc567",
+      "error": null,
+      "createdAt": "2026-05-04T03:07:09.878Z",
+      "updatedAt": "2026-05-04T03:07:31.644Z"
+    },
+    {
+      "jobId": "job_762d80e31ec640378bfff5dc150eaceb",
+      "status": "approved",
+      "cacheKey": "cd327e82c874f8bf8c87a6257f61455032da56a3abdd30f8419df627b58ccadf",
+      "request": {
+        "requestId": "building:turret_shotgun",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "turret_shotgun",
+          "label": "turret shotgun",
+          "buildingKind": "turret_shotgun"
+        },
+        "visualBrief": {
+          "subject": "player-built turret shotgun",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_9db6fa98bf284b5a83f501d78e4a7480",
+      "error": null,
+      "createdAt": "2026-05-04T03:09:00.262Z",
+      "updatedAt": "2026-05-04T03:09:13.815Z"
+    },
+    {
+      "jobId": "job_14ce8ef0d89d4b34922af0a15a0d82cc",
+      "status": "approved",
+      "cacheKey": "6592d58932eddb101ef6cd532ec45a9b795bafa46c9b53edbf6531ac5ef1f964",
+      "request": {
+        "requestId": "building:storage_chest",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "storage_chest",
+          "label": "storage chest",
+          "buildingKind": "storage_chest"
+        },
+        "visualBrief": {
+          "subject": "player-built storage chest",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_35dbed288880415e924b473117283e20",
+      "error": null,
+      "createdAt": "2026-05-04T03:14:19.344Z",
+      "updatedAt": "2026-05-04T03:14:34.481Z"
+    },
+    {
+      "jobId": "job_7a192053fe434a30a4a74d76eaf48796",
+      "status": "approved",
+      "cacheKey": "f38659cefd71da6813c3292b51f50e0845c259df1b43a29f05fcbb2819066b0a",
+      "request": {
+        "requestId": "building:precision_mill",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "precision_mill",
+          "label": "precision mill",
+          "buildingKind": "precision_mill"
+        },
+        "visualBrief": {
+          "subject": "player-built precision mill",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_2b0a102e71e24a01bcb8512b2b670ee4",
+      "error": null,
+      "createdAt": "2026-05-04T19:03:54.773Z",
+      "updatedAt": "2026-05-04T19:04:08.864Z"
+    },
+    {
+      "jobId": "job_49864c2c89f1497daa9c03e440c93a29",
+      "status": "approved",
+      "cacheKey": "88b07d2beff35f0482611ed34cb230b1401a9a5e87e3b9a619fa52ee128f1a5b",
+      "request": {
+        "requestId": "building:suit_bench",
+        "assetKind": "building",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "suit_bench",
+          "label": "suit bench",
+          "buildingKind": "suit_bench"
+        },
+        "visualBrief": {
+          "subject": "player-built suit bench",
+          "materials": [
+            "scrap metal",
+            "bolted plates",
+            "industrial wiring"
+          ],
+          "colors": [
+            "#94a3b8",
+            "#f59e0b",
+            "#111827"
+          ],
+          "mustInclude": [
+            "reads as a placed base structure from top-down view"
+          ],
+          "mustAvoid": [
+            "background floor",
+            "human operator",
+            "text"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 3,
+          "anchor": "center",
+          "maxOpaqueBoundsRatio": 0.92,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_18e20308072b46b9a772902e4b109390",
+      "error": null,
+      "createdAt": "2026-05-05T00:50:38.808Z",
+      "updatedAt": "2026-05-05T00:50:51.628Z"
     }
   ]
 }

@@ -20,6 +20,8 @@ export type MaterialKind =
   | 'wire'
   | 'circuit'
   | 'alloy'
+  | 'alloy_mk3'
+  | 'alloy_mk4'
   | 'biotic'
   | 'crystal'
   | 'artifact'
@@ -31,8 +33,9 @@ export type MaterialDef = {
   id: MaterialKind;
   name: string;
   // Rough rarity tier — drives drop weights and recipe costing. 1 = abundant
-  // common scavenge, 2 = mid-floor crafting components, 3 = late-floor / boss.
-  tier: 1 | 2 | 3;
+  // common scavenge, 2 = mid-floor crafting components, 3 = late-floor / boss,
+  // 4 = top-tier (alloy_mk4 only at the Forge).
+  tier: 1 | 2 | 3 | 4;
   // Hex color for the inventory icon.
   color: number;
 };
@@ -40,7 +43,26 @@ export type MaterialDef = {
 export const MATERIALS: Record<MaterialKind, MaterialDef> = {
   scrap:   { id: 'scrap',   name: 'Scrap',            tier: 1, color: 0xc2410c },
   wire:    { id: 'wire',    name: 'Wire',             tier: 1, color: 0xeab308 },
+  // Base alloy. Drops from armored/brute kills, also craftable at
+  // the Forge from scrap + wire so a player without late-floor
+  // kills isn't gated entirely on lucky drops.
   alloy:   { id: 'alloy',   name: 'Alloy Plate',      tier: 2, color: 0x94a3b8 },
+  // Higher-tier alloys are *only* produced at the Forge (Phase 2)
+  // by refining lower-tier alloys with circuits / crystals /
+  // artifacts. They feed the Weapon Bench's tier-upgrade items and
+  // (later) high-tier weapon assemblies.
+  alloy_mk3: {
+    id: 'alloy_mk3',
+    name: 'Refined Alloy',
+    tier: 3,
+    color: 0xfde047,
+  },
+  alloy_mk4: {
+    id: 'alloy_mk4',
+    name: 'Precision Alloy',
+    tier: 4,
+    color: 0xfb923c,
+  },
   circuit: { id: 'circuit', name: 'Circuit Board',    tier: 2, color: 0x10b981 },
   biotic:  { id: 'biotic',  name: 'Biotic Tissue',    tier: 2, color: 0xa855f7 },
   crystal: { id: 'crystal', name: 'Resonant Crystal', tier: 3, color: 0x06b6d4 },
@@ -163,6 +185,58 @@ export const CONSUMABLES: Record<ConsumableKind, ConsumableDef> = {
     ],
   },
 };
+
+// Workstation tier-upgrade items. Crafted at the Forge from
+// tiered alloys; applied to an existing workstation via the
+// `upgrade_workstation` server message to lift its tier. A Mk1
+// Weapon Bench can only assemble Mk1 weapons; Mk2 unlocks Mk2
+// assembly; etc. Fungible (stackable count); the Mk2 upgrade is
+// generic — any Mk1→Mk2 step uses one.
+export type UpgradeKind =
+  | 'weapon_bench_mk2'
+  | 'weapon_bench_mk3'
+  | 'weapon_bench_mk4';
+
+export type UpgradeDef = {
+  id: UpgradeKind;
+  name: string;
+  description: string;
+  // Which BuildingKind this upgrade item targets.
+  targetBuilding: BuildingKind;
+  // Tier this upgrade lifts the building TO. Server validates that
+  // current.benchTier === targetTier - 1 (no skipping tiers).
+  targetTier: 2 | 3 | 4;
+  color: number;
+};
+
+export const UPGRADES: Record<UpgradeKind, UpgradeDef> = {
+  weapon_bench_mk2: {
+    id: 'weapon_bench_mk2',
+    name: 'Weapon Bench Mk2 Upgrade',
+    description:
+      'Lifts a Weapon Bench from Mk1 to Mk2. Apply at the bench (right-click → Apply).',
+    targetBuilding: 'weapon_bench',
+    targetTier: 2,
+    color: 0xfde047,
+  },
+  weapon_bench_mk3: {
+    id: 'weapon_bench_mk3',
+    name: 'Weapon Bench Mk3 Upgrade',
+    description: 'Lifts a Weapon Bench from Mk2 to Mk3.',
+    targetBuilding: 'weapon_bench',
+    targetTier: 3,
+    color: 0xfb923c,
+  },
+  weapon_bench_mk4: {
+    id: 'weapon_bench_mk4',
+    name: 'Weapon Bench Mk4 Upgrade',
+    description: 'Lifts a Weapon Bench from Mk3 to Mk4.',
+    targetBuilding: 'weapon_bench',
+    targetTier: 4,
+    color: 0xef4444,
+  },
+};
+
 export type WeaponKind =
   | 'pistol'
   | 'smg'
@@ -304,7 +378,11 @@ export type InventorySlot =
   | { kind: 'weapon'; weapon: WeaponItem }
   | { kind: 'attachment'; instance: AttachmentInstanceFwd }
   | { kind: 'consumable'; consumableId: ConsumableKind; count: number }
-  | { kind: 'placeable'; buildingKind: BuildingKind; count: number };
+  | { kind: 'placeable'; buildingKind: BuildingKind; count: number }
+  // Workstation tier-upgrade items — crafted at the Forge,
+  // applied to a target workstation building via the
+  // `upgrade_workstation` server message to lift its tier.
+  | { kind: 'upgrade'; upgradeId: UpgradeKind; count: number };
 
 export type Inventory = InventorySlot[];
 
@@ -451,19 +529,20 @@ export function computeSuitStats(equipment: Equipment): SuitStats {
       const def = AFFIX_DEFS[affix.id];
       if (def) def.apply(stats, affix.value);
     }
-    // Crafted suit-affix attachments — slot independent. Each
-    // appliedAttachment is now a unique rolled instance, so we
-    // ask attachmentInstanceSuitEffect for the resolved stats and
-    // fold them onto the SuitStats accumulator.
+    // Crafted suit-affix attachments. Each appliedAttachment is a
+    // unique rolled instance scaled by tier-mismatch (Phase 2.5):
+    // a Mk4 attachment on a Mk1 part delivers ~80% of its rolled
+    // bonus, same magnitude curve as the weapon-side mismatch.
     for (const inst of part.appliedAttachments ?? []) {
       const def = ATTACHMENT_DEFS[inst.defId];
       if (!def || def.kind !== 'suit_affix') continue;
       const eff = attachmentInstanceSuitEffect(inst);
-      stats.hpBonus += eff.hpBonus;
-      stats.shieldBonus += eff.shieldBonus;
-      stats.staminaMaxBonus += eff.staminaMaxBonus;
-      stats.staminaRegenBonus += eff.staminaRegenBonus;
-      stats.moveSpeedMult += eff.moveSpeedMult;
+      const scale = suitTierMismatchScale(inst.tier, part.tier);
+      stats.hpBonus += eff.hpBonus * scale;
+      stats.shieldBonus += eff.shieldBonus * scale;
+      stats.staminaMaxBonus += eff.staminaMaxBonus * scale;
+      stats.staminaRegenBonus += eff.staminaRegenBonus * scale;
+      stats.moveSpeedMult += eff.moveSpeedMult * scale;
     }
   }
   return stats;
@@ -1048,9 +1127,89 @@ export function computeWeaponImbues(weapon: WeaponItem): Array<{
   return out;
 }
 
+// Map PartTier (which is what AttachmentInstance.tier is) to a
+// numeric scalar so we can compare against WeaponTier (1–4) for
+// tier-mismatch math. Alien is treated as tier 5 — it's the
+// top-end attachment tier with no equivalent weapon chassis tier.
+function tierToNumber(t: PartTier): number {
+  switch (t) {
+    case 'Mk1':
+      return 1;
+    case 'Mk2':
+      return 2;
+    case 'Mk3':
+      return 3;
+    case 'Mk4':
+      return 4;
+    case 'Alien':
+      return 5;
+  }
+}
+
+// Phase 2.3 tier-mismatch scale. Returns a multiplier in [0.8, 1.0]
+// that scales an attachment instance's deviation from the neutral
+// effect (1.0 for multipliers, 0 for additive). Same direction
+// either way — a Mk4 attachment on a T1 weapon is penalised
+// because the chassis can't house the precision; a Mk1 attachment
+// on a T4 weapon is also penalised because the precision chassis
+// expects matching parts. Magnitude: 5% per tier delta, capped so
+// even a delta-4 mismatch (Alien on T1) keeps 80% effectiveness.
+// A strong roll still beats no attachment.
+export function tierMismatchScale(
+  attachmentTier: PartTier,
+  weaponTier: WeaponTier
+): number {
+  const delta = Math.abs(tierToNumber(attachmentTier) - weaponTier);
+  return Math.max(0.8, 1 - delta * 0.05);
+}
+
+// Suit-side equivalent — both sides are PartTier. Same magnitude
+// curve as the weapon version. Used by the Phase 2.5 Suit Assembly
+// Bench: a Mk4 Hardened Plating attachment on a Mk1 plating part
+// is penalised the same way a Mk4 weapon mod on a T1 weapon is.
+export function suitTierMismatchScale(
+  attachmentTier: PartTier,
+  partTier: PartTier
+): number {
+  const delta = Math.abs(
+    tierToNumber(attachmentTier) - tierToNumber(partTier)
+  );
+  return Math.max(0.8, 1 - delta * 0.05);
+}
+
+// How many crafted suit_affix attachments a part of a given tier
+// can hold. Mirrors weapon piece-slot tiering: low tiers expose
+// fewer slots so a Mk1 plating can't run a stack of buffs the same
+// way an Alien plating can. Phase 2.5 introduces the slot grid in
+// the Suit Assembly Bench.
+export const SUIT_ATTACHMENT_SLOTS: Record<PartTier, number> = {
+  Mk1: 1,
+  Mk2: 2,
+  Mk3: 3,
+  Mk4: 4,
+  Alien: 4,
+};
+
+// Apply a tier-mismatch scale to a resolved weapon effect, taking
+// each multiplier's deviation from neutral (1.0 for *Mult, 0 for
+// projectileSpeedAdd) and shrinking it toward neutral by `scale`.
+// scale = 1 → no change; scale = 0.8 → 80% as effective.
+function scaleWeaponEffect(
+  eff: Required<WeaponEffect>,
+  scale: number
+): Required<WeaponEffect> {
+  return {
+    damageMult: 1 + (eff.damageMult - 1) * scale,
+    fireIntervalMult: 1 + (eff.fireIntervalMult - 1) * scale,
+    spreadMult: 1 + (eff.spreadMult - 1) * scale,
+    projectileSpeedAdd: eff.projectileSpeedAdd * scale,
+  };
+}
+
 // Combine a weapon's frame + piece-affix + mod effects into a single
 // resolved multiplier set. Server uses this when firing to scale base
-// WEAPON_STATS.
+// WEAPON_STATS. Each attachment's effect is scaled by its tier-
+// mismatch with the weapon (Phase 2.3) before merging.
 export function computeWeaponEffect(weapon: WeaponItem): Required<WeaponEffect> {
   const out: Required<WeaponEffect> = {
     damageMult: 1,
@@ -1062,7 +1221,11 @@ export function computeWeaponEffect(weapon: WeaponItem): Required<WeaponEffect> 
     if (!piece) continue;
     const def = ATTACHMENT_DEFS[piece.defId];
     if (!def || def.kind !== 'weapon_affix') continue;
-    const eff = attachmentInstanceWeaponEffect(piece);
+    const raw = attachmentInstanceWeaponEffect(piece);
+    const eff = scaleWeaponEffect(
+      raw,
+      tierMismatchScale(piece.tier, weapon.tier)
+    );
     out.damageMult *= eff.damageMult;
     out.fireIntervalMult *= eff.fireIntervalMult;
     out.spreadMult *= eff.spreadMult;
@@ -1071,7 +1234,11 @@ export function computeWeaponEffect(weapon: WeaponItem): Required<WeaponEffect> 
   for (const mod of weapon.mods) {
     const def = ATTACHMENT_DEFS[mod.defId];
     if (!def || def.kind !== 'weapon_mod') continue;
-    const eff = attachmentInstanceWeaponEffect(mod);
+    const raw = attachmentInstanceWeaponEffect(mod);
+    const eff = scaleWeaponEffect(
+      raw,
+      tierMismatchScale(mod.tier, weapon.tier)
+    );
     out.damageMult *= eff.damageMult;
     out.fireIntervalMult *= eff.fireIntervalMult;
     out.spreadMult *= eff.spreadMult;
@@ -1427,13 +1594,14 @@ export function takeFromSlot(
   if (s.kind === 'empty') return null;
 
   // Attachments are unique-instance (no count) so the "take 1"
-  // branch can't apply to them; only the four count-bearing kinds
-  // need a partial-take path.
+  // branch can't apply to them; only the count-bearing kinds need
+  // a partial-take path.
   const isStackable =
     s.kind === 'material' ||
     s.kind === 'ammo' ||
     s.kind === 'placeable' ||
-    s.kind === 'consumable';
+    s.kind === 'consumable' ||
+    s.kind === 'upgrade';
 
   if (!all && isStackable && (s as { count: number }).count > 1) {
     (s as { count: number }).count -= 1;
@@ -1448,6 +1616,9 @@ export function takeFromSlot(
     }
     if (s.kind === 'consumable') {
       return { kind: 'consumable', consumableId: s.consumableId, count: 1 };
+    }
+    if (s.kind === 'upgrade') {
+      return { kind: 'upgrade', upgradeId: s.upgradeId, count: 1 };
     }
   }
 
@@ -1485,6 +1656,8 @@ export function addInventorySlotToInventory(
       return addAttachment(inv, slot.instance);
     case 'consumable':
       return addConsumable(inv, slot.consumableId, slot.count);
+    case 'upgrade':
+      return addUpgrade(inv, slot.upgradeId, slot.count);
     case 'part':
       return addPart(inv, slot.part);
   }
@@ -1727,6 +1900,15 @@ export function swapSlotsBetween(
     src[srcIdx] = { kind: 'empty' };
     return true;
   }
+  if (
+    a.kind === 'upgrade' &&
+    b.kind === 'upgrade' &&
+    a.upgradeId === b.upgradeId
+  ) {
+    b.count += a.count;
+    src[srcIdx] = { kind: 'empty' };
+    return true;
+  }
   src[srcIdx] = b;
   dst[dstIdx] = a;
   return true;
@@ -1768,6 +1950,15 @@ export function swapSlots(inv: Inventory, from: number, to: number): boolean {
     inv[from] = { ...EMPTY };
     return true;
   }
+  if (
+    a.kind === 'upgrade' &&
+    b.kind === 'upgrade' &&
+    a.upgradeId === b.upgradeId
+  ) {
+    b.count += a.count;
+    inv[from] = { ...EMPTY };
+    return true;
+  }
   // Plain swap.
   inv[from] = b;
   inv[to] = a;
@@ -1785,7 +1976,8 @@ export function discardSlot(inv: Inventory, slot: number, all: boolean): boolean
     (s.kind === 'material' ||
       s.kind === 'ammo' ||
       s.kind === 'placeable' ||
-      s.kind === 'consumable') &&
+      s.kind === 'consumable' ||
+      s.kind === 'upgrade') &&
     s.count > 1
   ) {
     s.count -= 1;
@@ -1836,6 +2028,67 @@ export function consumeConsumable(
   s.count -= 1;
   if (s.count <= 0) inv[slotIdx] = { kind: 'empty' };
   return id;
+}
+
+// Workstation upgrade item helpers. Stack like consumables.
+export function findUpgradeSlot(
+  inv: Inventory,
+  upgradeId: UpgradeKind
+): number {
+  for (let i = 0; i < inv.length; i++) {
+    const s = inv[i];
+    if (s.kind === 'upgrade' && s.upgradeId === upgradeId) return i;
+  }
+  return -1;
+}
+
+export function countUpgrade(
+  inv: Inventory,
+  upgradeId: UpgradeKind
+): number {
+  let total = 0;
+  for (const s of inv) {
+    if (s.kind === 'upgrade' && s.upgradeId === upgradeId) total += s.count;
+  }
+  return total;
+}
+
+export function addUpgrade(
+  inv: Inventory,
+  upgradeId: UpgradeKind,
+  count = 1
+): boolean {
+  if (count <= 0) return true;
+  const existing = findUpgradeSlot(inv, upgradeId);
+  if (existing >= 0) {
+    const s = inv[existing];
+    if (s.kind === 'upgrade') {
+      s.count += count;
+      return true;
+    }
+  }
+  const empty = findEmptySlot(inv);
+  if (empty < 0) return false;
+  inv[empty] = { kind: 'upgrade', upgradeId, count };
+  return true;
+}
+
+export function consumeUpgrade(
+  inv: Inventory,
+  upgradeId: UpgradeKind,
+  amount = 1
+): boolean {
+  if (countUpgrade(inv, upgradeId) < amount) return false;
+  let remaining = amount;
+  for (let i = 0; i < inv.length && remaining > 0; i++) {
+    const s = inv[i];
+    if (s.kind !== 'upgrade' || s.upgradeId !== upgradeId) continue;
+    const take = Math.min(s.count, remaining);
+    s.count -= take;
+    remaining -= take;
+    if (s.count <= 0) inv[i] = { kind: 'empty' };
+  }
+  return true;
 }
 
 export function findAttachmentSlot(inv: Inventory, defId: string): number {
@@ -1909,12 +2162,14 @@ export function sortBag(inv: Inventory): void {
     material: Map<string, number>;
     placeable: Map<string, number>;
     consumable: Map<string, number>;
+    upgrade: Map<string, number>;
   };
   const stacks: Stack = {
     ammo: new Map(),
     material: new Map(),
     placeable: new Map(),
     consumable: new Map(),
+    upgrade: new Map(),
   };
   const others: InventorySlot[] = [];
   for (const s of tail) {
@@ -1936,6 +2191,11 @@ export function sortBag(inv: Inventory): void {
         s.consumableId,
         (stacks.consumable.get(s.consumableId) ?? 0) + s.count
       );
+    } else if (s.kind === 'upgrade') {
+      stacks.upgrade.set(
+        s.upgradeId,
+        (stacks.upgrade.get(s.upgradeId) ?? 0) + s.count
+      );
     } else {
       others.push(s);
     }
@@ -1955,8 +2215,10 @@ export function sortBag(inv: Inventory): void {
         return 4;
       case 'consumable':
         return 5;
-      case 'part':
+      case 'upgrade':
         return 6;
+      case 'part':
+        return 7;
       default:
         return 99;
     }
@@ -1992,6 +2254,14 @@ export function sortBag(inv: Inventory): void {
     rebuilt.push({
       kind: 'consumable',
       consumableId: id as ConsumableKind,
+      count,
+    });
+  }
+  // Then upgrades — bench upgrades cluster after consumables.
+  for (const [id, count] of stacks.upgrade) {
+    rebuilt.push({
+      kind: 'upgrade',
+      upgradeId: id as UpgradeKind,
       count,
     });
   }

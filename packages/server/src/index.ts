@@ -14,6 +14,7 @@ import {
 } from '@dumrunner/shared';
 import { verifyJoinToken } from '@dumrunner/shared/token';
 import {
+  buildPlaytestEquipment,
   buildPlaytestInventory,
   buildStarterInventory,
 } from './starter.js';
@@ -74,6 +75,12 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
   detach_suit_affix: (w, c, m) =>
     w.handleDetachSuitAffix(c, m.suitSlot, m.attachmentIndex),
   tier_up_weapon: (w, c, m) => w.handleTierUpWeapon(c, m.weaponInventoryIdx),
+  assemble_weapon: (w, c, m) =>
+    w.handleAssembleWeapon(c, m.weaponInventoryIdx, m.pieces, m.mods),
+  assemble_suit_part: (w, c, m) =>
+    w.handleAssembleSuitPart(c, m.suitSlot, m.attachments),
+  upgrade_workstation: (w, c, m) =>
+    w.handleUpgradeWorkstation(c, m.buildingId, m.upgradeId),
   use_consumable: (w, c, m) => w.handleUseConsumable(c, m.slot),
   reload_weapon: (w, c) => w.handleReloadWeapon(c),
   chat: (w, c, m) => w.handleChat(c, m.text),
@@ -234,10 +241,17 @@ wss.on('connection', (ws: WebSocket) => {
       // loadout — that way playtest servers can hand out the bigger
       // debug bag without re-querying the row.
       const world = await registry.getOrCreate(serverId);
-      const inventory =
-        loaded?.inventory ??
-        (world.isPlaytest() ? buildPlaytestInventory() : buildStarterInventory());
-      const equipment = loaded?.equipment ?? emptyEquipment();
+      // Playtest mode is treated as a sandbox: every join rebuilds
+      // the debug loadout regardless of what's stored. Means tweaks
+      // to buildPlaytest{Inventory,Equipment} take effect on the
+      // first reconnect, which is what testers want. Persistence
+      // for playtest characters lives within a single session.
+      const inventory = world.isPlaytest()
+        ? buildPlaytestInventory()
+        : (loaded?.inventory ?? buildStarterInventory());
+      const equipment = world.isPlaytest()
+        ? buildPlaytestEquipment()
+        : (loaded?.equipment ?? emptyEquipment());
       world.add(ws, player, inventory, equipment);
       if (loaded?.hotbarSelection !== undefined) {
         world.handleSelectHotbar(player.characterId, loaded.hotbarSelection);
@@ -341,11 +355,26 @@ async function clearLastSeen(characterId: string): Promise<void> {
 // into N separate AttachmentInstance slots, each rolled fresh
 // (consistent with how new content drops/crafts behave).
 function migrateLegacyAttachmentSlots(inv: Inventory): Inventory {
-  const out: Inventory = [];
-  for (const slot of inv) {
-    // Old shape leaks through as { kind: 'attachment'; defId; count }
-    // even though the type system says otherwise — defensive runtime
-    // sniffing is the only safe path here.
+  // Length-preserving migration: legacy attachment stacks
+  // ({kind:'attachment', defId, count:N}) need to expand into N
+  // separate AttachmentInstance slots, but we can't grow the
+  // inventory beyond its original size (doing so blows past the
+  // slotIndex Zod cap and leaves the bag oversized after the
+  // cargo-grid resize loop). Strategy:
+  //   1. Walk every slot. Mutate weapon piece/mod refs in place
+  //      (no length impact).
+  //   2. For a legacy attachment stack of N: replace the original
+  //      slot with the first new instance, queue the remaining
+  //      N-1 instances for placement.
+  //   3. After the walk, place queued instances into existing
+  //      empty slots in order. Drop overflow rather than grow.
+  // Pre-Sprint-C saves are the only callers that ever produce a
+  // queue; everyone else makes the function a no-op.
+  const out: Inventory = inv.map((s) => ({ ...s }));
+  const queue: import('@dumrunner/shared').AttachmentInstance[] = [];
+
+  for (let i = 0; i < out.length; i++) {
+    const slot = out[i];
     const s = slot as unknown as {
       kind?: string;
       defId?: string;
@@ -355,16 +384,17 @@ function migrateLegacyAttachmentSlots(inv: Inventory): Inventory {
     };
     if (s.kind === 'attachment' && s.instance === undefined && s.defId) {
       const count = Math.max(1, Number(s.count ?? 1));
-      for (let i = 0; i < count; i++) {
-        out.push({
-          kind: 'attachment',
-          instance: rollAttachmentInstance(s.defId, 'Mk1'),
-        });
+      const defId = s.defId;
+      out[i] = {
+        kind: 'attachment',
+        instance: rollAttachmentInstance(defId, 'Mk1'),
+      };
+      for (let j = 1; j < count; j++) {
+        queue.push(rollAttachmentInstance(defId, 'Mk1'));
       }
       continue;
     }
     if (s.kind === 'weapon' && s.weapon) {
-      // Pieces: legacy { id } → AttachmentInstance.
       const pieces = s.weapon.pieces ?? {};
       for (const k of Object.keys(pieces)) {
         const v = pieces[k] as unknown;
@@ -378,7 +408,6 @@ function migrateLegacyAttachmentSlots(inv: Inventory): Inventory {
           }
         }
       }
-      // Mods: legacy [{ id }] → AttachmentInstance[].
       if (Array.isArray(s.weapon.mods)) {
         s.weapon.mods = s.weapon.mods.map((m) => {
           const obj = m as { id?: string; defId?: string };
@@ -387,11 +416,22 @@ function migrateLegacyAttachmentSlots(inv: Inventory): Inventory {
         });
       }
     }
-    out.push(slot);
   }
-  // Fill any leftover length back out with empties (caller expects
-  // a fixed-size Inventory).
-  while (out.length < inv.length) out.push({ kind: 'empty' });
+
+  // Place queued instances into existing empty slots; drop
+  // overflow. Logging the loss isn't critical for the alpha —
+  // this path only fires for ancient saves anyway.
+  for (const inst of queue) {
+    let placed = false;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].kind === 'empty') {
+        out[i] = { kind: 'attachment', instance: inst };
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) break;
+  }
   return out;
 }
 

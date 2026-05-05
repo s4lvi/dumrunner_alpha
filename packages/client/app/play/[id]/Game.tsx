@@ -29,10 +29,14 @@ import {
   MATERIALS,
   TIER_PIECE_SLOTS,
   TIER_MOD_SLOTS,
+  TIER_UP_COSTS,
+  UPGRADES,
+  type AttachmentInstance,
   type WeaponPieceKind,
   partPrimaryStat,
   PLAYER_BASE_STATS,
   PROTOCOL_VERSION,
+  SUIT_ATTACHMENT_SLOTS,
   SUIT_SLOT_KINDS,
   type BuildingKind,
   type BuildingState,
@@ -48,6 +52,17 @@ import {
 } from '@dumrunner/shared';
 import { runGame, type GameHandle } from '@/lib/game/pixi';
 import { runFpsGame } from '@/lib/game/fps';
+import { runIsoGame } from '@/lib/game/iso';
+import { paintMinimap } from '@/lib/game/minimap';
+import { getOverride } from '@/lib/textureOverrides';
+
+type RendererMode = 'topdown' | 'iso' | 'fps';
+
+const RENDERER_CYCLE: RendererMode[] = ['topdown', 'iso', 'fps'];
+
+function runnerFor(mode: RendererMode): typeof runGame {
+  return mode === 'fps' ? runFpsGame : mode === 'iso' ? runIsoGame : runGame;
+}
 import { audio } from '@/lib/audio';
 import { loadAssetIndex, type AssetIndex } from '@/lib/assetGen';
 import { rewriteGameWsUrl } from '@/lib/discord/sdk';
@@ -196,6 +211,17 @@ export function Game({ serverId }: { serverId: string }) {
   // when multiple are placed near each other.
   const [nearestChestId, setNearestChestId] = useState<string | null>(null);
   const nearestChestIdRef = useRef<string | null>(null);
+  // Highest weapon-bench tier the player is currently in range of.
+  // 0 if no bench in range. Drives the assembly UI's tier-cap.
+  // Mirrors what the server uses in nearestWeaponBenchTier so the
+  // client UI agrees with the authoritative gate.
+  const [weaponBenchTier, setWeaponBenchTier] = useState<number>(0);
+  // All weapon benches in range, with their tiers. Used by the
+  // upgrade-apply right-click flow to find a bench whose tier
+  // matches the upgrade's targetTier - 1 (mk2 upgrade → Mk1 bench).
+  const [weaponBenches, setWeaponBenches] = useState<
+    { id: string; tier: number }[]
+  >([]);
   // Open chest modal target. Null when not viewing any chest.
   const [chestModalId, setChestModalId] = useState<string | null>(null);
   const chestModalIdRef = useRef<string | null>(null);
@@ -229,18 +255,40 @@ export function Game({ serverId }: { serverId: string }) {
     stamina: 100,
     maxStamina: 100,
   }));
+  // Drives the screen-space HudOverlay's "YOU ARE DOWN" banner.
+  // Toggled from player_died / player_respawned messages — owned
+  // here in React so every renderer sees the same overlay logic.
+  const [selfAlive, setSelfAlive] = useState<boolean>(true);
   const selfIdRef = useRef<string | null>(null);
   // Audio-bookkeeping refs. Compare the previous frame's snapshot
   // against the next message's payload to fire pickup/damage SFX
   // exactly once per real change.
   const prevInventoryRef = useRef<Inventory | null>(null);
   const prevSelfHpRef = useRef<number>(100);
+  // Shield is tracked alongside HP so player-hit fires for
+  // shield-only absorptions (the player has plating equipped, the
+  // shot lands on shield, HP doesn't drop). Shield only decreases
+  // via damage absorption — regen only goes up — so a drop is an
+  // unambiguous "took damage" cue.
+  const prevSelfShieldRef = useRef<number>(0);
   const lastFootstepAtRef = useRef<number>(0);
-  // Renderer pick. Initialised from URL param `?fps=1` for backwards-compat;
-  // the V hotkey toggles it at runtime.
-  const [useFps, setUseFps] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return new URLSearchParams(window.location.search).get('fps') === '1';
+  // Per-shooter SFX throttle. A 6-pellet shotgun blast spawns 6
+  // projectile_spawned events back-to-back; without throttling the
+  // client plays player-shoot 6 times in ~1ms and the result is a
+  // brick-saw click. Cap to one play per ~60ms per ownerCharacterId.
+  const lastShootSfxAtRef = useRef<Map<string, number>>(new Map());
+  // Tracks which cycle we've already played the "extract now" alert
+  // for. Reset on cycle bump (horde_ended) so the next perihelion
+  // fires its alert again. -1 means we haven't alerted this run.
+  const perihelionAlertCycleRef = useRef<number>(-1);
+  // Renderer pick. Initialised from URL params `?fps=1` / `?iso=1` for
+  // backwards-compat; the V hotkey cycles topdown → iso → fps at runtime.
+  const [rendererMode, setRendererMode] = useState<RendererMode>(() => {
+    if (typeof window === 'undefined') return 'topdown';
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get('fps') === '1') return 'fps';
+    if (sp.get('iso') === '1') return 'iso';
+    return 'topdown';
   });
   // Captured WS-callback bundle so the toggle handler can re-instantiate
   // the renderer without losing access to session.ws.
@@ -257,6 +305,8 @@ export function Game({ serverId }: { serverId: string }) {
       nearest: BuildingKind | null;
       nearestDoorId: string | null;
       nearestChestId: string | null;
+      weaponBenchTier: number;
+      weaponBenches: { id: string; tier: number }[];
     }) => void;
   } | null>(null);
   // Holds the live ws so number-key handlers can send select_hotbar without
@@ -438,6 +488,7 @@ export function Game({ serverId }: { serverId: string }) {
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
         selfIdRef.current = msg.self.characterId;
         prevSelfHpRef.current = msg.self.hp;
+        prevSelfShieldRef.current = msg.self.shield;
         prevInventoryRef.current = msg.inventory;
         setSelfStats({
           hp: msg.self.hp,
@@ -485,6 +536,8 @@ export function Game({ serverId }: { serverId: string }) {
             nearest,
             nearestDoorId,
             nearestChestId,
+            weaponBenchTier,
+            weaponBenches,
           }) => {
             const set = new Set(all);
             nearWorkstationsRef.current = set;
@@ -495,6 +548,8 @@ export function Game({ serverId }: { serverId: string }) {
             setNearestDoorId(nearestDoorId);
             nearestChestIdRef.current = nearestChestId;
             setNearestChestId(nearestChestId);
+            setWeaponBenchTier(weaponBenchTier);
+            setWeaponBenches(weaponBenches);
           },
         };
         requestAnimationFrame(() => {
@@ -502,7 +557,7 @@ export function Game({ serverId }: { serverId: string }) {
           const host = canvasHostRef.current;
           if (!host || gameRef.current) return;
           const cb = rendererCallbacksRef.current!;
-          const runner = useFps ? runFpsGame : runGame;
+          const runner = runnerFor(rendererMode);
           gameRef.current = runner(host, {
             self: msg.self,
             others: msg.players.filter((p) => p.characterId !== msg.self.characterId),
@@ -512,8 +567,7 @@ export function Game({ serverId }: { serverId: string }) {
             corpses: msg.corpses,
             buildings: msg.buildings,
             layout: msg.layout,
-            getEnemyTexture: (kind) =>
-              assetIndexRef.current?.getEnemyTexture(kind) ?? null,
+            getEnemyTexture: (kind) => getOverride('enemy', kind),
             ...cb,
           });
         });
@@ -555,14 +609,23 @@ export function Game({ serverId }: { serverId: string }) {
             shield: msg.shield,
             maxShield: msg.maxShield,
           }));
-          // Real damage = hp dropped from the previous frame. Avoids
-          // firing on shield regen broadcasts that re-emit max stats.
-          if (msg.hp < prevSelfHpRef.current) audio.playSfx('player-hit');
+          // Real damage = hp OR shield dropped from the previous
+          // frame. Catches shield-only absorptions where HP stays at
+          // max (the playtest equipment auto-equips Mk2 plating, so
+          // most early-game hits land on shield). Shield only ever
+          // decreases via damage absorption (regen only goes up), so
+          // a drop is unambiguously a hit.
+          if (
+            msg.hp < prevSelfHpRef.current ||
+            msg.shield < prevSelfShieldRef.current
+          ) {
+            audio.playSfx('player-hit');
+          }
           prevSelfHpRef.current = msg.hp;
+          prevSelfShieldRef.current = msg.shield;
         }
         break;
       case 'player_stamina':
-        gameRef.current?.setSelfStamina(msg.stamina, msg.maxStamina);
         setSelfStats((s) => ({
           ...s,
           stamina: msg.stamina,
@@ -571,6 +634,10 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'player_died':
         gameRef.current?.setPlayerDead(msg.characterId);
+        if (msg.characterId === selfIdRef.current) {
+          setSelfAlive(false);
+          setSelfStats((s) => ({ ...s, hp: 0 }));
+        }
         break;
       case 'player_respawned':
         gameRef.current?.respawnPlayer(
@@ -585,6 +652,7 @@ export function Game({ serverId }: { serverId: string }) {
           msg.maxShield
         );
         if (msg.characterId === selfIdRef.current) {
+          setSelfAlive(true);
           setSelfStats({
             hp: msg.hp,
             maxHp: msg.maxHp,
@@ -594,6 +662,7 @@ export function Game({ serverId }: { serverId: string }) {
             maxStamina: msg.maxStamina,
           });
           prevSelfHpRef.current = msg.hp;
+          prevSelfShieldRef.current = msg.shield;
         }
         break;
       case 'weapon_swung':
@@ -672,20 +741,29 @@ export function Game({ serverId }: { serverId: string }) {
         gameRef.current?.removeEnemy(msg.id);
         audio.playSfx('robot-destroy');
         break;
-      case 'projectile_spawned':
+      case 'projectile_spawned': {
         // Self-fired projectiles play the pistol report. Turret-fired
         // projectiles are also ownerKind 'player' but their owner is a
         // building id, not the character — those are silent for now.
-        if (
+        // Multi-pellet weapons (shotgun, future spread mods) emit one
+        // spawn per pellet; throttle by ownerCharacterId so the report
+        // is one click, not six.
+        const ownerId = msg.projectile.ownerCharacterId;
+        const isSelfPlayer =
           msg.projectile.ownerKind === 'player' &&
-          msg.projectile.ownerCharacterId === selfIdRef.current
-        ) {
-          audio.playSfx('player-shoot');
-        } else if (msg.projectile.ownerKind === 'enemy') {
-          audio.playSfx('enemy-shoot');
+          ownerId === selfIdRef.current;
+        const isEnemy = msg.projectile.ownerKind === 'enemy';
+        if (isSelfPlayer || isEnemy) {
+          const now = performance.now();
+          const last = lastShootSfxAtRef.current.get(ownerId) ?? 0;
+          if (now - last >= 60) {
+            lastShootSfxAtRef.current.set(ownerId, now);
+            audio.playSfx(isSelfPlayer ? 'player-shoot' : 'enemy-shoot');
+          }
         }
         gameRef.current?.spawnProjectile(msg.projectile);
         break;
+      }
       case 'projectile_despawned':
         gameRef.current?.despawnProjectile(msg.id);
         break;
@@ -877,6 +955,26 @@ export function Game({ serverId }: { serverId: string }) {
     };
   }, []);
 
+  // Perihelion-imminent alert. When the player is in a dungeon and
+  // the countdown crosses the 30s threshold, fire a one-shot audio
+  // cue to draw their attention to the warning banner. Per-cycle
+  // gated so the alert only sounds once per perihelion (not every
+  // tick under 30s). Resets after the horde ends so the next cycle
+  // can alert again.
+  useEffect(() => {
+    if (!worldClock) return;
+    if (worldClock.hordeActive) {
+      perihelionAlertCycleRef.current = worldClock.cycle;
+      return;
+    }
+    const inDungeon = sceneId.startsWith('dungeon:');
+    if (!inDungeon) return;
+    if (worldClock.secondsToPerihelion > 30) return;
+    if (perihelionAlertCycleRef.current === worldClock.cycle) return;
+    perihelionAlertCycleRef.current = worldClock.cycle;
+    audio.playSfx('robot-detect');
+  }, [worldClock, sceneId]);
+
   useEffect(() => {
     showTradeModalRef.current = showTradeModal;
     if (showTradeModal) audio.playSfx('ui-back');
@@ -962,12 +1060,12 @@ export function Game({ serverId }: { serverId: string }) {
     if (document.pointerLockElement) document.exitPointerLock?.();
   }, [showInventory, showTradeModal, stationModalKind]);
 
-  // Hot-swap renderers when `useFps` flips. We snapshot scene state from
-  // the outgoing renderer, destroy it, then instantiate the other one with
-  // that state. Skips the very first run because the welcome handler is
-  // responsible for the initial mount.
+  // Hot-swap renderers when `rendererMode` changes. Snapshot scene state
+  // from the outgoing renderer, destroy it, then instantiate the new one
+  // with that state. Skips the very first run because the welcome handler
+  // is responsible for the initial mount.
   //
-  // CRITICAL: depend ONLY on useFps. Adding inventory / hotbarSelection /
+  // CRITICAL: depend ONLY on rendererMode. Adding inventory / hotbarSelection /
   // sceneId here looks tempting (we read them inside) but it makes the
   // effect re-run on every inventory mutation — which destroys and rebuilds
   // the renderer mid-firefight, exits pointer lock, and dims the screen.
@@ -986,7 +1084,7 @@ export function Game({ serverId }: { serverId: string }) {
     const snapshot = current.currentSceneState();
     current.destroy();
     gameRef.current = null;
-    const runner = useFps ? runFpsGame : runGame;
+    const runner = runnerFor(rendererMode);
     gameRef.current = runner(host, {
       self: snapshot.self,
       others: snapshot.players,
@@ -1015,7 +1113,7 @@ export function Game({ serverId }: { serverId: string }) {
       Math.max(0, Math.floor(computeSuitStats(equipment).buildRadiusBonus))
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useFps]);
+  }, [rendererMode]);
 
   // Build mode follows the selected hotbar slot: a placeable WITH stock + the
   // surface scene turns it on, anything else turns it off.
@@ -1062,7 +1160,12 @@ export function Game({ serverId }: { serverId: string }) {
         e.preventDefault();
         // Tab closes any modal first; only toggles inventory when nothing
         // else is open. Avoids the "Tab opens inventory ON TOP of trade
-        // modal" stack.
+        // modal" stack and matches Esc behaviour for the chest modal.
+        if (chestModalIdRef.current !== null) {
+          chestModalIdRef.current = null;
+          setChestModalId(null);
+          return;
+        }
         if (showTradeModalRef.current) {
           setShowTradeModal(false);
           return;
@@ -1107,7 +1210,9 @@ export function Game({ serverId }: { serverId: string }) {
           nearestKind === 'workbench' ||
           nearestKind === 'forge' ||
           nearestKind === 'electronics_bench' ||
-          nearestKind === 'weapon_bench'
+          nearestKind === 'weapon_bench' ||
+          nearestKind === 'precision_mill' ||
+          nearestKind === 'suit_bench'
         ) {
           setShowTradeModal(false);
           setStationModalKind(nearestKind);
@@ -1142,11 +1247,15 @@ export function Game({ serverId }: { serverId: string }) {
         setShowMinimap((v) => !v);
         return;
       }
-      // V toggles between top-down and FPS renderers. Swap is hot — we
-      // snapshot scene state from the old renderer and seed the new one.
+      // V cycles renderers: top-down → iso → FPS → top-down. Swap is
+      // hot — we snapshot scene state from the old renderer and seed
+      // the new one.
       if (e.key === 'v' || e.key === 'V') {
         e.preventDefault();
-        setUseFps((v) => !v);
+        setRendererMode((m) => {
+          const i = RENDERER_CYCLE.indexOf(m);
+          return RENDERER_CYCLE[(i + 1) % RENDERER_CYCLE.length];
+        });
         return;
       }
       // F triggers a consumable from the currently selected hotbar slot
@@ -1221,9 +1330,16 @@ export function Game({ serverId }: { serverId: string }) {
           onContextMenu={(slot, x, y) => setSlotMenu({ slot, x, y })}
         />
         {worldClock && <WorldClockHud clock={worldClock} />}
+        {worldClock && (
+          <PerihelionWarning
+            clock={worldClock}
+            inDungeon={sceneId.startsWith('dungeon:')}
+          />
+        )}
         <PowerHud state={powerState} />
         <ActiveEffectsHud effects={activeEffects} />
         {showMinimap && <Minimap gameRef={gameRef} />}
+        <HudOverlay stats={selfStats} alive={selfAlive} />
         <AmmoHud
           inventory={inventory}
           hotbarSelection={hotbarSelection}
@@ -1242,7 +1358,10 @@ export function Game({ serverId }: { serverId: string }) {
         {!nearInteractable &&
           (nearestStation === 'workbench' ||
             nearestStation === 'forge' ||
-            nearestStation === 'electronics_bench') && (
+            nearestStation === 'electronics_bench' ||
+            nearestStation === 'weapon_bench' ||
+            nearestStation === 'precision_mill' ||
+            nearestStation === 'suit_bench') && (
             <InteractPrompt
               label={`Use — ${STATION_LABEL[nearestStation]}`}
             />
@@ -1259,7 +1378,7 @@ export function Game({ serverId }: { serverId: string }) {
             }
           />
         )}
-        <ControlsHint useFps={useFps} />
+        <ControlsHint mode={rendererMode} />
         {toast && <Toast message={toast.message} keyId={toast.key} />}
         {linkSeveredAt !== null && <LinkSeveredOverlay />}
 
@@ -1284,21 +1403,6 @@ export function Game({ serverId }: { serverId: string }) {
                 toInventoryIdx,
               })
             }
-            nearElectronicsBench={nearWorkstations.has('electronics_bench')}
-            onAttachSuitAffix={(suitSlot, defId) =>
-              sendOnLiveWs({
-                type: 'attach_suit_affix',
-                suitSlot,
-                attachmentDefId: defId,
-              })
-            }
-            onDetachSuitAffix={(suitSlot, idx) =>
-              sendOnLiveWs({
-                type: 'detach_suit_affix',
-                suitSlot,
-                attachmentIndex: idx,
-              })
-            }
             onCraft={(recipeId) =>
               sendOnLiveWs({ type: 'craft_request', recipeId })
             }
@@ -1320,12 +1424,42 @@ export function Game({ serverId }: { serverId: string }) {
           />
         )}
 
-        {stationModalKind && (
+        {stationModalKind === 'precision_mill' && (
+          <PrecisionMillModal
+            inventory={inventory}
+            inRange={nearWorkstations.has('precision_mill')}
+            onClose={() => setStationModalKind(null)}
+            onTierUpWeapon={(idx) =>
+              sendOnLiveWs({ type: 'tier_up_weapon', weaponInventoryIdx: idx })
+            }
+          />
+        )}
+
+        {stationModalKind === 'suit_bench' && (
+          <SuitAssemblyModal
+            inventory={inventory}
+            equipment={equipment}
+            inRange={nearWorkstations.has('suit_bench')}
+            onClose={() => setStationModalKind(null)}
+            onAssemble={(suitSlot, attachments) =>
+              sendOnLiveWs({
+                type: 'assemble_suit_part',
+                suitSlot,
+                attachments,
+              })
+            }
+          />
+        )}
+
+        {stationModalKind &&
+          stationModalKind !== 'precision_mill' &&
+          stationModalKind !== 'suit_bench' && (
           <WorkstationModal
             kind={stationModalKind}
             inventory={inventory}
             knownBlueprints={knownBlueprints}
             nearWorkstations={nearWorkstations}
+            weaponBenchTier={weaponBenchTier}
             craftJobs={craftJobs}
             buildings={buildings}
             onClose={() => setStationModalKind(null)}
@@ -1342,37 +1476,13 @@ export function Game({ serverId }: { serverId: string }) {
                 sendOnLiveWs({ type: 'pickup_station_outputs', kind });
               }
             }}
-            onAttachWeaponAffix={(idx, pieceKind, defId) =>
+            onAssembleWeapon={(idx, pieces, mods) =>
               sendOnLiveWs({
-                type: 'attach_weapon_affix',
+                type: 'assemble_weapon',
                 weaponInventoryIdx: idx,
-                pieceKind,
-                attachmentDefId: defId,
+                pieces,
+                mods,
               })
-            }
-            onDetachWeaponAffix={(idx, pieceKind) =>
-              sendOnLiveWs({
-                type: 'detach_weapon_affix',
-                weaponInventoryIdx: idx,
-                pieceKind,
-              })
-            }
-            onAttachWeaponMod={(idx, defId) =>
-              sendOnLiveWs({
-                type: 'attach_weapon_mod',
-                weaponInventoryIdx: idx,
-                attachmentDefId: defId,
-              })
-            }
-            onDetachWeaponMod={(idx, modIndex) =>
-              sendOnLiveWs({
-                type: 'detach_weapon_mod',
-                weaponInventoryIdx: idx,
-                modIndex,
-              })
-            }
-            onTierUpWeapon={(idx) =>
-              sendOnLiveWs({ type: 'tier_up_weapon', weaponInventoryIdx: idx })
             }
           />
         )}
@@ -1409,13 +1519,41 @@ export function Game({ serverId }: { serverId: string }) {
             );
           })()}
 
-        {slotMenu && (
+        {slotMenu && (() => {
+          const slot = inventory[slotMenu.slot];
+          // Resolve the bench id to apply this upgrade to (if it's
+          // an upgrade item). The matching bench is the in-range
+          // weapon_bench whose current tier is targetTier - 1.
+          // If no matching bench is in range, the menu hides the
+          // Apply action.
+          let onApplyUpgrade: (() => void) | undefined;
+          if (slot && slot.kind === 'upgrade') {
+            const def = UPGRADES[slot.upgradeId];
+            if (def) {
+              const targetTier = def.targetTier;
+              const eligible = weaponBenches.find(
+                (b) => b.tier === targetTier - 1
+              );
+              if (eligible) {
+                onApplyUpgrade = () => {
+                  sendOnLiveWs({
+                    type: 'upgrade_workstation',
+                    buildingId: eligible.id,
+                    upgradeId: slot.upgradeId,
+                  });
+                  setSlotMenu(null);
+                };
+              }
+            }
+          }
+          return (
           <SlotContextMenu
             slot={inventory[slotMenu.slot]}
             x={slotMenu.x}
             y={slotMenu.y}
             nearbyPlayers={gameRef.current?.nearbyPlayers(96) ?? []}
             nearWorkbench={nearWorkstations.has('workbench')}
+            onApplyUpgrade={onApplyUpgrade}
             onSalvage={() => {
               sendOnLiveWs({ type: 'salvage_request', slot: slotMenu.slot });
               setSlotMenu(null);
@@ -1476,7 +1614,8 @@ export function Game({ serverId }: { serverId: string }) {
             }}
             onClose={() => setSlotMenu(null)}
           />
-        )}
+          );
+        })()}
 
         {(status.kind === 'idle' ||
           status.kind === 'joining' ||
@@ -1557,12 +1696,21 @@ function Overlay({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ControlsHint({ useFps }: { useFps: boolean }) {
+function ControlsHint({ mode }: { mode: RendererMode }) {
+  // Show what V will switch to next so the player knows what's coming.
+  const nextMode =
+    RENDERER_CYCLE[(RENDERER_CYCLE.indexOf(mode) + 1) % RENDERER_CYCLE.length];
+  const nextLabel =
+    nextMode === 'fps'
+      ? 'first-person'
+      : nextMode === 'iso'
+        ? 'isometric'
+        : 'top-down';
   return (
     <div className="absolute bottom-3 right-3 text-xs text-zinc-500 select-none pointer-events-none flex flex-col items-end gap-1">
       <div>
         <Kbd>V</Kbd>
-        <span className="ml-2">{useFps ? 'top-down' : 'first-person'}</span>
+        <span className="ml-2">{nextLabel}</span>
       </div>
       <div>
         <Kbd>Tab</Kbd>
@@ -1572,7 +1720,7 @@ function ControlsHint({ useFps }: { useFps: boolean }) {
         <Kbd>E</Kbd>
         <span className="ml-2">interact</span>
       </div>
-      {useFps ? (
+      {mode === 'fps' ? (
         <div>
           <Kbd>WASD</Kbd>
           <span className="ml-2">forward / strafe</span>
@@ -1726,10 +1874,161 @@ function Toast({ message }: { message: string; keyId: number }) {
 // authoritative list via 'player_effects'; client just displays.
 // Per-effect dedup happens server-side (matching id refreshes the
 // timer rather than stacking) so the chips never duplicate.
-// Corner minimap. Backed by GameHandle.paintMinimap which both
-// renderers (pixi top-down + fps) implement against their own
-// state. Repainted at 10 Hz — stays smooth without burning CPU
-// on a high-frequency repaint that the player would never notice.
+// Bottom-left HP / Shield / Stamina bars + centered "YOU ARE
+// DOWN" overlay. Renderer-agnostic — driven by selfStats /
+// selfAlive React state, which Game.tsx maintains from
+// player_damaged / player_stamina / player_died /
+// player_respawned messages. Each renderer (top-down, iso, fps)
+// gets the same HUD without duplicating Pixi-side bar code.
+function HudOverlay({
+  stats,
+  alive,
+}: {
+  stats: {
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    stamina: number;
+    maxStamina: number;
+  };
+  alive: boolean;
+}) {
+  const hpRatio = stats.maxHp > 0 ? Math.max(0, Math.min(1, stats.hp / stats.maxHp)) : 0;
+  const stamRatio =
+    stats.maxStamina > 0
+      ? Math.max(0, Math.min(1, stats.stamina / stats.maxStamina))
+      : 0;
+  const showShield = stats.maxShield > 0;
+  const shieldRatio = showShield
+    ? Math.max(0, Math.min(1, stats.shield / stats.maxShield))
+    : 0;
+  // Match the pixi colors:
+  //   HP fill: green > 40%, yellow 20–40%, red below
+  //   Stamina: amber-100 (#fde68a)
+  //   Shield: cyan-400 (#22d3ee)
+  const hpColor =
+    hpRatio > 0.4 ? '#22c55e' : hpRatio > 0.2 ? '#eab308' : '#ef4444';
+  return (
+    <>
+      <div
+        className="absolute bottom-4 left-4 pointer-events-none select-none z-40"
+        style={{ width: 220 }}
+      >
+        {showShield && (
+          <div className="relative mb-1">
+            <div
+              style={{
+                height: 8,
+                background: '#1f2937',
+                border: '1px solid #374151',
+                borderRadius: 3,
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  height: '100%',
+                  width: `${shieldRatio * 100}%`,
+                  background: '#22d3ee',
+                }}
+              />
+            </div>
+            <div
+              className="absolute inset-0 flex items-center justify-center"
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                color: '#cffafe',
+                textShadow: '0 0 2px #000, 0 0 2px #000',
+              }}
+            >
+              {Math.round(stats.shield)} / {Math.round(stats.maxShield)}
+            </div>
+          </div>
+        )}
+        <div className="relative">
+          <div
+            style={{
+              height: 16,
+              background: '#1f2937',
+              border: '1px solid #374151',
+              borderRadius: 4,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${hpRatio * 100}%`,
+                background: hpColor,
+              }}
+            />
+          </div>
+          <div
+            className="absolute inset-0 flex items-center justify-center"
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: '#ffffff',
+              textShadow: '0 0 2px #000, 0 0 2px #000',
+            }}
+          >
+            {Math.round(stats.hp)} / {Math.round(stats.maxHp)}
+          </div>
+        </div>
+        <div className="relative mt-1">
+          <div
+            style={{
+              height: 8,
+              background: '#1f2937',
+              border: '1px solid #374151',
+              borderRadius: 3,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${stamRatio * 100}%`,
+                background: '#fde68a',
+              }}
+            />
+          </div>
+          <div
+            className="absolute inset-0 flex items-center justify-center"
+            style={{
+              fontSize: 9,
+              fontWeight: 700,
+              color: '#fef3c7',
+              textShadow: '0 0 2px #000, 0 0 2px #000',
+            }}
+          >
+            {Math.round(stats.stamina)} / {Math.round(stats.maxStamina)}
+          </div>
+        </div>
+      </div>
+      {!alive && (
+        <div className="absolute inset-0 pointer-events-none select-none z-40 flex items-center justify-center">
+          <div
+            style={{
+              fontSize: 28,
+              fontFamily: 'system-ui, sans-serif',
+              fontWeight: 700,
+              color: '#ef4444',
+            }}
+          >
+            YOU ARE DOWN — respawning…
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Corner minimap. Renderer-agnostic: pulls a snapshot via
+// GameHandle.getMinimapSnapshot and paints with the shared
+// minimap painter (lib/game/minimap.ts). Repainted at 10 Hz.
 function Minimap({
   gameRef,
 }: {
@@ -1750,7 +2049,7 @@ function Minimap({
       // World radius shown around the player. 12 tiles ≈ 384px in
       // either direction is wide enough to see the surrounding base
       // without zooming out so far that detail vanishes.
-      g.paintMinimap(c, 384);
+      paintMinimap(c, 384, g.getMinimapSnapshot());
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -2055,6 +2354,51 @@ function WorldClockHud({
   );
 }
 
+// Perihelion countdown warning shown only to players currently in
+// a dungeon scene during the lead-up to the next horde. Two tiers
+// scaled by remaining seconds:
+//   60s → 31s : yellow "approaching" — soft visual nudge.
+//   30s →  0s : red, pulsing "EXTRACT NOW" — last-chance alarm.
+// Hides while the horde is active because the existing
+// LINK SEVERED full-screen overlay takes over at that point.
+// Surface players don't need this — they fight, they don't extract.
+function PerihelionWarning({
+  clock,
+  inDungeon,
+}: {
+  clock: { cycle: number; secondsToPerihelion: number; hordeActive: boolean };
+  inDungeon: boolean;
+}) {
+  if (!inDungeon || clock.hordeActive) return null;
+  if (clock.secondsToPerihelion > 60) return null;
+  const m = Math.floor(clock.secondsToPerihelion / 60);
+  const s = clock.secondsToPerihelion % 60;
+  const time = `${m}:${s.toString().padStart(2, '0')}`;
+  const urgent = clock.secondsToPerihelion <= 30;
+  const wrap = urgent
+    ? 'bg-red-950/90 border-red-500 text-red-100 animate-pulse shadow-[0_0_24px_rgba(239,68,68,0.6)]'
+    : 'bg-amber-950/85 border-amber-500/70 text-amber-100';
+  return (
+    <div className="absolute top-14 left-1/2 -translate-x-1/2 pointer-events-none select-none">
+      <div
+        className={`px-4 py-2 rounded-md border-2 text-sm font-semibold flex flex-col items-center gap-0.5 ${wrap}`}
+      >
+        {urgent ? (
+          <>
+            <span className="text-base">⚠ EXTRACT NOW</span>
+            <span className="text-xs opacity-90">link severs in {time}</span>
+          </>
+        ) : (
+          <>
+            <span>PERIHELION APPROACHING</span>
+            <span className="text-xs opacity-90">return to surface — {time}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Floating "Press E to …" prompt centred above the player. Anchored to the
 // canvas centre because the camera follows the player.
 function InteractPrompt({ label }: { label: string }) {
@@ -2137,9 +2481,6 @@ function InventoryPanel({
   onContextMenu,
   onEquip,
   onUnequip,
-  nearElectronicsBench,
-  onAttachSuitAffix,
-  onDetachSuitAffix,
   onCraft,
 }: {
   inventory: Inventory;
@@ -2160,16 +2501,30 @@ function InventoryPanel({
   onContextMenu: (slot: number, x: number, y: number) => void;
   onEquip: (fromInventoryIdx: number, suitSlot: SuitSlotKind) => void;
   onUnequip: (suitSlot: SuitSlotKind, toInventoryIdx?: number) => void;
-  nearElectronicsBench: boolean;
-  onAttachSuitAffix: (suitSlot: SuitSlotKind, defId: string) => void;
-  onDetachSuitAffix: (suitSlot: SuitSlotKind, idx: number) => void;
   onCraft: (recipeId: string) => void;
 }) {
   const hotbar = inventory.slice(0, HOTBAR_SIZE);
   const bag = inventory.slice(HOTBAR_SIZE);
+  // Click-to-inspect target. null = no inspector visible (default
+  // grid view). Cleared automatically when the targeted slot becomes
+  // empty (e.g. after a craft/swap shuffles the bag), so the panel
+  // doesn't render stale stats.
+  const [inspectedIdx, setInspectedIdx] = useState<number | null>(null);
+  useEffect(() => {
+    if (inspectedIdx === null) return;
+    if (inspectedIdx >= inventory.length) {
+      setInspectedIdx(null);
+      return;
+    }
+    if (inventory[inspectedIdx]?.kind === 'empty') {
+      setInspectedIdx(null);
+    }
+  }, [inventory, inspectedIdx]);
+  const inspectedSlot =
+    inspectedIdx !== null ? inventory[inspectedIdx] : null;
 
   return (
-    <Modal onClose={onClose} width="fit-content">
+    <Modal onClose={onClose} width="min(960px, 96vw)">
       <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50 gap-6">
         <h2 className="font-semibold text-base">Inventory</h2>
         <div className="flex items-center gap-2">
@@ -2188,7 +2543,7 @@ function InventoryPanel({
           </button>
         </div>
       </div>
-      <div className="p-3 flex gap-4">
+      <div className="p-3 flex flex-col md:flex-row gap-4 max-h-[calc(100vh-120px)] overflow-y-auto">
         <div className="flex flex-col gap-3">
           <CharacterPanel
             equipment={equipment}
@@ -2196,20 +2551,13 @@ function InventoryPanel({
             onEquip={onEquip}
             onUnequip={onUnequip}
           />
-          <SuitAffixPanel
-            equipment={equipment}
-            inventory={inventory}
-            nearElectronicsBench={nearElectronicsBench}
-            onAttach={onAttachSuitAffix}
-            onDetach={onDetachSuitAffix}
-          />
         </div>
-        <div className="space-y-3">
+        <div className="space-y-3 flex-1 min-w-0">
           <div>
             <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
               Bag
             </div>
-            <div className="grid grid-cols-9 gap-1">
+            <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-9 gap-1">
               {bag.map((s, i) => {
                 const idx = HOTBAR_SIZE + i;
                 return (
@@ -2221,6 +2569,8 @@ function InventoryPanel({
                     onSwap={onSwap}
                     onContextMenu={onContextMenu}
                     onArmorDrop={(suitSlot) => onUnequip(suitSlot, idx)}
+                    onInspect={setInspectedIdx}
+                    inspecting={idx === inspectedIdx}
                   />
                 );
               })}
@@ -2230,7 +2580,7 @@ function InventoryPanel({
             <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
               Hotbar
             </div>
-            <div className="grid grid-cols-9 gap-1">
+            <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-9 gap-1">
               {hotbar.map((s, i) => (
                 <SlotCell
                   key={`h${i}`}
@@ -2242,13 +2592,21 @@ function InventoryPanel({
                   onSwap={onSwap}
                   onContextMenu={onContextMenu}
                   onArmorDrop={(suitSlot) => onUnequip(suitSlot, i)}
+                  onInspect={setInspectedIdx}
+                  inspecting={i === inspectedIdx}
                 />
               ))}
             </div>
           </div>
           <div className="text-[10px] text-zinc-500 leading-snug">
-            Drag to move • Right-click to discard
+            Drag to move • Click to inspect • Right-click to discard
           </div>
+          {inspectedSlot && inspectedSlot.kind !== 'empty' && (
+            <InspectPanel
+              slot={inspectedSlot}
+              onClose={() => setInspectedIdx(null)}
+            />
+          )}
           <CraftPanel
             inventory={inventory}
             knownBlueprints={knownBlueprints}
@@ -2258,6 +2616,235 @@ function InventoryPanel({
       </div>
     </Modal>
   );
+}
+
+// Click-to-inspect details panel. Shows the same content the
+// native title= tooltip would, but rendered as JSX so it appears
+// instantly (the OS tooltip's ~1s hover delay is the slow path
+// the user is escaping). Lives inside InventoryPanel just below
+// the bag/hotbar grids so the player can click another slot
+// without first dismissing the inspector.
+function InspectPanel({
+  slot,
+  onClose,
+}: {
+  slot: InventorySlot;
+  onClose: () => void;
+}) {
+  const header = (title: string, color?: string) => (
+    <div className="flex items-center justify-between mb-1.5">
+      <div className="font-semibold text-sm" style={color ? { color } : undefined}>
+        {title}
+      </div>
+      <button
+        onClick={onClose}
+        className="text-[11px] text-zinc-500 hover:text-zinc-200"
+        aria-label="Close inspector"
+      >
+        ✕
+      </button>
+    </div>
+  );
+  return (
+    <div className="rounded border border-amber-500/30 bg-[color:var(--bg)]/50 p-2 text-[11px] leading-snug">
+      {renderInspectBody(slot, header)}
+    </div>
+  );
+}
+
+function renderInspectBody(
+  slot: InventorySlot,
+  header: (title: string, color?: string) => React.ReactNode,
+): React.ReactNode {
+  if (slot.kind === 'weapon') {
+    const weapon = slot.weapon;
+    const stats = effectiveWeaponStats(weapon);
+    const fullName = weaponDisplayName(weapon);
+    const tierColor = TIER_HEX[`Mk${weapon.tier}` as keyof typeof TIER_HEX];
+    const piecesAttached: string[] = [];
+    for (const [piece, attachment] of Object.entries(weapon.pieces)) {
+      if (!attachment) continue;
+      piecesAttached.push(`${piece}: ${attachmentDisplayName(attachment)}`);
+    }
+    if (!stats) {
+      // Melee — no ranged stat sheet; render the bare name.
+      return (
+        <div>
+          {header(fullName, tierColor)}
+          <div className="text-zinc-400">Melee weapon. Click to swing.</div>
+        </div>
+      );
+    }
+    const inaccDeg = (stats.inaccuracyHalfRad * 180) / Math.PI;
+    const mag = weapon.magazineRemaining ?? stats.magazineSize;
+    return (
+      <div>
+        {header(fullName, tierColor)}
+        <StatRow label="Damage" value={stats.damage.toFixed(1)} bonus={null} />
+        {stats.pelletCount > 1 && (
+          <StatRow
+            label="Burst"
+            value={`${stats.pelletCount} pellets · ${(
+              stats.damage * stats.pelletCount
+            ).toFixed(0)}`}
+          />
+        )}
+        <StatRow label="Fire rate" value={`${stats.shotsPerSecond.toFixed(2)}/s`} />
+        <StatRow
+          label="Accuracy"
+          value={`${(stats.accuracy * 100).toFixed(0)}% (±${inaccDeg.toFixed(1)}°)`}
+        />
+        <StatRow label="Magazine" value={`${mag} / ${stats.magazineSize}`} />
+        <StatRow label="Reload" value={`${(stats.reloadMs / 1000).toFixed(2)}s`} />
+        <StatRow label="Ammo" value={stats.ammoKind.replace(/_/g, ' ')} bonus={null} />
+        {piecesAttached.length > 0 && (
+          <div className="mt-1.5">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+              Affixes
+            </div>
+            {piecesAttached.map((p, i) => (
+              <div key={i} className="text-emerald-300/90">{p}</div>
+            ))}
+          </div>
+        )}
+        {weapon.mods.length > 0 && (
+          <div className="mt-1.5">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+              Mods
+            </div>
+            {weapon.mods.map((m, i) => (
+              <div key={i} className="text-sky-300/90">
+                {attachmentDisplayName(m)}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (slot.kind === 'part') {
+    const part = slot.part;
+    const tierColor = TIER_HEX[part.tier];
+    const primary = partPrimaryStat(part);
+    return (
+      <div>
+        {header(
+          `${partDisplayName(part)}  (${SLOT_LABELS[part.slot] ?? part.slot})`,
+          tierColor,
+        )}
+        {primary.hpBonus ? (
+          <StatRow label="Max HP" value={`+${Math.round(primary.hpBonus)}`} />
+        ) : null}
+        {primary.shieldBonus ? (
+          <StatRow
+            label="Max shield"
+            value={`+${Math.round(primary.shieldBonus)}`}
+          />
+        ) : null}
+        {primary.staminaMaxBonus ? (
+          <StatRow
+            label="Max stamina"
+            value={`+${Math.round(primary.staminaMaxBonus)}`}
+          />
+        ) : null}
+        {primary.staminaRegenBonus ? (
+          <StatRow
+            label="Stamina regen"
+            value={`+${primary.staminaRegenBonus.toFixed(1)}/s`}
+          />
+        ) : null}
+        {primary.moveSpeedMult ? (
+          <StatRow
+            label="Move speed"
+            value={`+${Math.round(primary.moveSpeedMult * 100)}%`}
+          />
+        ) : null}
+        {part.affixes && part.affixes.length > 0 && (
+          <div className="mt-1.5">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+              Affixes
+            </div>
+            {part.affixes.map((a, i) => {
+              const def = AFFIX_DEFS[a.id];
+              if (!def) return null;
+              return (
+                <div key={i} className="text-emerald-300/90">
+                  <span className="text-emerald-200">{def.name}</span>
+                  <span className="text-zinc-400"> — {def.label(a.value)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (slot.kind === 'attachment') {
+    const def = ATTACHMENT_DEFS[slot.instance.defId];
+    const name = attachmentDisplayName(slot.instance);
+    const rolls = formatAttachmentRolls(slot.instance);
+    return (
+      <div>
+        {header(name)}
+        {def?.description && (
+          <div className="text-zinc-400 mb-1">{def.description}</div>
+        )}
+        {rolls && <div className="text-emerald-300/90">{rolls}</div>}
+      </div>
+    );
+  }
+  if (slot.kind === 'consumable') {
+    const def = CONSUMABLES[slot.consumableId];
+    return (
+      <div>
+        {header(`${def?.name ?? slot.consumableId} ×${slot.count}`)}
+        {def?.description && (
+          <div className="text-zinc-400">{def.description}</div>
+        )}
+      </div>
+    );
+  }
+  if (slot.kind === 'upgrade') {
+    const def = UPGRADES[slot.upgradeId];
+    return (
+      <div>
+        {header(`${def?.name ?? slot.upgradeId} ×${slot.count}`)}
+        {def?.description && (
+          <div className="text-zinc-400">{def.description}</div>
+        )}
+      </div>
+    );
+  }
+  if (slot.kind === 'placeable') {
+    const label =
+      BUILDING_REGISTRY[slot.buildingKind]?.label ?? slot.buildingKind;
+    return (
+      <div>
+        {header(`${label} ×${slot.count}`)}
+        <div className="text-zinc-400">
+          Placeable structure. Equip and click on the surface to place.
+        </div>
+      </div>
+    );
+  }
+  if (slot.kind === 'material') {
+    const def = MATERIALS[slot.materialId];
+    return (
+      <div>
+        {header(`${def?.name ?? slot.materialId} ×${slot.count}`)}
+        <div className="text-zinc-400">Crafting component.</div>
+      </div>
+    );
+  }
+  if (slot.kind === 'ammo') {
+    return (
+      <div>
+        {header(`${slot.ammoId.replace(/_/g, ' ')} ×${slot.count}`)}
+        <div className="text-zinc-400">Reserve ammo. Reload draws from this stack.</div>
+      </div>
+    );
+  }
+  return null;
 }
 
 // Artifact uplink trade store. Lists every blueprint in the catalog;
@@ -2285,7 +2872,7 @@ function TradeModal({
   const heldKeys = countMaterial(inventory, 'key');
   return (
     <Modal onClose={onClose} width="min(640px, 92vw)">
-      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50 gap-4">
+      <div className="flex flex-wrap items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50 gap-2">
         <h2 className="font-semibold flex items-center gap-2 text-base">
           <ItemIcon kind="material" subkind="artifact" />
           <span>Artifact Uplink</span>
@@ -2501,38 +3088,34 @@ function WorkstationModal({
   inventory,
   knownBlueprints,
   nearWorkstations,
+  weaponBenchTier,
   craftJobs,
   buildings,
   onClose,
   onCraft,
   onPickup,
-  onAttachWeaponAffix,
-  onDetachWeaponAffix,
-  onAttachWeaponMod,
-  onDetachWeaponMod,
-  onTierUpWeapon,
+  onAssembleWeapon,
 }: {
   kind: BuildingKind;
   inventory: Inventory;
   knownBlueprints: Set<string>;
   nearWorkstations: Set<BuildingKind>;
+  // Highest weapon-bench tier in range. 0 if no bench in range.
+  // Drives the assembly UI's tier-cap; mirrors the server gate.
+  weaponBenchTier: number;
   craftJobs: CraftJobState[];
   buildings: Map<string, BuildingState>;
   onClose: () => void;
   onCraft: (recipeId: string) => void;
   onPickup: (kind: BuildingKind) => void;
-  onAttachWeaponAffix: (
+  // Atomic assembly commit. Pieces is keyed by piece kind; null = leave
+  // empty after assembly; undefined = leave the slot's existing
+  // attachment alone. Mods is the desired full mod array (instance ids).
+  onAssembleWeapon: (
     weaponIdx: number,
-    pieceKind: WeaponPieceKind,
-    defId: string
+    pieces: Partial<Record<WeaponPieceKind, string | null>>,
+    mods: string[]
   ) => void;
-  onDetachWeaponAffix: (
-    weaponIdx: number,
-    pieceKind: WeaponPieceKind
-  ) => void;
-  onAttachWeaponMod: (weaponIdx: number, defId: string) => void;
-  onDetachWeaponMod: (weaponIdx: number, modIndex: number) => void;
-  onTierUpWeapon: (weaponIdx: number) => void;
 }) {
   // Jobs running at THIS station kind so the queue stays scoped.
   // Sort active first (so the timer is visible at the top), then
@@ -2626,6 +3209,26 @@ function WorkstationModal({
   }, [recipes, selectedId]);
   const selected = recipes.find((r) => r.id === selectedId) ?? null;
 
+  // Weapon Bench gets a Craft / Assemble tab split — the assembly
+  // panel was previously stacked beneath the recipe list and
+  // scrolled offscreen with a long catalog. Tabs make both surfaces
+  // first-class. Default to Assemble if the player has any non-
+  // melee weapons, else Craft (so the player has something to do
+  // on first visit before they've crafted a weapon).
+  const isWeaponBench = kind === 'weapon_bench';
+  const hasNonMeleeWeapons = useMemo(() => {
+    if (!isWeaponBench) return false;
+    for (const s of inventory) {
+      if (s.kind === 'weapon' && WEAPON_FAMILY[s.weapon.weaponId] !== 'melee') {
+        return true;
+      }
+    }
+    return false;
+  }, [inventory, isWeaponBench]);
+  const [tab, setTab] = useState<'craft' | 'assemble'>(
+    hasNonMeleeWeapons ? 'assemble' : 'craft'
+  );
+
   return (
     <Modal onClose={onClose} width="min(720px, 94vw)">
       <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
@@ -2643,6 +3246,33 @@ function WorkstationModal({
       {!inRange && (
         <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
           Move closer to the {STATION_LABEL[kind] ?? kind} to craft.
+        </div>
+      )}
+
+      {isWeaponBench && (
+        <div className="flex border-b border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 px-5">
+          <button
+            onClick={() => setTab('craft')}
+            className={
+              'px-4 py-2 text-xs uppercase tracking-wider transition-colors ' +
+              (tab === 'craft'
+                ? 'text-zinc-100 border-b-2 border-[color:var(--accent)] -mb-px'
+                : 'text-zinc-500 hover:text-zinc-300')
+            }
+          >
+            Craft
+          </button>
+          <button
+            onClick={() => setTab('assemble')}
+            className={
+              'px-4 py-2 text-xs uppercase tracking-wider transition-colors ' +
+              (tab === 'assemble'
+                ? 'text-zinc-100 border-b-2 border-[color:var(--accent)] -mb-px'
+                : 'text-zinc-500 hover:text-zinc-300')
+            }
+          >
+            Assemble
+          </button>
         </div>
       )}
 
@@ -2693,13 +3323,14 @@ function WorkstationModal({
         </div>
       )}
 
-      {recipes.length === 0 ? (
+      {(!isWeaponBench || tab === 'craft') &&
+        (recipes.length === 0 ? (
         <div className="px-5 py-8 text-zinc-500 text-sm text-center">
           No blueprints available for this station yet. <br />
           Buy more at the Artifact Uplink.
         </div>
       ) : (
-        <div className="grid grid-cols-[200px_1fr] divide-x divide-[color:var(--panel-border)] min-h-[280px]">
+        <div className="grid grid-cols-1 sm:grid-cols-[200px_1fr] sm:divide-x divide-[color:var(--panel-border)] min-h-[280px]">
           {/* Left column — recipe list */}
           <ul className="overflow-y-auto py-1 max-h-[60vh]">
             {recipes.map((r) => {
@@ -2734,179 +3365,54 @@ function WorkstationModal({
             )}
           </div>
         </div>
-      )}
+      ))}
 
-      {kind === 'weapon_bench' && (
-        <WeaponBenchPanel
+      {isWeaponBench && tab === 'assemble' && (
+        <WeaponAssemblyPanel
           inventory={inventory}
           inRange={inRange}
-          onAttachWeaponAffix={onAttachWeaponAffix}
-          onDetachWeaponAffix={onDetachWeaponAffix}
-          onAttachWeaponMod={onAttachWeaponMod}
-          onDetachWeaponMod={onDetachWeaponMod}
-          onTierUpWeapon={onTierUpWeapon}
+          benchTier={weaponBenchTier}
+          onAssemble={onAssembleWeapon}
         />
       )}
     </Modal>
   );
 }
-
-// Suit-affix manager. Lives in the inventory panel under the equipment
-// grid. Lists each equipped part and any crafted suit affixes attached
-// to it; offers attach buttons for compatible affixes the player owns.
-// Attach/detach is gated on being near an Electronics Bench since that's
-// where the user 'engineers' the affix into the suit.
-function SuitAffixPanel({
-  equipment,
-  inventory,
-  nearElectronicsBench,
-  onAttach,
-  onDetach,
-}: {
-  equipment: Equipment;
-  inventory: Inventory;
-  nearElectronicsBench: boolean;
-  onAttach: (suitSlot: SuitSlotKind, defId: string) => void;
-  onDetach: (suitSlot: SuitSlotKind, idx: number) => void;
-}) {
-  // Each attachment instance counts as 1 of its class.
-  const owned = new Map<string, number>();
-  for (const s of inventory) {
-    if (s.kind === 'attachment') {
-      owned.set(s.instance.defId, (owned.get(s.instance.defId) ?? 0) + 1);
-    }
-  }
-  const ownedForSlot = (slot: SuitSlotKind): string[] => {
-    const out: string[] = [];
-    for (const [id, count] of owned) {
-      if (count <= 0) continue;
-      const def = ATTACHMENT_DEFS[id];
-      if (!def || def.kind !== 'suit_affix') continue;
-      if (def.slotKind !== slot) continue;
-      out.push(id);
-    }
-    return out;
-  };
-
-  // Don't render if nothing to manage AND not near a bench (avoids
-  // clutter for new players who don't have suit affixes yet).
-  let anyVisible = false;
-  for (const slot of SUIT_SLOT_KINDS) {
-    const part = equipment[slot];
-    if (!part) continue;
-    if ((part.appliedAttachments?.length ?? 0) > 0) anyVisible = true;
-    if (ownedForSlot(slot).length > 0) anyVisible = true;
-  }
-  if (!anyVisible && !nearElectronicsBench) return null;
-
-  return (
-    <div className="flex flex-col gap-2 p-2 rounded border border-[color:var(--panel-border)] bg-[color:var(--bg)]/30">
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-        Suit Affixes
-      </div>
-      {!nearElectronicsBench && (
-        <div className="text-[10px] text-amber-400/80">
-          Visit an Electronics Bench to attach or remove.
-        </div>
-      )}
-      {SUIT_SLOT_KINDS.map((slot) => {
-        const part = equipment[slot];
-        const candidates = ownedForSlot(slot);
-        const applied = part?.appliedAttachments ?? [];
-        if (!part) return null;
-        if (applied.length === 0 && candidates.length === 0) return null;
-        return (
-          <div key={slot} className="flex flex-col gap-1 text-xs">
-            <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-              {SLOT_LABELS[slot] ?? slot}
-            </div>
-            {applied.map((inst, i) => {
-              return (
-                <div
-                  key={`${inst.id}-${i}`}
-                  className="flex items-center justify-between px-2 py-1 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
-                >
-                  <span className="text-emerald-200">
-                    {attachmentDisplayName(inst)}
-                  </span>
-                  <button
-                    onClick={() => onDetach(slot, i)}
-                    disabled={!nearElectronicsBench}
-                    className="px-2 py-0.5 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)] disabled:opacity-40"
-                  >
-                    Detach
-                  </button>
-                </div>
-              );
-            })}
-            {candidates.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {candidates.map((id) => {
-                  const def = ATTACHMENT_DEFS[id];
-                  return (
-                    <button
-                      key={id}
-                      onClick={() => onAttach(slot, id)}
-                      disabled={!nearElectronicsBench}
-                      title={def?.description}
-                      className="px-2 py-0.5 rounded text-[10px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950 disabled:opacity-40"
-                    >
-                      + {attachmentDisplayName(id)}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// Inline manage-weapons panel that hangs off the bottom of the Weapon
-// Bench's WorkstationModal. Surfaces tier-up + per-piece affix attach
-// + mod attach without requiring a separate modal.
-function WeaponBenchPanel({
+// Weapon assembly UI. Player picks a weapon from inventory; the
+// slot grid shows piece slots (frame/grip/magazine/barrel up to
+// the weapon's tier) + mod slots. Clicking an empty slot opens
+// an inline chooser; clicking a filled slot stages a detach. The
+// Assemble button is dim until staged ≠ current; on click, fires
+// a single atomic assemble_weapon to the server. Stats panel
+// below renders the staged-state effective stats live.
+function WeaponAssemblyPanel({
   inventory,
   inRange,
-  onAttachWeaponAffix,
-  onDetachWeaponAffix,
-  onAttachWeaponMod,
-  onDetachWeaponMod,
-  onTierUpWeapon,
+  benchTier,
+  onAssemble,
 }: {
   inventory: Inventory;
   inRange: boolean;
-  onAttachWeaponAffix: (
+  // Cap on weapon tier the bench can assemble. 0 if not in range
+  // of any bench (assembly disabled). Mirrors the server gate.
+  benchTier: number;
+  onAssemble: (
     weaponIdx: number,
-    pieceKind: WeaponPieceKind,
-    defId: string
+    pieces: Partial<Record<WeaponPieceKind, string | null>>,
+    mods: string[]
   ) => void;
-  onDetachWeaponAffix: (
-    weaponIdx: number,
-    pieceKind: WeaponPieceKind
-  ) => void;
-  onAttachWeaponMod: (weaponIdx: number, defId: string) => void;
-  onDetachWeaponMod: (weaponIdx: number, modIndex: number) => void;
-  onTierUpWeapon: (weaponIdx: number) => void;
 }) {
-  // Pull every weapon currently in the player's inventory plus its slot
-  // index — the server expects the index, not the weapon id, for
-  // attach/detach.
-  // useMemo so the array reference only changes when the inventory
-  // actually changes — without it, every render creates a new array
-  // and React's effect dependency check fires every tick.
   const weapons = useMemo(() => {
     const out: { idx: number; weapon: WeaponItem }[] = [];
     for (let i = 0; i < inventory.length; i++) {
       const s = inventory[i];
-      if (s.kind === 'weapon' && s.weapon.weaponId !== 'knife') {
+      if (s.kind === 'weapon' && WEAPON_FAMILY[s.weapon.weaponId] !== 'melee') {
         out.push({ idx: i, weapon: s.weapon });
       }
     }
     return out;
   }, [inventory]);
+
   const [selectedIdx, setSelectedIdx] = useState<number | null>(
     weapons[0]?.idx ?? null
   );
@@ -2921,316 +3427,934 @@ function WeaponBenchPanel({
     }
   }, [weapons, selectedIdx]);
 
+  const selected = weapons.find((w) => w.idx === selectedIdx) ?? null;
+
+  // Staged config — initialised from the selected weapon's current
+  // pieces/mods on selection change. Edits don't touch the live
+  // weapon until Assemble fires. After a successful commit, the
+  // server's inventory_changed re-renders us with the new weapon
+  // state; the staged instance ids match the new state's so the
+  // is-modified diff goes false and the button auto-dims.
+  const [staged, setStaged] = useState<{
+    pieces: Partial<Record<WeaponPieceKind, AttachmentInstance | null>>;
+    mods: AttachmentInstance[];
+  }>({ pieces: {}, mods: [] });
+
+  useEffect(() => {
+    if (!selected) {
+      setStaged({ pieces: {}, mods: [] });
+      return;
+    }
+    setStaged({
+      pieces: { ...selected.weapon.pieces },
+      mods: [...selected.weapon.mods],
+    });
+    // Reset only on selection change — not on weapon mutation —
+    // so a successful Assemble doesn't blow away ongoing edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIdx]);
+
+  const [chooser, setChooser] = useState<
+    | { kind: 'piece'; piece: WeaponPieceKind }
+    | { kind: 'mod' }
+    | null
+  >(null);
+
   if (weapons.length === 0) {
     return (
       <div className="px-5 py-4 border-t border-[color:var(--panel-border)] text-xs text-zinc-500">
-        Craft a weapon at the Workbench first to manage it here.
+        Craft a weapon at the Workbench first to assemble it here.
       </div>
     );
   }
-  const selected = weapons.find((w) => w.idx === selectedIdx) ?? null;
+  if (!selected) return null;
+
+  const family = WEAPON_FAMILY[selected.weapon.weaponId];
+  const allowedPieces = TIER_PIECE_SLOTS[selected.weapon.tier];
+  const modCap = TIER_MOD_SLOTS[selected.weapon.tier];
+
+  // Pool of attachments routable into a slot. = inventory attachments
+  // ∪ original weapon's pieces+mods, minus anything already staged.
+  // Including the original attachments lets a player who detached
+  // then changed their mind re-attach without reverting first.
+  const stagedIds = new Set<string>();
+  for (const p of Object.values(staged.pieces)) {
+    if (p) stagedIds.add(p.id);
+  }
+  for (const m of staged.mods) stagedIds.add(m.id);
+  const pool: AttachmentInstance[] = [];
+  for (const p of Object.values(selected.weapon.pieces)) {
+    if (p && !stagedIds.has(p.id)) pool.push(p);
+  }
+  for (const m of selected.weapon.mods) {
+    if (!stagedIds.has(m.id)) pool.push(m);
+  }
+  for (const s of inventory) {
+    if (s.kind === 'attachment' && !stagedIds.has(s.instance.id)) {
+      pool.push(s.instance);
+    }
+  }
+  const candidatesForPiece = (piece: WeaponPieceKind) =>
+    pool.filter((inst) => {
+      const def = ATTACHMENT_DEFS[inst.defId];
+      if (!def || def.kind !== 'weapon_affix') return false;
+      if (def.pieceKind !== piece) return false;
+      if (def.family !== null && def.family !== family) return false;
+      return true;
+    });
+  const candidatesForMod = () =>
+    pool.filter((inst) => {
+      const def = ATTACHMENT_DEFS[inst.defId];
+      if (!def || def.kind !== 'weapon_mod') return false;
+      if (def.family !== null && def.family !== family) return false;
+      return true;
+    });
+
+  // Diff by instance id so a successful commit (which replaces the
+  // live weapon refs) reads as unchanged once ids align.
+  const PIECE_KEYS: WeaponPieceKind[] = ['frame', 'grip', 'magazine', 'barrel'];
+  const isModified = (() => {
+    for (const piece of PIECE_KEYS) {
+      const cur = selected.weapon.pieces[piece]?.id ?? null;
+      const stg = staged.pieces[piece]?.id ?? null;
+      if (cur !== stg) return true;
+    }
+    if (selected.weapon.mods.length !== staged.mods.length) return true;
+    for (let i = 0; i < staged.mods.length; i++) {
+      if (selected.weapon.mods[i].id !== staged.mods[i].id) return true;
+    }
+    return false;
+  })();
+
+  // Virtual weapon for the live stats panel.
+  const stagedWeapon: WeaponItem = {
+    ...selected.weapon,
+    pieces: staged.pieces,
+    mods: staged.mods,
+  };
+  const stagedStats = effectiveWeaponStats(stagedWeapon);
+  const currentStats = effectiveWeaponStats(selected.weapon);
+
+  const stagePieceAttach = (
+    piece: WeaponPieceKind,
+    instance: AttachmentInstance
+  ) => {
+    setStaged((s) => ({
+      pieces: { ...s.pieces, [piece]: instance },
+      mods: s.mods,
+    }));
+    setChooser(null);
+  };
+  const stagePieceDetach = (piece: WeaponPieceKind) => {
+    setStaged((s) => ({
+      pieces: { ...s.pieces, [piece]: null },
+      mods: s.mods,
+    }));
+  };
+  const stageModAttach = (instance: AttachmentInstance) => {
+    setStaged((s) => ({
+      pieces: s.pieces,
+      mods: [...s.mods, instance],
+    }));
+    setChooser(null);
+  };
+  const stageModDetach = (idx: number) => {
+    setStaged((s) => ({
+      pieces: s.pieces,
+      mods: s.mods.filter((_, i) => i !== idx),
+    }));
+  };
+  const reset = () => {
+    setStaged({
+      pieces: { ...selected.weapon.pieces },
+      mods: [...selected.weapon.mods],
+    });
+    setChooser(null);
+  };
+  const commit = () => {
+    if (!isModified || !inRange) return;
+    const piecesPayload: Partial<Record<WeaponPieceKind, string | null>> = {};
+    for (const piece of PIECE_KEYS) {
+      const cur = selected.weapon.pieces[piece]?.id ?? null;
+      const stg = staged.pieces[piece]?.id ?? null;
+      if (cur !== stg) {
+        piecesPayload[piece] = stg ?? null;
+      }
+    }
+    onAssemble(selected.idx, piecesPayload, staged.mods.map((m) => m.id));
+  };
+
+  // Phase 2.2: weapons whose tier exceeds the bench's tier can be
+  // shown in the picker (so the player sees what they own) but
+  // can't be assembled here. Apply a Bench Upgrade to lift the cap.
+  const benchTierCap = benchTier > 0 ? benchTier : 1;
+  const weaponBlocked =
+    selected !== null && selected.weapon.tier > benchTierCap;
+
   return (
-    <div className="px-5 py-4 border-t border-[color:var(--panel-border)] flex flex-col gap-3">
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-        Manage Weapons
+    <div className="px-5 py-4 flex flex-col gap-3">
+      <div className="flex items-center justify-end">
+        <div className="text-[10px] tabular-nums">
+          <span className="text-zinc-500">Bench tier</span>{' '}
+          <span className="text-amber-300 font-semibold">
+            {benchTier > 0
+              ? WEAPON_TIER_LABEL[benchTier as 1 | 2 | 3 | 4] ??
+                `T${benchTier}`
+              : '—'}
+          </span>
+        </div>
       </div>
-      {/* Weapon picker row */}
-      <div className="flex flex-wrap gap-2">
-        {weapons.map((w) => (
-          <button
-            key={w.idx}
-            onClick={() => setSelectedIdx(w.idx)}
-            className={
-              'px-2 py-1 rounded text-[11px] border tabular-nums ' +
-              (w.idx === selectedIdx
-                ? 'border-[color:var(--accent)] text-zinc-100 bg-[color:var(--bg)]'
-                : 'border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]')
-            }
-          >
-            {weaponDisplayName(w.weapon)}
-          </button>
-        ))}
+      <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
+        {/* Weapon picker — weapons above the bench's tier are
+            disabled. Player can apply a Bench Upgrade item from
+            the Forge to lift the cap. */}
+        <ul className="flex flex-col gap-1 max-h-[260px] overflow-y-auto pr-1">
+          {weapons.map((w) => {
+            const blocked = w.weapon.tier > benchTierCap;
+            return (
+              <li key={w.idx}>
+                <button
+                  onClick={() => setSelectedIdx(w.idx)}
+                  title={
+                    blocked
+                      ? `Requires Mk${w.weapon.tier} Weapon Bench`
+                      : undefined
+                  }
+                  className={
+                    'w-full text-left px-2 py-1.5 rounded text-[11px] border ' +
+                    (w.idx === selectedIdx
+                      ? 'border-[color:var(--accent)] text-zinc-100 bg-[color:var(--bg)]'
+                      : blocked
+                        ? 'border-[color:var(--panel-border)] text-zinc-600 hover:bg-[color:var(--bg)]/40'
+                        : 'border-[color:var(--panel-border)] text-zinc-400 hover:bg-[color:var(--bg)]')
+                  }
+                >
+                  {weaponDisplayName(w.weapon)}
+                  {blocked && (
+                    <span className="ml-1 text-[9px] text-amber-400">
+                      ⚠
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        {/* Slot grid + assemble */}
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-4 gap-1.5">
+            {(['frame', 'grip', 'magazine', 'barrel'] as const).map((piece) => {
+              const enabled = allowedPieces.includes(piece);
+              const attached = staged.pieces[piece] ?? null;
+              const isOpen =
+                chooser?.kind === 'piece' && chooser.piece === piece;
+              return (
+                <button
+                  key={piece}
+                  disabled={!enabled}
+                  onClick={() => {
+                    if (!enabled) return;
+                    if (attached) stagePieceDetach(piece);
+                    else setChooser(isOpen ? null : { kind: 'piece', piece });
+                  }}
+                  className={
+                    'flex flex-col items-center justify-center text-[10px] rounded border h-16 px-1 ' +
+                    (!enabled
+                      ? 'border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 text-zinc-700 cursor-not-allowed'
+                      : attached
+                        ? 'border-violet-500/60 bg-violet-950/20 text-violet-200 hover:bg-violet-950/40'
+                        : isOpen
+                          ? 'border-[color:var(--accent)] bg-[color:var(--bg)]/70 text-zinc-200'
+                          : 'border-dashed border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 text-zinc-500 hover:border-violet-700 hover:text-violet-300')
+                  }
+                >
+                  <span className="uppercase tracking-wider text-[9px] text-zinc-500">
+                    {piece}
+                  </span>
+                  <span className="leading-tight text-center">
+                    {attached
+                      ? attachmentDisplayName(attached)
+                      : enabled
+                        ? '+ attach'
+                        : 'locked'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {modCap > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  Mods
+                </div>
+                <div className="text-[10px] text-zinc-500 tabular-nums">
+                  {staged.mods.length}/{modCap}
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {Array.from({ length: modCap }).map((_, i) => {
+                  const m = staged.mods[i];
+                  const isOpen =
+                    chooser?.kind === 'mod' && i === staged.mods.length;
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        if (m) stageModDetach(i);
+                        else if (i === staged.mods.length)
+                          setChooser(isOpen ? null : { kind: 'mod' });
+                      }}
+                      disabled={!m && i !== staged.mods.length}
+                      className={
+                        'flex items-center justify-center text-[10px] rounded border h-12 px-1 ' +
+                        (m
+                          ? 'border-blue-500/60 bg-blue-950/20 text-blue-200 hover:bg-blue-950/40'
+                          : i === staged.mods.length
+                            ? isOpen
+                              ? 'border-[color:var(--accent)] bg-[color:var(--bg)]/70 text-zinc-200'
+                              : 'border-dashed border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 text-zinc-500 hover:border-blue-700 hover:text-blue-300'
+                            : 'border-[color:var(--panel-border)] bg-[color:var(--bg)]/20 text-zinc-700 cursor-not-allowed')
+                      }
+                    >
+                      {m
+                        ? attachmentDisplayName(m)
+                        : i === staged.mods.length
+                          ? '+ mod'
+                          : '—'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {chooser && (
+            <div className="rounded border border-[color:var(--panel-border)] bg-[color:var(--bg)]/40 p-2 flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  {chooser.kind === 'piece'
+                    ? `Available — ${chooser.piece}`
+                    : 'Available mods'}
+                </div>
+                <button
+                  onClick={() => setChooser(null)}
+                  className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                >
+                  cancel
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {(() => {
+                  const list =
+                    chooser.kind === 'piece'
+                      ? candidatesForPiece(chooser.piece)
+                      : candidatesForMod();
+                  if (list.length === 0) {
+                    return (
+                      <span className="text-[10px] text-zinc-600 px-1">
+                        nothing compatible in inventory
+                      </span>
+                    );
+                  }
+                  return list.map((inst) => {
+                    const def = ATTACHMENT_DEFS[inst.defId];
+                    return (
+                      <button
+                        key={inst.id}
+                        onClick={() =>
+                          chooser.kind === 'piece'
+                            ? stagePieceAttach(chooser.piece, inst)
+                            : stageModAttach(inst)
+                        }
+                        title={def?.description}
+                        className={
+                          'px-2 py-1 rounded text-[10px] border ' +
+                          (chooser.kind === 'piece'
+                            ? 'border-violet-700 bg-violet-950/30 text-violet-200 hover:bg-violet-950'
+                            : 'border-blue-700 bg-blue-950/30 text-blue-200 hover:bg-blue-950')
+                        }
+                      >
+                        + {attachmentDisplayName(inst)}
+                      </button>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          )}
+          {currentStats && (
+            <WeaponStatsPanel
+              current={currentStats}
+              preview={isModified ? stagedStats : null}
+            />
+          )}
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <span className="text-[10px] text-zinc-500">
+              Tier{' '}
+              {WEAPON_TIER_LABEL[selected.weapon.tier] ??
+                `T${selected.weapon.tier}`}
+              {weaponBlocked && (
+                <span className="ml-2 text-amber-400">
+                  Requires Mk{selected.weapon.tier} bench
+                </span>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              {isModified && (
+                <button
+                  onClick={reset}
+                  className="px-2 py-1 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+                >
+                  Reset
+                </button>
+              )}
+              <button
+                onClick={commit}
+                disabled={!isModified || !inRange || weaponBlocked}
+                title={
+                  weaponBlocked
+                    ? `Apply a Mk${selected.weapon.tier} Bench Upgrade to lift the cap.`
+                    : undefined
+                }
+                className="px-3 py-1.5 rounded text-[11px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950 disabled:opacity-30"
+              >
+                Assemble
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
-      {selected && (
-        <WeaponEditor
-          weapon={selected.weapon}
-          weaponIdx={selected.idx}
-          inventory={inventory}
-          inRange={inRange}
-          onAttachAffix={(piece, defId) =>
-            onAttachWeaponAffix(selected.idx, piece, defId)
-          }
-          onDetachAffix={(piece) => onDetachWeaponAffix(selected.idx, piece)}
-          onAttachMod={(defId) => onAttachWeaponMod(selected.idx, defId)}
-          onDetachMod={(modIdx) => onDetachWeaponMod(selected.idx, modIdx)}
-          onTierUp={() => onTierUpWeapon(selected.idx)}
-        />
-      )}
     </div>
   );
 }
 
-// Per-weapon editor: lists every piece slot at the current tier with its
-// attached affix (if any), every mod slot, and a tier-up button.
-function WeaponEditor({
-  weapon,
-  weaponIdx: _weaponIdx,
+// Precision Machining Mill — vendor-shaped station that hosts only
+// the tier-up flow. Lists every non-melee weapon, surfaces the
+// next-tier label and material cost from TIER_UP_COSTS, and
+// disables the button when the player can't afford. Server enforces
+// the same rules.
+function PrecisionMillModal({
   inventory,
   inRange,
-  onAttachAffix,
-  onDetachAffix,
-  onAttachMod,
-  onDetachMod,
-  onTierUp,
+  onClose,
+  onTierUpWeapon,
 }: {
-  weapon: WeaponItem;
-  weaponIdx: number;
   inventory: Inventory;
   inRange: boolean;
-  onAttachAffix: (pieceKind: WeaponPieceKind, defId: string) => void;
-  onDetachAffix: (pieceKind: WeaponPieceKind) => void;
-  onAttachMod: (defId: string) => void;
-  onDetachMod: (modIdx: number) => void;
-  onTierUp: () => void;
+  onClose: () => void;
+  onTierUpWeapon: (idx: number) => void;
 }) {
-  const pieces = TIER_PIECE_SLOTS[weapon.tier];
-  const modCap = TIER_MOD_SLOTS[weapon.tier];
-
-  // Count attachments by class for the attach-buttons. Each
-  // instance is unique post-Sprint C, so the modal still tracks
-  // "how many do I have of this class" but attaches the first
-  // matching instance server-side (consumeAttachment by defId).
-  const ownedAttachments = new Map<string, number>();
-  for (const s of inventory) {
-    if (s.kind === 'attachment') {
-      ownedAttachments.set(
-        s.instance.defId,
-        (ownedAttachments.get(s.instance.defId) ?? 0) + 1
-      );
-    }
-  }
-  const ownedAffixForPiece = (piece: WeaponPieceKind): string[] => {
-    const out: string[] = [];
-    for (const [id, count] of ownedAttachments) {
-      if (count <= 0) continue;
-      const def = ATTACHMENT_DEFS[id];
-      if (!def || def.kind !== 'weapon_affix') continue;
-      if (def.pieceKind !== piece) continue;
-      out.push(id);
-    }
-    return out;
-  };
-  const ownedMods = (): string[] => {
-    const out: string[] = [];
-    for (const [id, count] of ownedAttachments) {
-      if (count <= 0) continue;
-      const def = ATTACHMENT_DEFS[id];
-      if (!def || def.kind !== 'weapon_mod') continue;
-      out.push(id);
-    }
-    return out;
-  };
-
-  // Live ghost-stats preview. When the player hovers a candidate
-  // attach button, we synthesise a hypothetical WeaponItem with
-  // that candidate slotted in and feed it through
-  // effectiveWeaponStats. Renderer below diffs against the current
-  // stats so the player sees +/- per stat before committing.
-  const [hovered, setHovered] = useState<
-    | { kind: 'piece'; piece: WeaponPieceKind; defId: string }
-    | { kind: 'mod'; defId: string }
-    | null
-  >(null);
-
-  const findFirstInstanceOfDef = (
-    defId: string
-  ): import('@dumrunner/shared').AttachmentInstance | null => {
-    for (const s of inventory) {
-      if (s.kind === 'attachment' && s.instance.defId === defId) {
-        return s.instance;
+  const weapons = useMemo(() => {
+    const out: { idx: number; weapon: WeaponItem }[] = [];
+    for (let i = 0; i < inventory.length; i++) {
+      const s = inventory[i];
+      if (s.kind === 'weapon' && WEAPON_FAMILY[s.weapon.weaponId] !== 'melee') {
+        out.push({ idx: i, weapon: s.weapon });
       }
     }
-    return null;
-  };
-
-  const previewWeapon = (() => {
-    if (!hovered) return null;
-    const inst = findFirstInstanceOfDef(hovered.defId);
-    if (!inst) return null;
-    const cloned: WeaponItem = {
-      ...weapon,
-      pieces: { ...weapon.pieces },
-      mods: [...weapon.mods],
-    };
-    if (hovered.kind === 'piece') {
-      cloned.pieces[hovered.piece] = inst;
-    } else {
-      // Mods cap at TIER_MOD_SLOTS — preview replaces the last slot
-      // if at cap so the player sees what the swap looks like
-      // without committing the detach yet.
-      if (cloned.mods.length >= modCap) {
-        cloned.mods = [...cloned.mods.slice(0, -1), inst];
-      } else {
-        cloned.mods.push(inst);
-      }
-    }
-    return cloned;
-  })();
-
-  const currentStats = effectiveWeaponStats(weapon);
-  const previewStats = previewWeapon
-    ? effectiveWeaponStats(previewWeapon)
-    : null;
+    return out;
+  }, [inventory]);
 
   return (
-    <div className="flex flex-col gap-3 text-xs">
-      {/* Stats panel — live preview when hovering a candidate. */}
-      {currentStats && (
-        <WeaponStatsPanel
-          current={currentStats}
-          preview={previewStats}
-        />
-      )}
-
-      {/* Pieces */}
-      <div className="flex flex-col gap-1.5">
-        <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-          Pieces
+    <Modal onClose={onClose} width="min(640px, 94vw)">
+      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
+        <h2 className="font-semibold flex items-center gap-2 text-base">
+          <ItemIcon kind="placeable" subkind="precision_mill" />
+          <span>Precision Machining Mill</span>
+        </h2>
+        <button
+          onClick={onClose}
+          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+        >
+          Close
+        </button>
+      </div>
+      {!inRange && (
+        <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
+          Move closer to the mill to tier up.
         </div>
-        {pieces.map((piece) => {
-          const attached = weapon.pieces[piece];
-          const candidates = ownedAffixForPiece(piece);
-          return (
-            <div
-              key={piece}
-              className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
-            >
-              <div className="flex flex-col">
-                <span className="text-[10px] uppercase tracking-wider text-zinc-500">
-                  {piece}
-                </span>
-                <span className="text-zinc-200">
-                  {attached ? attachmentDisplayName(attached) : '— empty —'}
-                </span>
-              </div>
-              {attached ? (
-                <button
-                  onClick={() => onDetachAffix(piece)}
-                  disabled={!inRange}
-                  className="px-2 py-1 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)] disabled:opacity-40"
-                >
-                  Detach
-                </button>
-              ) : (
-                <div className="flex flex-wrap gap-1 justify-end">
-                  {candidates.length === 0 ? (
-                    <span className="text-[10px] text-zinc-600">
-                      no compatible affix
+      )}
+      {weapons.length === 0 ? (
+        <div className="px-5 py-8 text-zinc-500 text-sm text-center">
+          No tier-able weapons in inventory.
+        </div>
+      ) : (
+        <div className="px-5 py-4 flex flex-col gap-2">
+          {weapons.map((w) => {
+            const maxed = w.weapon.tier >= 4;
+            const cost = maxed
+              ? null
+              : TIER_UP_COSTS[w.weapon.tier as 1 | 2 | 3];
+            const canAfford =
+              !!cost &&
+              cost.every(
+                (c) => countMaterial(inventory, c.materialId) >= c.count
+              );
+            const nextLabel = maxed
+              ? 'Max Tier'
+              : `Tier Up → ${
+                  WEAPON_TIER_LABEL[(w.weapon.tier + 1) as 1 | 2 | 3 | 4] ??
+                  `T${w.weapon.tier + 1}`
+                }`;
+            return (
+              <div
+                key={w.idx}
+                className="flex items-center justify-between gap-3 px-3 py-2 rounded border border-[color:var(--panel-border)] bg-[color:var(--bg)]/40"
+              >
+                <div className="flex flex-col">
+                  <span className="text-zinc-100 text-sm">
+                    {weaponDisplayName(w.weapon)}
+                  </span>
+                  {!maxed && cost && (
+                    <span className="text-[10px] text-zinc-500">
+                      {cost
+                        .map(
+                          (c) =>
+                            `${c.count} ${
+                              MATERIALS[c.materialId]?.name ?? c.materialId
+                            }`
+                        )
+                        .join(' · ')}
                     </span>
-                  ) : (
-                    candidates.map((id) => {
-                      const cdef = ATTACHMENT_DEFS[id];
-                      return (
-                        <button
-                          key={id}
-                          onClick={() => onAttachAffix(piece, id)}
-                          onMouseEnter={() =>
-                            setHovered({ kind: 'piece', piece, defId: id })
-                          }
-                          onMouseLeave={() => setHovered(null)}
-                          disabled={!inRange}
-                          title={cdef?.description}
-                          className="px-2 py-1 rounded text-[10px] border border-violet-700 bg-violet-950/30 text-violet-200 hover:bg-violet-950 disabled:opacity-40"
-                        >
-                          + {attachmentDisplayName(id)}
-                        </button>
-                      );
-                    })
                   )}
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Mods */}
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-            Mods
-          </div>
-          <div className="text-[10px] text-zinc-500 tabular-nums">
-            {weapon.mods.length}/{modCap}
-          </div>
+                <button
+                  onClick={() => onTierUpWeapon(w.idx)}
+                  disabled={maxed || !inRange || !canAfford}
+                  className="px-3 py-1.5 rounded text-[11px] border border-amber-700 bg-amber-950/30 text-amber-200 hover:bg-amber-950 disabled:opacity-30"
+                >
+                  {nextLabel}
+                </button>
+              </div>
+            );
+          })}
         </div>
-        {weapon.mods.length === 0 && modCap === 0 && (
-          <div className="text-[10px] text-zinc-600 px-2">
-            Tier up to unlock mod slots.
+      )}
+    </Modal>
+  );
+}
+
+// Suit Assembly Bench — Phase 2.5 sibling of the Weapon Bench
+// redesign for suit parts. Picks an equipped suit slot, lists its
+// attachment slots (1–4 by part tier), inline chooser for
+// compatible suit_affix instances from inventory, live SuitStatsPanel
+// showing current vs staged effective suit stats, and an atomic
+// Assemble button that fires a single assemble_suit_part message.
+function SuitAssemblyModal({
+  inventory,
+  equipment,
+  inRange,
+  onClose,
+  onAssemble,
+}: {
+  inventory: Inventory;
+  equipment: Equipment;
+  inRange: boolean;
+  onClose: () => void;
+  onAssemble: (suitSlot: SuitSlotKind, attachments: string[]) => void;
+}) {
+  return (
+    <Modal onClose={onClose} width="min(720px, 94vw)">
+      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
+        <h2 className="font-semibold flex items-center gap-2 text-base">
+          <ItemIcon kind="placeable" subkind="suit_bench" />
+          <span>Suit Assembly Bench</span>
+        </h2>
+        <button
+          onClick={onClose}
+          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+        >
+          Close
+        </button>
+      </div>
+      {!inRange && (
+        <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
+          Move closer to the bench to assemble.
+        </div>
+      )}
+      <SuitAssemblyPanel
+        inventory={inventory}
+        equipment={equipment}
+        inRange={inRange}
+        onAssemble={onAssemble}
+      />
+    </Modal>
+  );
+}
+
+function SuitAssemblyPanel({
+  inventory,
+  equipment,
+  inRange,
+  onAssemble,
+}: {
+  inventory: Inventory;
+  equipment: Equipment;
+  inRange: boolean;
+  onAssemble: (suitSlot: SuitSlotKind, attachments: string[]) => void;
+}) {
+  const equippedSlots = useMemo(() => {
+    return SUIT_SLOT_KINDS.filter((s) => equipment[s] !== null);
+  }, [equipment]);
+
+  const [selectedSlot, setSelectedSlot] = useState<SuitSlotKind | null>(
+    equippedSlots[0] ?? null
+  );
+  useEffect(() => {
+    if (selectedSlot && !equippedSlots.includes(selectedSlot)) {
+      setSelectedSlot(equippedSlots[0] ?? null);
+    } else if (!selectedSlot && equippedSlots.length > 0) {
+      setSelectedSlot(equippedSlots[0]);
+    }
+  }, [equippedSlots, selectedSlot]);
+
+  const selectedPart = selectedSlot ? equipment[selectedSlot] : null;
+
+  // Staged attachments for the selected part. Initialised from the
+  // live part's appliedAttachments on selection change; mutated as
+  // the player attaches/detaches; committed via assemble_suit_part.
+  const [staged, setStaged] = useState<AttachmentInstance[]>([]);
+  useEffect(() => {
+    if (!selectedPart) {
+      setStaged([]);
+      return;
+    }
+    setStaged([...(selectedPart.appliedAttachments ?? [])]);
+    // Reset only on slot change — server commits round-trip via
+    // equipment_changed which reseats the part reference; the diff-
+    // by-id check below handles the auto-dim cleanly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSlot]);
+
+  const [chooserOpen, setChooserOpen] = useState(false);
+
+  if (equippedSlots.length === 0 || !selectedPart || !selectedSlot) {
+    return (
+      <div className="px-5 py-8 text-zinc-500 text-sm text-center">
+        No suit parts equipped. Equip a part in the inventory panel
+        first.
+      </div>
+    );
+  }
+
+  const slotCap = SUIT_ATTACHMENT_SLOTS[selectedPart.tier];
+
+  // Pool of attachments routable into a slot. = inventory
+  // suit-affix attachments + the part's currently-attached
+  // attachments minus anything already staged.
+  const stagedIds = new Set<string>();
+  for (const a of staged) stagedIds.add(a.id);
+  const pool: AttachmentInstance[] = [];
+  for (const a of selectedPart.appliedAttachments ?? []) {
+    if (!stagedIds.has(a.id)) pool.push(a);
+  }
+  for (const s of inventory) {
+    if (s.kind === 'attachment' && !stagedIds.has(s.instance.id)) {
+      pool.push(s.instance);
+    }
+  }
+  const candidates = pool.filter((inst) => {
+    const def = ATTACHMENT_DEFS[inst.defId];
+    if (!def || def.kind !== 'suit_affix') return false;
+    if (def.slotKind !== selectedSlot) return false;
+    return true;
+  });
+
+  // Live diff against the live part by AttachmentInstance.id so a
+  // successful commit (which replaces the part ref) reads as
+  // unchanged once ids align.
+  const isModified = (() => {
+    const cur = selectedPart.appliedAttachments ?? [];
+    if (cur.length !== staged.length) return true;
+    for (let i = 0; i < cur.length; i++) {
+      if (cur[i].id !== staged[i].id) return true;
+    }
+    return false;
+  })();
+
+  // Synthesised equipment for the live SuitStatsPanel preview.
+  // Apply staged attachments to a copy of the selected part; leave
+  // every other slot untouched.
+  const stagedEquipment: Equipment = {
+    ...equipment,
+    [selectedSlot]: {
+      ...selectedPart,
+      appliedAttachments: staged,
+    },
+  };
+  const currentStats = computeSuitStats(equipment);
+  const stagedStats = computeSuitStats(stagedEquipment);
+
+  const stageAttach = (instance: AttachmentInstance) => {
+    setStaged((s) => {
+      if (s.length >= slotCap) {
+        // Replace the last slot if at cap so the player sees the
+        // swap without an explicit detach.
+        return [...s.slice(0, -1), instance];
+      }
+      return [...s, instance];
+    });
+    setChooserOpen(false);
+  };
+  const stageDetach = (idx: number) => {
+    setStaged((s) => s.filter((_, i) => i !== idx));
+  };
+  const reset = () => {
+    setStaged([...(selectedPart.appliedAttachments ?? [])]);
+    setChooserOpen(false);
+  };
+  const commit = () => {
+    if (!isModified || !inRange) return;
+    onAssemble(
+      selectedSlot,
+      staged.map((a) => a.id)
+    );
+  };
+
+  return (
+    <div className="px-5 py-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+          Equipped Part
+        </div>
+        <div className="text-[10px] tabular-nums">
+          <span className="text-zinc-500">Slots</span>{' '}
+          <span className="text-amber-300 font-semibold">
+            {staged.length}/{slotCap}
+          </span>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
+        {/* Suit-slot picker — only equipped slots are pickable. */}
+        <ul className="flex flex-col gap-1">
+          {equippedSlots.map((slot) => {
+            const part = equipment[slot]!;
+            return (
+              <li key={slot}>
+                <button
+                  onClick={() => setSelectedSlot(slot)}
+                  className={
+                    'w-full text-left px-2 py-1.5 rounded text-[11px] border ' +
+                    (slot === selectedSlot
+                      ? 'border-[color:var(--accent)] text-zinc-100 bg-[color:var(--bg)]'
+                      : 'border-[color:var(--panel-border)] text-zinc-400 hover:bg-[color:var(--bg)]')
+                  }
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span>{SUIT_LABELS[slot] ?? slot}</span>
+                    <span
+                      className="text-[9px] font-semibold tabular-nums"
+                      style={{ color: TIER_HEX[part.tier] }}
+                    >
+                      {part.tier}
+                    </span>
+                  </div>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        {/* Slot grid + assemble */}
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-4 gap-1.5">
+            {Array.from({ length: slotCap }).map((_, i) => {
+              const inst = staged[i];
+              const isAddSlot = !inst && i === staged.length;
+              return (
+                <button
+                  key={i}
+                  onClick={() => {
+                    if (inst) stageDetach(i);
+                    else if (isAddSlot) setChooserOpen((v) => !v);
+                  }}
+                  disabled={!inst && !isAddSlot}
+                  className={
+                    'flex flex-col items-center justify-center text-[10px] rounded border h-16 px-1 ' +
+                    (inst
+                      ? 'border-emerald-500/60 bg-emerald-950/20 text-emerald-200 hover:bg-emerald-950/40'
+                      : isAddSlot
+                        ? chooserOpen
+                          ? 'border-[color:var(--accent)] bg-[color:var(--bg)]/70 text-zinc-200'
+                          : 'border-dashed border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 text-zinc-500 hover:border-emerald-700 hover:text-emerald-300'
+                        : 'border-[color:var(--panel-border)] bg-[color:var(--bg)]/20 text-zinc-700 cursor-not-allowed')
+                  }
+                >
+                  {inst ? (
+                    <>
+                      <span
+                        className="text-[8px] font-semibold tabular-nums"
+                        style={{ color: TIER_HEX[inst.tier] }}
+                      >
+                        {inst.tier}
+                      </span>
+                      <span className="leading-tight text-center">
+                        {attachmentDisplayName(inst)}
+                      </span>
+                    </>
+                  ) : isAddSlot ? (
+                    <span className="leading-tight">+ attach</span>
+                  ) : (
+                    <span className="leading-tight">—</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
-        )}
-        {weapon.mods.map((mod, i) => {
-          return (
-            <div
-              key={i}
-              className="flex items-center justify-between px-2 py-1.5 rounded bg-[color:var(--bg)]/50 border border-[color:var(--panel-border)]"
-            >
-              <span className="text-zinc-200">{attachmentDisplayName(mod)}</span>
+          {chooserOpen && (
+            <div className="rounded border border-[color:var(--panel-border)] bg-[color:var(--bg)]/40 p-2 flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  Available — {SUIT_LABELS[selectedSlot] ?? selectedSlot}
+                </div>
+                <button
+                  onClick={() => setChooserOpen(false)}
+                  className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                >
+                  cancel
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {candidates.length === 0 ? (
+                  <span className="text-[10px] text-zinc-600 px-1">
+                    nothing compatible in inventory — craft Hardened Plating
+                    or Servomotor Tune at the Electronics Bench
+                  </span>
+                ) : (
+                  candidates.map((inst) => {
+                    const def = ATTACHMENT_DEFS[inst.defId];
+                    return (
+                      <button
+                        key={inst.id}
+                        onClick={() => stageAttach(inst)}
+                        title={def?.description}
+                        className="px-2 py-1 rounded text-[10px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950"
+                      >
+                        + {attachmentDisplayName(inst)}{' '}
+                        <span
+                          className="text-[8px] font-semibold tabular-nums"
+                          style={{ color: TIER_HEX[inst.tier] }}
+                        >
+                          {inst.tier}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+          <SuitStatsPanel
+            current={currentStats}
+            preview={isModified ? stagedStats : null}
+          />
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <span className="text-[10px] text-zinc-500">
+              {SUIT_LABELS[selectedSlot] ?? selectedSlot} —{' '}
+              {selectedPart.tier}
+            </span>
+            <div className="flex items-center gap-2">
+              {isModified && (
+                <button
+                  onClick={reset}
+                  className="px-2 py-1 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+                >
+                  Reset
+                </button>
+              )}
               <button
-                onClick={() => onDetachMod(i)}
-                disabled={!inRange}
-                className="px-2 py-1 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)] disabled:opacity-40"
+                onClick={commit}
+                disabled={!isModified || !inRange}
+                className="px-3 py-1.5 rounded text-[11px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950 disabled:opacity-30"
               >
-                Detach
+                Assemble
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Live diff between the suit's current SuitStats and a staged
+// configuration. Mirrors WeaponStatsPanel — green for an
+// improvement, red for a regression. Each row shows the current
+// value with the delta beside it when staged differs.
+function SuitStatsPanel({
+  current,
+  preview,
+}: {
+  current: import('@dumrunner/shared').SuitStats;
+  preview: import('@dumrunner/shared').SuitStats | null;
+}) {
+  type StatRow = {
+    label: string;
+    cur: number;
+    prv: number;
+    fmt: (v: number) => string;
+  };
+  const rows: StatRow[] = [
+    {
+      label: 'Max HP',
+      cur: current.hpBonus,
+      prv: preview?.hpBonus ?? current.hpBonus,
+      fmt: (v) => (v === 0 ? '—' : `+${Math.round(v)}`),
+    },
+    {
+      label: 'Max shield',
+      cur: current.shieldBonus,
+      prv: preview?.shieldBonus ?? current.shieldBonus,
+      fmt: (v) => (v === 0 ? '—' : `+${Math.round(v)}`),
+    },
+    {
+      label: 'Max stamina',
+      cur: current.staminaMaxBonus,
+      prv: preview?.staminaMaxBonus ?? current.staminaMaxBonus,
+      fmt: (v) => (v === 0 ? '—' : `+${Math.round(v)}`),
+    },
+    {
+      label: 'Stamina regen',
+      cur: current.staminaRegenBonus,
+      prv: preview?.staminaRegenBonus ?? current.staminaRegenBonus,
+      fmt: (v) => (v === 0 ? '—' : `+${v.toFixed(1)}/s`),
+    },
+    {
+      label: 'Move speed',
+      cur: current.moveSpeedMult,
+      prv: preview?.moveSpeedMult ?? current.moveSpeedMult,
+      fmt: (v) => (v === 0 ? '—' : `+${Math.round(v * 100)}%`),
+    },
+  ];
+  return (
+    <div className="rounded border border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 p-2 text-[11px]">
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
+        Suit stats {preview ? '(live preview)' : ''}
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+        {rows.map((r) => {
+          const changed = preview && Math.abs(r.prv - r.cur) > 0.0001;
+          // For these stats, higher = better.
+          const better = changed && r.prv > r.cur;
+          const arrow = changed ? (better ? '↑' : '↓') : '';
+          return (
+            <div key={r.label} className="flex items-center justify-between">
+              <span className="text-zinc-400">{r.label}</span>
+              <span className="tabular-nums text-zinc-200">
+                {r.fmt(preview ? r.prv : r.cur)}
+                {changed && (
+                  <span
+                    className={
+                      'ml-1 ' +
+                      (better ? 'text-emerald-400' : 'text-red-400')
+                    }
+                  >
+                    {arrow} {r.fmt(r.cur)}
+                  </span>
+                )}
+              </span>
+            </div>
           );
         })}
-        {weapon.mods.length < modCap && (
-          <div className="flex flex-wrap gap-1">
-            {ownedMods().length === 0 ? (
-              <span className="text-[10px] text-zinc-600 px-2">
-                no mods in inventory
-              </span>
-            ) : (
-              ownedMods().map((id) => {
-                const def = ATTACHMENT_DEFS[id];
-                return (
-                  <button
-                    key={id}
-                    onClick={() => onAttachMod(id)}
-                    onMouseEnter={() => setHovered({ kind: 'mod', defId: id })}
-                    onMouseLeave={() => setHovered(null)}
-                    disabled={!inRange}
-                    title={def?.description}
-                    className="px-2 py-1 rounded text-[10px] border border-blue-700 bg-blue-950/30 text-blue-200 hover:bg-blue-950 disabled:opacity-40"
-                  >
-                    + {attachmentDisplayName(id)}
-                  </button>
-                );
-              })
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Tier-up */}
-      <div className="flex items-center justify-between gap-2 pt-2 border-t border-[color:var(--panel-border)]">
-        <span className="text-zinc-300">
-          Current Tier{' '}
-          <span className="text-zinc-100 font-semibold">
-            {WEAPON_TIER_LABEL[weapon.tier] ?? `T${weapon.tier}`}
-          </span>
-        </span>
-        <button
-          onClick={onTierUp}
-          disabled={!inRange || weapon.tier >= 4}
-          className="px-3 py-1.5 rounded text-[11px] border border-amber-700 bg-amber-950/30 text-amber-200 hover:bg-amber-950 disabled:opacity-40"
-        >
-          {weapon.tier >= 4
-            ? 'Max Tier'
-            : `Tier Up → ${WEAPON_TIER_LABEL[(weapon.tier + 1) as 1 | 2 | 3 | 4] ?? `T${weapon.tier + 1}`}`}
-        </button>
       </div>
     </div>
   );
@@ -3405,7 +4529,10 @@ function StorageChestModal({
         // Attachments are unique-instance — they never stack.
         (src.kind === 'consumable' &&
           d.kind === 'consumable' &&
-          src.consumableId === d.consumableId)
+          src.consumableId === d.consumableId) ||
+        (src.kind === 'upgrade' &&
+          d.kind === 'upgrade' &&
+          src.upgradeId === d.upgradeId)
       ) {
         return i;
       }
@@ -3433,36 +4560,34 @@ function StorageChestModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-[720px] max-w-[95vw] bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded-lg shadow-2xl">
-        <header className="flex items-center justify-between px-5 py-3 border-b border-[color:var(--panel-border)]">
-          <div>
-            <h2 className="font-semibold text-zinc-100">Storage</h2>
-            <p className="text-[11px] text-zinc-500">
-              Click a slot to transfer to the other side.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-sm text-zinc-400 hover:text-zinc-200 px-2"
-          >
-            Close [Esc]
-          </button>
-        </header>
-        <div className="grid grid-cols-2 gap-4 p-5">
-          <ChestSlotGrid
-            title="Your inventory"
-            slots={inventory}
-            onClick={(idx, slot) => handleClick('inventory', idx, slot)}
-          />
-          <ChestSlotGrid
-            title="Chest"
-            slots={chestSlots}
-            onClick={(idx, slot) => handleClick('chest', idx, slot)}
-          />
+    <Modal onClose={onClose} width="min(720px, 95vw)">
+      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
+        <div>
+          <h2 className="font-semibold text-zinc-100 text-base">Storage</h2>
+          <p className="text-[11px] text-zinc-500">
+            Click a slot to transfer to the other side.
+          </p>
         </div>
+        <button
+          onClick={onClose}
+          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+        >
+          Close [Esc]
+        </button>
       </div>
-    </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-5 max-h-[calc(100vh-160px)] overflow-y-auto">
+        <ChestSlotGrid
+          title="Your inventory"
+          slots={inventory}
+          onClick={(idx, slot) => handleClick('inventory', idx, slot)}
+        />
+        <ChestSlotGrid
+          title="Chest"
+          slots={chestSlots}
+          onClick={(idx, slot) => handleClick('chest', idx, slot)}
+        />
+      </div>
+    </Modal>
   );
 }
 
@@ -3490,14 +4615,14 @@ function ChestSlotGrid({
               disabled={empty}
               onClick={() => onClick(idx, slot)}
               className={
-                'aspect-square rounded border text-[10px] leading-tight px-1 py-1 text-center break-words ' +
+                'aspect-square rounded border w-14 h-14 flex items-center justify-center ' +
                 (empty
-                  ? 'bg-[color:var(--bg)] border-[color:var(--panel-border)] text-zinc-700 cursor-default'
-                  : 'bg-[color:var(--bg)] border-[color:var(--panel-border)] text-zinc-200 hover:border-[color:var(--accent)]')
+                  ? 'bg-[color:var(--bg)] border-[color:var(--panel-border)] cursor-default'
+                  : 'bg-[color:var(--bg)] border-[color:var(--panel-border)] hover:border-[color:var(--accent)]')
               }
               title={empty ? 'Empty' : outputSlotLabel(slot)}
             >
-              {empty ? '' : outputSlotLabel(slot)}
+              <SlotIcon slot={slot} />
             </button>
           );
         })}
@@ -3524,6 +4649,10 @@ function outputSlotLabel(slot: InventorySlot): string {
   if (slot.kind === 'consumable') {
     const def = CONSUMABLES[slot.consumableId];
     return `${slot.count}× ${def?.name ?? slot.consumableId}`;
+  }
+  if (slot.kind === 'upgrade') {
+    const def = UPGRADES[slot.upgradeId];
+    return `${slot.count}× ${def?.name ?? slot.upgradeId}`;
   }
   if (slot.kind === 'part') return partDisplayName(slot.part);
   return '?';
@@ -3736,6 +4865,14 @@ function formatRecipeOutput(out: Recipe['output']): string {
     const def = CONSUMABLES[out.consumableId];
     return `${out.count}× ${def?.name ?? out.consumableId}`;
   }
+  if (out.kind === 'material') {
+    const def = MATERIALS[out.materialId];
+    return `${out.count}× ${def?.name ?? out.materialId}`;
+  }
+  if (out.kind === 'upgrade') {
+    const def = UPGRADES[out.upgradeId];
+    return `${out.count}× ${def?.name ?? out.upgradeId}`;
+  }
   return out.weaponId.replace(/_/g, ' ');
 }
 
@@ -3868,9 +5005,9 @@ function CharacterPanel({
   const suit = computeSuitStats(equipment);
   const baseRegen = PLAYER_BASE_STATS.staminaRegenPerSec;
   return (
-    <div className="flex flex-col items-center gap-2 pr-3 border-r border-[color:var(--panel-border)]">
+    <div className="flex flex-col items-center gap-2 md:pr-3 md:border-r border-[color:var(--panel-border)] md:pb-0 pb-3 md:border-b-0 border-b">
       <div className="text-xs uppercase tracking-wider text-zinc-500">Suit</div>
-      <div className="relative w-32 h-44">
+      <div className="relative w-44 h-52">
         <CharacterSilhouette />
         {/* Top — chassis */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2">
@@ -3918,7 +5055,7 @@ function CharacterPanel({
           />
         </div>
       </div>
-      <div className="text-[10px] text-zinc-500 leading-snug w-32 text-center">
+      <div className="text-[10px] text-zinc-500 leading-snug w-44 text-center">
         Drag a part here to equip
       </div>
 
@@ -4011,7 +5148,7 @@ function StatRow({
 }: {
   label: string;
   value: string;
-  bonus: string | null;
+  bonus?: string | null;
 }) {
   return (
     <div className="flex items-center justify-between gap-2">
@@ -4056,50 +5193,75 @@ function ArmorSlot({
   onUnequip: (suitSlot: SuitSlotKind, toInventoryIdx?: number) => void;
 }) {
   const draggable = part !== null;
+  // Slot label sits under the box and always shows the slot kind
+  // (Chassis / Plating / etc.) so the player can see which slot
+  // is which at a glance. When a part is equipped, an inline tier
+  // badge at the start of the label colour-codes the tier.
+  // Right-click to unequip — the title carries the full part name
+  // so hover-inspecting still works for tooltips.
+  const slotLabel = SUIT_LABELS[kind];
+  const titleText = part
+    ? `${partDisplayName(part)} — ${slotLabel}`
+    : slotLabel;
   return (
-    <div
-      className={`w-10 h-10 rounded border ${
-        part ? 'border-[color:var(--accent)]' : 'border-[color:var(--panel-border)]'
-      } bg-[color:var(--bg)] flex items-center justify-center`}
-      title={SUIT_LABELS[kind]}
-      draggable={draggable}
-      onDragStart={
-        draggable
-          ? (e) => {
-              e.dataTransfer.setData(ARMOR_DRAG_MIME, kind);
-              e.dataTransfer.effectAllowed = 'move';
-            }
-          : undefined
-      }
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes(DRAG_MIME)) {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
+    <div className="flex flex-col items-center gap-0.5">
+      <div
+        className={`w-10 h-10 rounded border ${
+          part
+            ? 'border-[color:var(--accent)]'
+            : 'border-[color:var(--panel-border)]'
+        } bg-[color:var(--bg)] flex items-center justify-center`}
+        title={titleText}
+        draggable={draggable}
+        onDragStart={
+          draggable
+            ? (e) => {
+                e.dataTransfer.setData(ARMOR_DRAG_MIME, kind);
+                e.dataTransfer.effectAllowed = 'move';
+              }
+            : undefined
         }
-      }}
-      onDrop={(e) => {
-        const raw = e.dataTransfer.getData(DRAG_MIME);
-        if (!raw) return;
-        const from = Number(raw);
-        if (!Number.isFinite(from)) return;
-        onDropPart(from, kind);
-      }}
-      onContextMenu={
-        part
-          ? (e) => {
-              e.preventDefault();
-              onUnequip(kind);
-            }
-          : undefined
-      }
-    >
-      {part ? (
-        <ItemIcon kind="part" tierColor={TIER_HEX[part.tier]} />
-      ) : (
-        <span className="text-[8px] text-zinc-500 leading-tight text-center px-0.5">
-          {SUIT_LABELS[kind].split(' ')[0]}
-        </span>
-      )}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes(DRAG_MIME)) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+          }
+        }}
+        onDrop={(e) => {
+          const raw = e.dataTransfer.getData(DRAG_MIME);
+          if (!raw) return;
+          const from = Number(raw);
+          if (!Number.isFinite(from)) return;
+          onDropPart(from, kind);
+        }}
+        onContextMenu={
+          part
+            ? (e) => {
+                e.preventDefault();
+                onUnequip(kind);
+              }
+            : undefined
+        }
+      >
+        {part ? (
+          <ItemIcon kind="part" tierColor={TIER_HEX[part.tier]} />
+        ) : (
+          <span className="text-[8px] text-zinc-500 leading-tight text-center px-0.5">
+            {slotLabel.split(' ')[0]}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-0.5 leading-none">
+        {part && (
+          <span
+            className="text-[8px] font-semibold tabular-nums"
+            style={{ color: TIER_HEX[part.tier] }}
+          >
+            {part.tier}
+          </span>
+        )}
+        <span className="text-[8px] text-zinc-400">{slotLabel}</span>
+      </div>
     </div>
   );
 }
@@ -4208,6 +5370,12 @@ function slotTooltip(slot: InventorySlot): string | undefined {
     const rolls = formatAttachmentRolls(slot.instance);
     return `${name}\n${def?.description ?? ''}${rolls ? `\n${rolls}` : ''}`;
   }
+  if (slot.kind === 'upgrade') {
+    const def = UPGRADES[slot.upgradeId];
+    return `${def?.name ?? slot.upgradeId} ×${slot.count}\n${
+      def?.description ?? ''
+    }`;
+  }
   if (slot.kind === 'part') {
     const part = slot.part;
     const tag = `${partDisplayName(part)}  (${SLOT_LABELS[part.slot] ?? part.slot})`;
@@ -4245,6 +5413,8 @@ function SlotCell({
   onSwap,
   onContextMenu,
   onArmorDrop,
+  onInspect,
+  inspecting,
 }: {
   slot: InventorySlot;
   index: number;
@@ -4254,20 +5424,48 @@ function SlotCell({
   onSwap?: (from: number, to: number) => void;
   onContextMenu?: (slot: number, x: number, y: number) => void;
   onArmorDrop?: (suitSlot: SuitSlotKind) => void;
+  // Left-click handler for the click-to-inspect panel. Browsers
+  // fire `click` only on a true press+release, not on drags, so
+  // this coexists with the drag-to-swap flow without conflict.
+  onInspect?: (slot: number) => void;
+  // Highlights the slot the inspector is currently focused on so
+  // the player can see which item the stats panel describes.
+  inspecting?: boolean;
 }) {
-  const dim = size === 'hotbar' ? 'w-12 h-12 text-xs' : 'w-14 h-14 text-[11px]';
+  // Cells shrink on narrow screens so a 9-wide hotbar still fits a
+  // 360px-class device. Inventory-panel cells stay 56px because the
+  // modal grid drops to 6 columns at the same breakpoint, so the
+  // total grid width is unchanged.
+  const dim =
+    size === 'hotbar'
+      ? 'w-10 h-10 sm:w-12 sm:h-12 text-[10px] sm:text-xs'
+      : 'w-12 h-12 sm:w-14 sm:h-14 text-[10px] sm:text-[11px]';
   const border = highlighted
     ? 'border-2 border-[color:var(--accent)]'
-    : 'border border-[color:var(--panel-border)]';
+    : inspecting
+      ? 'border-2 border-amber-400/70'
+      : 'border border-[color:var(--panel-border)]';
 
   const draggable = slot.kind !== 'empty' && !!onSwap;
-  const title = slotTooltip(slot);
+  // Native title= is only used on the bottom hotbar (size === 'hotbar'),
+  // where the click-to-inspect panel isn't available. Inside the
+  // inventory modal (size === 'panel') the InspectPanel is the fast
+  // path; the OS tooltip's ~1s hover delay would just be noise there
+  // and is visibly bad inside Discord's Activity iframe.
+  const title = size === 'hotbar' ? slotTooltip(slot) : undefined;
 
   return (
     <div
-      className={`relative rounded ${dim} ${border} bg-[color:var(--bg)] flex items-center justify-center text-center`}
+      className={`relative rounded ${dim} ${border} bg-[color:var(--bg)] flex items-center justify-center text-center ${
+        onInspect && slot.kind !== 'empty' ? 'cursor-pointer' : ''
+      }`}
       title={title}
       draggable={draggable}
+      onClick={
+        onInspect && slot.kind !== 'empty'
+          ? () => onInspect(index)
+          : undefined
+      }
       onDragStart={
         draggable
           ? (e) => {
@@ -4332,6 +5530,7 @@ function SlotContextMenu({
   onSalvage,
   onDiscardOne,
   onDiscardAll,
+  onApplyUpgrade,
   onClose,
 }: {
   slot: InventorySlot;
@@ -4347,6 +5546,9 @@ function SlotContextMenu({
   onSalvage: () => void;
   onDiscardOne: () => void;
   onDiscardAll: () => void;
+  // Set when the slot is an `upgrade` item AND there's a matching-
+  // tier weapon bench in range. Undefined hides the action.
+  onApplyUpgrade?: () => void;
   onClose: () => void;
 }) {
   const salvageable =
@@ -4374,6 +5576,14 @@ function SlotContextMenu({
             onClick={onUse}
           >
             Use
+          </button>
+        )}
+        {onApplyUpgrade && (
+          <button
+            className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)] text-amber-300"
+            onClick={onApplyUpgrade}
+          >
+            Apply to Bench
           </button>
         )}
         {stackable && count > 1 && (
@@ -4466,10 +5676,14 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
     );
   }
   if (slot.kind === 'placeable') {
+    const label = BUILDING_REGISTRY[slot.buildingKind]?.label ?? slot.buildingKind;
     return (
       <div className="flex flex-col items-center leading-tight gap-0.5">
         <ItemIcon kind="placeable" subkind={slot.buildingKind} />
-        <span className="text-zinc-300 text-[10px]">{slot.count}</span>
+        <span className="text-zinc-200 text-[9px] capitalize truncate max-w-[68px]">
+          {label}
+        </span>
+        <span className="text-zinc-400 text-[9px]">×{slot.count}</span>
       </div>
     );
   }
@@ -4489,7 +5703,10 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
     return (
       <div className="flex flex-col items-center leading-tight gap-0.5">
         <ItemIcon kind="ammo" subkind={slot.ammoId} />
-        <span className="text-zinc-300 text-[10px]">{slot.count}</span>
+        <span className="text-zinc-200 text-[9px] truncate max-w-[68px]">
+          {slot.ammoId.replace(/_/g, ' ')}
+        </span>
+        <span className="text-zinc-400 text-[9px]">×{slot.count}</span>
       </div>
     );
   }
@@ -4526,6 +5743,24 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
           style={{ background: `${c}33`, borderColor: c, color: c }}
         >
           +
+        </div>
+        <span className="text-zinc-300 text-[9px]">×{slot.count}</span>
+      </div>
+    );
+  }
+  if (slot.kind === 'upgrade') {
+    const def = UPGRADES[slot.upgradeId];
+    const c = `#${(def?.color ?? 0xfde047).toString(16).padStart(6, '0')}`;
+    // Mk number from the targetTier — short label so the icon
+    // reads as "Mk2 / Mk3 / Mk4" at a glance.
+    const tierLabel = `Mk${def?.targetTier ?? '?'}`;
+    return (
+      <div className="flex flex-col items-center leading-tight gap-0.5">
+        <div
+          className="w-6 h-6 rounded-sm border flex items-center justify-center font-bold text-[8px]"
+          style={{ background: `${c}33`, borderColor: c, color: c }}
+        >
+          {tierLabel}
         </div>
         <span className="text-zinc-300 text-[9px]">×{slot.count}</span>
       </div>
@@ -4670,6 +5905,34 @@ function ItemIcon({
         <line x1="9" y1="9" x2="15" y2="15" stroke="#10b981" strokeWidth="1" />
         <circle cx="9" cy="9" r="1.5" fill="#fbbf24" />
         <circle cx="15" cy="15" r="1.5" fill="#fbbf24" />
+      </svg>
+    );
+  }
+  if (kind === 'placeable' && subkind === 'precision_mill') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <rect x="3" y="3" width="18" height="18" fill="#1e293b" stroke="#000" strokeWidth={stroke} />
+        <rect x="6" y="14" width="12" height="6" fill="#475569" stroke="#0f172a" strokeWidth={stroke} />
+        <circle cx="12" cy="11" r="4.5" fill="#94a3b8" stroke="#1e293b" strokeWidth="1" />
+        <circle cx="12" cy="11" r="1.5" fill="#fbbf24" />
+        <line x1="12" y1="6" x2="12" y2="9" stroke="#cbd5e1" strokeWidth="1.5" />
+        <line x1="12" y1="13" x2="12" y2="16" stroke="#cbd5e1" strokeWidth="1.5" />
+        <line x1="7" y1="11" x2="9" y2="11" stroke="#cbd5e1" strokeWidth="1.5" />
+        <line x1="15" y1="11" x2="17" y2="11" stroke="#cbd5e1" strokeWidth="1.5" />
+      </svg>
+    );
+  }
+  if (kind === 'placeable' && subkind === 'suit_bench') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <rect x="3" y="3" width="18" height="18" fill="#1e3a8a" stroke="#0c1126" strokeWidth={stroke} />
+        {/* Suit silhouette: head, chest, arms */}
+        <circle cx="12" cy="8" r="2.5" fill="#cbd5e1" stroke="#1e293b" strokeWidth="0.7" />
+        <rect x="8" y="11" width="8" height="7" fill="#94a3b8" stroke="#1e293b" strokeWidth="0.7" />
+        <rect x="5" y="12" width="2.5" height="5" fill="#94a3b8" stroke="#1e293b" strokeWidth="0.7" />
+        <rect x="16.5" y="12" width="2.5" height="5" fill="#94a3b8" stroke="#1e293b" strokeWidth="0.7" />
+        {/* Plating accent */}
+        <line x1="9" y1="13" x2="15" y2="13" stroke="#22d3ee" strokeWidth="1" />
       </svg>
     );
   }

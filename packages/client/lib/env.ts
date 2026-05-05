@@ -7,6 +7,13 @@
 // any chunk that doesn't *also* contain a literal reference to that
 // var. That manifested as "Missing required env var" on the /discord
 // page even though the var was set in Vercel.
+//
+// Public vars are exposed via getters so the throw happens at *read*
+// time, not module load. Without this, `next build`'s page-data
+// collection step instantiates this module and throws before any
+// route gets a chance to run — even routes that don't actually use
+// Supabase. Getters preserve the literal `process.env.FOO` reference
+// inside the function body, which is what DefinePlugin needs.
 
 function ensure(name: string, value: string | undefined): string {
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -14,21 +21,29 @@ function ensure(name: string, value: string | undefined): string {
 }
 
 export const publicEnv = {
-  supabaseUrl: ensure(
-    'NEXT_PUBLIC_SUPABASE_URL',
-    process.env.NEXT_PUBLIC_SUPABASE_URL
-  ),
-  supabaseAnonKey: ensure(
-    'NEXT_PUBLIC_SUPABASE_ANON_KEY',
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  ),
-  gameServerWsUrl: ensure(
-    'NEXT_PUBLIC_GAME_SERVER_WS_URL',
-    process.env.NEXT_PUBLIC_GAME_SERVER_WS_URL
-  ),
+  get supabaseUrl(): string {
+    return ensure(
+      'NEXT_PUBLIC_SUPABASE_URL',
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+    );
+  },
+  get supabaseAnonKey(): string {
+    return ensure(
+      'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    );
+  },
+  get gameServerWsUrl(): string {
+    return ensure(
+      'NEXT_PUBLIC_GAME_SERVER_WS_URL',
+      process.env.NEXT_PUBLIC_GAME_SERVER_WS_URL,
+    );
+  },
   // Optional: empty string when Discord login isn't configured. Read
   // via discordEnabledClient() so consumers fall back gracefully.
-  discordClientId: process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID ?? '',
+  get discordClientId(): string {
+    return process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID ?? '';
+  },
 };
 
 export function discordEnabledClient(): boolean {

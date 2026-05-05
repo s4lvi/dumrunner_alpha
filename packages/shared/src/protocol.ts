@@ -189,6 +189,8 @@ export type BuildingKind =
   | 'forge'
   | 'electronics_bench'
   | 'weapon_bench'
+  | 'precision_mill'
+  | 'suit_bench'
   | 'artifact_uplink'
   | 'power_link'
   | 'door'
@@ -232,6 +234,11 @@ export type BuildingState = {
   // here; the player picks them up at the station modal. Non-station
   // buildings leave this empty / undefined.
   output?: InventorySlot[];
+  // Per-bench tier (Phase 2). Currently only meaningful on
+  // weapon_bench: 1-4. A Mk1 bench can only assemble Mk1 weapons;
+  // higher tiers are unlocked by applying a Bench Upgrade item
+  // crafted at the Forge. Undefined for non-bench buildings.
+  benchTier?: 1 | 2 | 3 | 4;
 };
 
 export type SceneLayout = {
@@ -334,6 +341,8 @@ const BuildingKindSchema = z.enum([
   'forge',
   'electronics_bench',
   'weapon_bench',
+  'precision_mill',
+  'suit_bench',
   'artifact_uplink',
   'power_link',
   'door',
@@ -357,7 +366,13 @@ export const SelectHotbarMsgSchema = z.object({
   slot: z.number().int().min(0).max(8),
 });
 
-const slotIndex = z.number().int().min(0).max(35);
+// Generous ceiling for slot indices — inventory base is 36 (9 hotbar
+// + 27 bag) but the cargo_grid suit slot can grow it well past that
+// (Alien-tier cargo grid adds 48). Server-side handlers always
+// re-check the actual `conn.inventory.length` so a value past the
+// real bag size is silently rejected; this Zod cap just keeps wildly
+// out-of-range numbers off the wire.
+const slotIndex = z.number().int().min(0).max(127);
 
 export const InventorySwapMsgSchema = z.object({
   type: z.literal('inventory_swap'),
@@ -495,13 +510,66 @@ export const DetachSuitAffixMsgSchema = z.object({
   attachmentIndex: z.number().int().min(0).max(15),
 });
 
-// Tier-up a weapon at the weapon bench. Consumes materials (registered
-// in TIER_UP_RECIPES on the server) and increments the weapon's tier,
-// preserving every existing piece affix and mod. Adds slots up to the
-// new tier's allotment.
+// Tier-up a weapon at the precision machining mill. Consumes materials
+// (registered in TIER_UP_RECIPES on the server) and increments the
+// weapon's tier, preserving every existing piece affix and mod. Adds
+// slots up to the new tier's allotment.
 export const TierUpWeaponMsgSchema = z.object({
   type: z.literal('tier_up_weapon'),
   weaponInventoryIdx: slotIndex,
+});
+
+// Atomic weapon assembly — the player has staged a target piece +
+// mod configuration in the Weapon Bench UI; on commit, the server
+// diffs against the live weapon by AttachmentInstance.id, validates
+// every newly-attached id is in the player's inventory and every
+// detached id has a slot to land in, and either applies the whole
+// transaction or rejects it. `null` in a piece slot means "leave that
+// piece empty post-assembly." `mods` is the desired full mod list,
+// in order; existing mods not in the list are detached and new mods
+// are consumed from inventory.
+export const AssembleWeaponMsgSchema = z.object({
+  type: z.literal('assemble_weapon'),
+  weaponInventoryIdx: slotIndex,
+  pieces: z.object({
+    frame: z.string().min(1).max(64).nullable().optional(),
+    grip: z.string().min(1).max(64).nullable().optional(),
+    magazine: z.string().min(1).max(64).nullable().optional(),
+    barrel: z.string().min(1).max(64).nullable().optional(),
+  }),
+  mods: z.array(z.string().min(1).max(64)).max(15),
+});
+
+// Atomic suit-part assembly. Mirrors AssembleWeaponMsgSchema for
+// the suit-side: the player has staged a target attachment list
+// for one equipped suit part; on commit, the server diffs against
+// the live part by AttachmentInstance.id, validates each newly-
+// attached id is in inventory and each detached id has a slot to
+// land in, applies the whole transaction or rejects. The desired
+// attachment list is sent in order; existing attachments not in
+// the list are detached, new ones consumed from inventory.
+export const AssembleSuitPartMsgSchema = z.object({
+  type: z.literal('assemble_suit_part'),
+  suitSlot: z.enum([
+    'chassis',
+    'plating',
+    'life_support',
+    'utility_mod',
+    'cargo_grid',
+  ]),
+  attachments: z.array(z.string().min(1).max(64)).max(8),
+});
+
+// Apply a workstation upgrade item from the player's inventory to a
+// specific building. Server validates: building exists + matches the
+// upgrade's targetBuilding, player is in range, building's current
+// benchTier is targetTier - 1 (no skipping), the upgrade item is
+// in inventory. On success, building.benchTier becomes targetTier
+// and one upgrade item is consumed.
+export const UpgradeWorkstationMsgSchema = z.object({
+  type: z.literal('upgrade_workstation'),
+  buildingId: z.string().min(1).max(64),
+  upgradeId: z.string().min(1).max(64),
 });
 
 // Trigger a single consumable (e.g. medkit) from the given inventory
@@ -606,6 +674,9 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   AttachSuitAffixMsgSchema,
   DetachSuitAffixMsgSchema,
   TierUpWeaponMsgSchema,
+  AssembleWeaponMsgSchema,
+  AssembleSuitPartMsgSchema,
+  UpgradeWorkstationMsgSchema,
   UseConsumableMsgSchema,
   ReloadWeaponMsgSchema,
   ChatMsgSchema,
@@ -805,4 +876,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 35;
+export const PROTOCOL_VERSION = 38;
