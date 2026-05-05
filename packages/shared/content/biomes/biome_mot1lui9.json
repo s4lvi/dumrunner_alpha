@@ -1,0 +1,25 @@
+{
+  "id": "biome_mot1lui9",
+  "label": "Basic",
+  "dominantHazard": "heat",
+  "palette": {
+    "floor": "#1f242c",
+    "wall": "#52525b",
+    "accent": "#fde68a"
+  },
+  "generation": {
+    "roomCountMin": 6,
+    "roomCountMax": 12,
+    "roomSizeMin": 4,
+    "roomSizeMax": 9,
+    "corridorWidth": 2,
+    "branching": 0.3,
+    "propDensity": 0.05,
+    "enemyDensity": 0.04,
+    "lootDensity": 0.5,
+    "hazardIntensity": 0.5
+  },
+  "enemyRoster": [],
+  "propPalette": [],
+  "lootBias": []
+}

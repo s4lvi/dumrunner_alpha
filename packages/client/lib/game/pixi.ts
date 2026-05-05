@@ -87,6 +87,15 @@ export type GameInit = {
   // to the procedural shape. Stays optional so the game runs cleanly
   // without an asset_gen service.
   getEnemyTexture?: (kind: string) => string | null;
+  // Optional iso/top-down palette override. Each field is a hex
+  // string ("#RRGGBB"); the renderer parses to numeric. Used by
+  // /editor/biomes preview to render a biome in its own colours.
+  // When omitted the renderer keeps its built-in dark palette.
+  palette?: {
+    floor?: string;
+    wallTop?: string;
+    wallFront?: string;
+  };
 };
 
 // Subset of state we need to apply when the player transitions between scenes

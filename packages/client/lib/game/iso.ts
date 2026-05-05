@@ -123,9 +123,18 @@ type ProjectileSprite = {
   container: Container;
 };
 
+// Default iso palette. The editor's biome preview overrides
+// these via init.palette so the right hues render per-biome.
 const FLOOR_COLOR = 0x232830;
 const WALL_TOP_COLOR = 0x52525b;
 const WALL_FRONT_COLOR = 0x3f3f46;
+
+function parseHex(s: string | undefined, fallback: number): number {
+  if (!s) return fallback;
+  const trimmed = s.startsWith('#') ? s.slice(1) : s;
+  const n = parseInt(trimmed, 16);
+  return Number.isFinite(n) ? n : fallback;
+}
 const WALL_HEIGHT_PX = 18; // visual extrusion height for wall blocks
 // Camera zoom for the iso view. Top-down renders at 1:1; iso's
 // 2:1 dimetric squash makes the world feel further away by
@@ -143,27 +152,60 @@ const PLAYER_SELF_COLOR = 0xfacc15;
 const CORPSE_COLOR = 0x4a1d1d;
 
 export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
+  // Resolved palette. Defaults to the built-in dark dungeon
+  // colours; the biome editor passes its own per-biome hexes
+  // here so the preview pane reflects the live JSON.
+  const floorColor = parseHex(init.palette?.floor, FLOOR_COLOR);
+  const wallTopColor = parseHex(init.palette?.wallTop, WALL_TOP_COLOR);
+  const wallFrontColor = parseHex(init.palette?.wallFront, WALL_FRONT_COLOR);
+
   // ---------- Pixi app ----------
+  // Pixi v8: init() is async + creates the renderer + (by default)
+  // auto-starts the ticker. We track the init promise so destroy
+  // can await it before tearing down — destroying mid-init makes
+  // the auto-render fire against a null renderer ("Cannot read
+  // properties of null (reading 'render')"), the crash that hits
+  // when /editor remounts the preview between selections.
   const app = new Application();
   let appReady = false;
-  void app.init({
+  let destroyed = false;
+  const initPromise = app.init({
     background: 0x0b0d10,
     resizeTo: host,
     antialias: true,
   });
-  // Pixi v8: init is async; we attach the canvas + start drawing
-  // once it resolves. Until then, calls into the GameHandle queue
-  // their data into the state maps and the first tick paints them.
-  void (async () => {
-    await app.init({
-      background: 0x0b0d10,
-      resizeTo: host,
-      antialias: true,
-    });
+  void initPromise.then(() => {
+    if (destroyed) {
+      // Caller already asked us to tear down. Don't wire up a
+      // canvas / renderer that's about to be destroyed.
+      teardownPixi();
+      return;
+    }
     appReady = true;
     host.appendChild(app.canvas);
     setupRenderer();
-  })();
+  });
+
+  function teardownPixi() {
+    try {
+      app.ticker?.remove(tick);
+    } catch {
+      /* ticker may already be gone */
+    }
+    try {
+      // Detach the canvas from the host before destroying so
+      // pixi doesn't trip on ResizeObserver disconnect ordering.
+      const canvas = app.canvas as HTMLCanvasElement | undefined;
+      if (canvas?.parentElement === host) host.removeChild(canvas);
+    } catch {
+      /* canvas may not have been attached if init was in flight */
+    }
+    try {
+      app.destroy({ removeView: true }, { children: true });
+    } catch {
+      /* best-effort */
+    }
+  }
 
   // ---------- layers ----------
   // worldLayer holds everything that lives in iso world-space (so
@@ -395,7 +437,7 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
         w2iX(ax, by),
         w2iY(ax, by),
       ]);
-      g.fill({ color: FLOOR_COLOR });
+      g.fill({ color: floorColor });
       floorLayer.addChild(g);
     }
     // Interactables — render as small markers on the floor.
@@ -521,7 +563,7 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
         top[2],
         top[3] - h,
       ]);
-      g.fill({ color: WALL_FRONT_COLOR });
+      g.fill({ color: wallFrontColor });
       g.stroke({ color: 0x0b0d10, width: 1 });
     }
     // South face (between iso(SE) and iso(SW) — bottom of the
@@ -552,7 +594,7 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
       top[6],
       top[7] - h,
     ]);
-    g.fill({ color: WALL_TOP_COLOR });
+    g.fill({ color: wallTopColor });
     g.stroke({ color: 0x0b0d10, width: 1 });
     c.addChild(g);
     // Texture override: UV-map the uploaded image onto the visible
@@ -1038,7 +1080,7 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
     side: number;
   } {
     if (b.kind === "wall") {
-      return { top: WALL_TOP_COLOR, front: WALL_FRONT_COLOR, side: 0x2c2e35 };
+      return { top: wallTopColor, front: wallFrontColor, side: 0x2c2e35 };
     }
     if (b.kind === "power_link") {
       return { top: 0x06b6d4, front: 0x0e7490, side: 0x155e75 };
@@ -1799,6 +1841,12 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
       };
     },
     destroy() {
+      // Mark as destroyed FIRST so the init.then() callback above
+      // sees it and skips rendererSetup. Without this flag, mounting
+      // and unmounting before init resolves (React strict-mode
+      // double-mount, /editor preview remount) causes ticker→render
+      // to fire against a null renderer.
+      destroyed = true;
       unsubOverrides();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
@@ -1810,13 +1858,15 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
         canvas.removeEventListener("pointermove", onPointerMove);
         canvas.removeEventListener("pointerdown", onPointerDown);
       }
-      try {
-        // Pixi v8: explicit destroy releases the renderer + ticker.
-        app.destroy({ removeView: true }, { children: true });
-      } catch {
-        // Best-effort; if Pixi never finished init the destroy
-        // throws — irrelevant once we're tearing down.
+      if (!appReady) {
+        // Init still in flight. Wait it out — destroying a
+        // half-initialised pixi Application makes the auto-
+        // render fire against a null renderer. The init.then()
+        // above sees `destroyed` and calls teardownPixi() once
+        // the renderer is alive enough to dispose cleanly.
+        return;
       }
+      teardownPixi();
     },
   };
 

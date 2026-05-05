@@ -1,0 +1,23 @@
+{
+  "id": "default",
+  "label": "Default",
+  "dominantHazard": "none",
+  "palette": { "floor": "#1f242c", "wall": "#52525b", "accent": "#94a3b8" },
+  "generation": {
+    "roomCountMin": 6,
+    "roomCountMax": 10,
+    "roomSizeMin": 4,
+    "roomSizeMax": 9,
+    "corridorWidth": 2,
+    "branching": 0.3,
+    "propDensity": 0.04,
+    "enemyDensity": 0.03,
+    "lootDensity": 0.4,
+    "hazardIntensity": 0
+  },
+  "enemyRoster": [
+    { "id": "dummy_target", "weight": 1.0 }
+  ],
+  "propPalette": [],
+  "lootBias": []
+}

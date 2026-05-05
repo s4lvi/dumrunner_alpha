@@ -7,7 +7,13 @@
 // support; stubbing the layout now keeps the form work decoupled).
 
 import { useEffect, useState } from 'react';
-import type { BiomeDef, HazardKind } from '@dumrunner/shared';
+import type {
+  BiomeDef,
+  HazardKind,
+  Player,
+  SceneLayout,
+} from '@dumrunner/shared';
+import type { GameInit } from '@/lib/game/pixi';
 import {
   listEntities,
   saveEntity,
@@ -24,8 +30,10 @@ import {
   SliderField,
   TextField,
 } from '../_components/Form';
+import { IsoPreview } from '../_components/IsoPreview';
 
 const HAZARDS: readonly HazardKind[] = [
+  'none',
   'heat',
   'radiation',
   'cold',
@@ -60,6 +68,10 @@ export default function BiomeEditorPage() {
   const [entries, setEntries] = useState<BiomeDef[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<BiomeDef | null>(null);
+  // Tab toggle: 'edit' shows the form, 'preview' shows the
+  // full-pane iso scene rendered with this biome's settings.
+  // Sidebar stays mounted in both so biome switches are quick.
+  const [tab, setTab] = useState<'edit' | 'preview'>('edit');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -161,31 +173,60 @@ export default function BiomeEditorPage() {
         ))}
       </aside>
 
-      {/* Form */}
-      <main className="flex-1 overflow-y-auto p-4 min-w-0">
-        {!draft && (
-          <div className="text-zinc-500 text-sm pt-12 text-center">
-            Select a biome on the left, or create a new one.
-          </div>
-        )}
-        {draft && (
-          <div className="max-w-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h1 className="text-lg font-bold">{draft.label}</h1>
-              <div className="flex gap-2">
-                <Button variant="danger" onClick={onDelete}>
-                  Delete
-                </Button>
-                <Button variant="primary" disabled={saving} onClick={onSave}>
-                  {saving ? 'Saving…' : 'Save'}
-                </Button>
-              </div>
+      {/* Main column: tab strip + active tab content */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex items-center gap-1 px-3 py-1 border-b border-zinc-800 bg-zinc-900/40 shrink-0">
+          <button
+            type="button"
+            onClick={() => setTab('edit')}
+            className={`text-xs px-2 py-1 rounded ${
+              tab === 'edit'
+                ? 'bg-zinc-800 text-zinc-100'
+                : 'text-zinc-400 hover:bg-zinc-800/50'
+            }`}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('preview')}
+            disabled={!draft}
+            className={`text-xs px-2 py-1 rounded ${
+              tab === 'preview'
+                ? 'bg-zinc-800 text-zinc-100'
+                : 'text-zinc-400 hover:bg-zinc-800/50'
+            } ${!draft ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            Preview
+          </button>
+          {draft && (
+            <div className="ml-auto flex gap-2">
+              <Button variant="danger" onClick={onDelete}>
+                Delete
+              </Button>
+              <Button variant="primary" disabled={saving} onClick={onSave}>
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
             </div>
-            {error && (
-              <pre className="bg-red-950/50 border border-red-900 text-red-200 text-[11px] font-mono p-2 rounded mb-3 whitespace-pre-wrap">
-                {error}
-              </pre>
+          )}
+        </div>
+
+        {/* Edit tab — the form */}
+        {tab === 'edit' && (
+          <main className="flex-1 overflow-y-auto p-4 min-w-0">
+            {!draft && (
+              <div className="text-zinc-500 text-sm pt-12 text-center">
+                Select a biome on the left, or create a new one.
+              </div>
             )}
+            {draft && (
+              <div className="max-w-2xl">
+                <h1 className="text-lg font-bold mb-4">{draft.label}</h1>
+                {error && (
+                  <pre className="bg-red-950/50 border border-red-900 text-red-200 text-[11px] font-mono p-2 rounded mb-3 whitespace-pre-wrap">
+                    {error}
+                  </pre>
+                )}
 
             <FormSection title="Identity">
               <TextField
@@ -446,57 +487,126 @@ export default function BiomeEditorPage() {
                 </div>
               )}
             />
-          </div>
+              </div>
+            )}
+          </main>
         )}
-      </main>
 
-      {/* Preview */}
-      <aside className="w-72 shrink-0 border-l border-zinc-800 p-3 overflow-y-auto">
-        <h2 className="text-xs uppercase text-zinc-500 mb-2">Preview</h2>
-        {draft ? (
-          <div className="space-y-3">
-            <div
-              className="h-24 rounded border border-zinc-700"
-              style={{ background: draft.palette.floor }}
-            />
-            <div className="flex gap-1 h-6">
-              <div
-                className="flex-1 rounded border border-zinc-700"
-                style={{ background: draft.palette.wall }}
-                title="wall"
-              />
-              <div
-                className="flex-1 rounded border border-zinc-700"
-                style={{ background: draft.palette.accent }}
-                title="accent"
-              />
+        {/* Preview tab — full-pane iso scene + summary footer */}
+        {tab === 'preview' && draft && (
+          <div className="flex-1 flex flex-col min-h-0 p-3 gap-2">
+            <div className="flex-1 min-h-0">
+              <BiomePreview draft={draft} />
             </div>
-            <div className="text-[11px] text-zinc-400 space-y-0.5 font-mono">
-              <div>id: {draft.id}</div>
-              <div>hazard: {draft.dominantHazard}</div>
-              <div>
-                rooms: {draft.generation.roomCountMin}–
+            <div className="flex items-center gap-2 shrink-0 text-[11px] text-zinc-400 font-mono">
+              <div className="flex gap-0.5">
+                <span
+                  className="inline-block w-4 h-4 rounded border border-zinc-700"
+                  style={{ background: draft.palette.floor }}
+                  title="floor"
+                />
+                <span
+                  className="inline-block w-4 h-4 rounded border border-zinc-700"
+                  style={{ background: draft.palette.wall }}
+                  title="wall"
+                />
+                <span
+                  className="inline-block w-4 h-4 rounded border border-zinc-700"
+                  style={{ background: draft.palette.accent }}
+                  title="accent"
+                />
+              </div>
+              <span>{draft.id}</span>
+              <span>· hazard: {draft.dominantHazard}</span>
+              <span>
+                · rooms {draft.generation.roomCountMin}–
                 {draft.generation.roomCountMax}
-              </div>
-              <div>
-                room size: {draft.generation.roomSizeMin}–
+              </span>
+              <span>
+                · room size {draft.generation.roomSizeMin}–
                 {draft.generation.roomSizeMax}
-              </div>
-              <div>enemies: {draft.enemyRoster.length} kinds</div>
-              <div>props: {draft.propPalette.length} kinds</div>
+              </span>
+              <span className="ml-auto text-zinc-600">
+                Procedural geometry from authored params lands with E3.4.
+              </span>
             </div>
-            <p className="text-[10px] text-zinc-600 leading-snug">
-              Live procgen preview lands with E3.4 (WFC + per-tile
-              sprites). For now, save and check generated dungeons in
-              the live game on the next perihelion.
-            </p>
           </div>
-        ) : (
-          <p className="text-[11px] text-zinc-500">
-            Select or create a biome to preview.
-          </p>
         )}
-      </aside>
+      </div>
     </div>
   );
+}
+
+// ---------- Iso preview ----------
+//
+// Tiny demo dungeon — a single walkable room with the player at
+// centre — rendered in iso with the biome's palette. Re-mounts
+// whenever the relevant biome bits change (palette, room size).
+
+const PREVIEW_TILE = 32;
+const PREVIEW_SELF_ID = 'biome_preview_self';
+
+function BiomePreview({ draft }: { draft: BiomeDef }) {
+  const buildInit = (): GameInit => {
+    // Use the room-size-max as the demo room dimensions so the
+    // preview reflects "big room" feel for biomes that author one.
+    const tilesW = Math.max(6, Math.min(12, draft.generation.roomSizeMax));
+    const tilesH = tilesW;
+    const halfW = (tilesW * PREVIEW_TILE) / 2;
+    const halfH = (tilesH * PREVIEW_TILE) / 2;
+    const layout: SceneLayout = {
+      worldBounds: { x: -1000, y: -1000, w: 2000, h: 2000 },
+      walkables: [
+        { x: -halfW, y: -halfH, w: tilesW * PREVIEW_TILE, h: tilesH * PREVIEW_TILE },
+      ],
+      rooms: [
+        { x: -halfW, y: -halfH, w: tilesW * PREVIEW_TILE, h: tilesH * PREVIEW_TILE },
+      ],
+      spawn: { x: 0, y: 0 },
+      interactables: [],
+      tileSize: PREVIEW_TILE,
+    };
+    const self: Player = {
+      characterId: PREVIEW_SELF_ID,
+      accountId: 'editor',
+      displayName: 'self',
+      x: 0,
+      y: 0,
+      hp: 100,
+      maxHp: 100,
+      stamina: 100,
+      maxStamina: 100,
+      shield: 0,
+      maxShield: 0,
+      alive: true,
+    };
+    return {
+      self,
+      others: [],
+      enemies: [],
+      projectiles: [],
+      loot: [],
+      corpses: [],
+      buildings: [],
+      layout,
+      sendInput: () => {},
+      sendFire: () => {},
+      sendBuild: () => {},
+      sendDemolish: () => {},
+      onNearInteractableChanged: () => {},
+      onNearWorkstationsChanged: () => {},
+      palette: {
+        floor: draft.palette.floor,
+        // Iso uses two wall tones (top + front). Use the biome's
+        // single wall colour for both — the renderer will tweak
+        // shade per face for depth. Accent isn't used yet; saved
+        // for future per-tile tile-textures.
+        wallTop: draft.palette.wall,
+        wallFront: draft.palette.wall,
+      },
+    };
+  };
+  // Cheap signature: anything that affects geometry or palette.
+  const signature = `${draft.id}|${draft.palette.floor}|${draft.palette.wall}|${draft.palette.accent}|${draft.generation.roomSizeMax}`;
+  return <IsoPreview buildInit={buildInit} signature={signature} />;
 }

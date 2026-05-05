@@ -11,9 +11,14 @@ import type {
   AoeConeEffectKind,
   AttackSpec,
   EnemyDef,
+  EnemyState,
   Faction,
   MovementSpec,
+  Player,
+  SceneLayout,
 } from '@dumrunner/shared';
+import { setEnemyVisuals } from '@dumrunner/shared';
+import type { GameInit } from '@/lib/game/pixi';
 import {
   listEntities,
   saveEntity,
@@ -29,6 +34,7 @@ import {
   SliderField,
   TextField,
 } from '../_components/Form';
+import { IsoPreview } from '../_components/IsoPreview';
 
 const FACTIONS: readonly Faction[] = [
   'catacombs',
@@ -404,19 +410,12 @@ export default function EnemyEditorPage() {
         )}
       </main>
 
-      <aside className="w-72 shrink-0 border-l border-zinc-800 p-3 overflow-y-auto">
-        <h2 className="text-xs uppercase text-zinc-500 mb-2">Preview</h2>
+      <aside className="w-80 shrink-0 border-l border-zinc-800 p-3 overflow-y-auto flex flex-col gap-2">
+        <h2 className="text-xs uppercase text-zinc-500">Preview</h2>
         {draft ? (
-          <div className="space-y-3">
-            <div
-              className="h-32 rounded border border-zinc-700 flex items-center justify-center"
-              style={{ background: '#0b0d10' }}
-            >
-              <ProcShape
-                shape={draft.visual.shape}
-                color={draft.visual.color}
-                size={Math.min(48, draft.visual.size * 2.5)}
-              />
+          <>
+            <div className="h-72 shrink-0">
+              <EnemyPreview draft={draft} />
             </div>
             <div className="text-[11px] text-zinc-400 space-y-0.5 font-mono">
               <div>id: {draft.id}</div>
@@ -428,10 +427,12 @@ export default function EnemyEditorPage() {
               <div>biomes: {draft.biomeAffinity.join(', ') || '(none)'}</div>
             </div>
             <p className="text-[10px] text-zinc-600 leading-snug">
-              Live AI sandbox lands once E3.1 wires biome roster
-              spawning. For now, save and verify in the live game.
+              Iso preview shows the procedural billboard at this
+              enemy&apos;s shape / colour / size. Live AI sandbox
+              (let it chase a dummy) lands once E3.1 wires biome
+              roster spawning into the running scene.
             </p>
-          </div>
+          </>
         ) : (
           <p className="text-[11px] text-zinc-500">
             Select or create an enemy to preview.
@@ -763,49 +764,91 @@ function BiomeAffinityField({
   );
 }
 
-function ProcShape({
-  shape,
-  color,
-  size,
-}: {
-  shape: 'circle' | 'square' | 'triangle';
-  color: string;
-  size: number;
-}) {
-  if (shape === 'circle') {
-    return (
-      <div
-        style={{
-          width: size,
-          height: size,
-          borderRadius: '50%',
-          background: color,
-          border: '1px solid #000',
-        }}
-      />
-    );
-  }
-  if (shape === 'square') {
-    return (
-      <div
-        style={{
-          width: size,
-          height: size,
-          background: color,
-          border: '1px solid #000',
-        }}
-      />
-    );
-  }
-  return (
-    <div
-      style={{
-        width: 0,
-        height: 0,
-        borderLeft: `${size / 2}px solid transparent`,
-        borderRight: `${size / 2}px solid transparent`,
-        borderBottom: `${size}px solid ${color}`,
-      }}
-    />
-  );
+// ---------- Iso preview ----------
+//
+// Mounts the iso renderer with a small demo scene: a single
+// walkable room, the local "self" at centre, and one of the
+// draft enemy positioned in front. Updates whenever the
+// visual / shape / colour / size change so iteration is live.
+//
+// Trick: the iso renderer reads enemy visuals from a runtime
+// map (shared/visuals.ts ENEMY_VISUALS) populated at session
+// welcome. The editor has no welcome message, so we manually
+// poke the draft into setEnemyVisuals before mounting.
+
+const PREVIEW_TILE = 32;
+const PREVIEW_SELF_ID = 'enemy_preview_self';
+const PREVIEW_ENEMY_ID = 'enemy_preview_target';
+
+function EnemyPreview({ draft }: { draft: EnemyDef }) {
+  const buildInit = (): GameInit => {
+    // Push the draft visual into the runtime map so the iso
+    // renderer's enemyVisualFor() lookup picks the right shape /
+    // colour / size when it draws the billboard.
+    const colorNum = parseHex(draft.visual.color);
+    setEnemyVisuals({
+      [draft.id]: {
+        shape: draft.visual.shape,
+        color: colorNum,
+        size: draft.visual.size,
+      },
+    });
+    const tiles = 12;
+    const half = (tiles * PREVIEW_TILE) / 2;
+    const layout: SceneLayout = {
+      worldBounds: { x: -1000, y: -1000, w: 2000, h: 2000 },
+      walkables: [{ x: -half, y: -half, w: tiles * PREVIEW_TILE, h: tiles * PREVIEW_TILE }],
+      rooms: [{ x: -half, y: -half, w: tiles * PREVIEW_TILE, h: tiles * PREVIEW_TILE }],
+      spawn: { x: 0, y: 0 },
+      interactables: [],
+      tileSize: PREVIEW_TILE,
+    };
+    const self: Player = {
+      characterId: PREVIEW_SELF_ID,
+      accountId: 'editor',
+      displayName: 'self',
+      x: 0,
+      y: 0,
+      hp: 100,
+      maxHp: 100,
+      stamina: 100,
+      maxStamina: 100,
+      shield: 0,
+      maxShield: 0,
+      alive: true,
+    };
+    const enemy: EnemyState = {
+      id: PREVIEW_ENEMY_ID,
+      kind: draft.id,
+      x: 0,
+      y: -PREVIEW_TILE * 3, // ~3 tiles north of the player
+      hp: draft.stats.hp,
+      maxHp: draft.stats.hp,
+    };
+    return {
+      self,
+      others: [],
+      enemies: [enemy],
+      projectiles: [],
+      loot: [],
+      corpses: [],
+      buildings: [],
+      layout,
+      sendInput: () => {},
+      sendFire: () => {},
+      sendBuild: () => {},
+      sendDemolish: () => {},
+      onNearInteractableChanged: () => {},
+      onNearWorkstationsChanged: () => {},
+    };
+  };
+  // Anything that affects the rendered enemy → remount.
+  const signature = `${draft.id}|${draft.visual.shape}|${draft.visual.color}|${draft.visual.size}|${draft.stats.hp}`;
+  return <IsoPreview buildInit={buildInit} signature={signature} />;
+}
+
+function parseHex(s: string): number {
+  const trimmed = s.startsWith('#') ? s.slice(1) : s;
+  const n = parseInt(trimmed, 16);
+  return Number.isFinite(n) ? n : 0xa855f7;
 }

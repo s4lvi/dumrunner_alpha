@@ -55,7 +55,11 @@ export type LootDrop = z.infer<typeof LootDropSchema>;
 
 // ---------- BiomeDef ----------
 
+// 'none' represents the default / hazard-less biome (e.g.
+// surface base, neutral starter zone). The hazard tick system
+// no-ops for this kind.
 export const HazardKindSchema = z.enum([
+  'none',
   'heat',
   'radiation',
   'cold',
