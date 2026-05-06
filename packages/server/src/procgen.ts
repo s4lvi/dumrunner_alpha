@@ -5,6 +5,7 @@
 
 import type { Interactable, Rect, SceneLayout } from '@dumrunner/shared';
 import { BIOMES } from './biomes.js';
+import { PROPS } from './props.js';
 
 // Initial door placement returned alongside the layout. Each door is a
 // 1×1 building seeded by Scene.constructor at a tile that bridges a
@@ -215,6 +216,14 @@ export function generateFloorLayout(
   };
 }
 
+// Initial prop placement. Same seed shape as enemies, so all
+// players on the cycle see the same scattered barrels / crates.
+export type InitialPropSpawn = {
+  kind: string;       // PropDef.id cross-reference
+  x: number;
+  y: number;
+};
+
 // Initial enemy placement for a dungeon floor. Same seed → same spawns, so
 // two clients joining the same world see the same starting fight.
 export type InitialEnemySpawn = {
@@ -305,6 +314,73 @@ export function generateInitialEnemies(
     }
   }
   return spawns;
+}
+
+// Initial prop placement. Reads the layout's biome propPalette
+// (authored under packages/shared/content/biomes/<id>.json) and
+// stamps weighted picks across walkable tiles up to the biome's
+// propDensity budget. Same (worldSeed, cycle, floorIndex) inputs
+// → same prop layout for every player on the cycle.
+export function generateInitialProps(
+  layout: SceneLayout,
+  worldSeed: number,
+  cycle: number,
+  floorIndex: number,
+): InitialPropSpawn[] {
+  const biome = BIOMES[layout.biome];
+  if (!biome) return [];
+  // Build the weighted pool once. Skip palette entries whose
+  // PropDef hasn't been authored — author warns then, but a
+  // missing prop kind shouldn't break floor generation.
+  const palette = biome.propPalette
+    .filter((entry) => entry.weight > 0 && PROPS[entry.id])
+    .map((entry) => ({
+      id: entry.id,
+      weight: entry.weight,
+      naturalOnly: entry.naturalOnly ?? false,
+      allowDoorway: entry.allowDoorway ?? false,
+    }));
+  if (palette.length === 0) return [];
+  const density = biome.generation.propDensity;
+  if (density <= 0) return [];
+
+  const mixed =
+    (worldSeed * 0x68e31da4) ^
+    (cycle * 0xb5297a4d) ^
+    (floorIndex * 0x9e3779b1);
+  const rng = mulberry32(mixed);
+  const spawns: InitialPropSpawn[] = [];
+  // First room is the entrance — keep it clean of obstacles so
+  // arrival doesn't faceplant into a barrel.
+  const candidateRooms = layout.rooms.slice(1);
+  for (const room of candidateRooms) {
+    const tile = layout.tileSize;
+    const tilesW = Math.max(1, Math.floor(room.w / tile));
+    const tilesH = Math.max(1, Math.floor(room.h / tile));
+    const tilesTotal = tilesW * tilesH;
+    // Budget = density × tile-count, rounded with the rng to
+    // avoid systematic bias toward floor.
+    const budgetExact = density * tilesTotal;
+    const count = Math.floor(budgetExact + rng());
+    if (count === 0) continue;
+    // Reject placement near room edges so props don't clip into
+    // walls (24px inset matches the enemy spawn inset).
+    for (let i = 0; i < count; i++) {
+      const entry = pickWeighted(rng, paletteWeights(palette));
+      const x = room.x + 24 + rng() * Math.max(0, room.w - 48);
+      const y = room.y + 24 + rng() * Math.max(0, room.h - 48);
+      spawns.push({ kind: entry, x, y });
+    }
+  }
+  return spawns;
+}
+
+function paletteWeights(
+  palette: { id: string; weight: number }[],
+): TemplateWeights {
+  const w: TemplateWeights = {};
+  for (const e of palette) w[e.id] = e.weight;
+  return w;
 }
 
 // Scatter loot — material piles dropped into rooms. Same seed → same piles

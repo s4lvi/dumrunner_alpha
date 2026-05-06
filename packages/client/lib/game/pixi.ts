@@ -29,6 +29,7 @@ import {
   type Rect,
   type SceneLayout,
   type ProjectileState,
+  type PropState,
 } from "@dumrunner/shared";
 
 // Must match server: COMBAT.PLAYER_RADIUS in packages/server/src/combat.ts.
@@ -49,6 +50,7 @@ export type GameInit = {
   loot: LootState[];
   corpses: CorpseState[];
   buildings: BuildingState[];
+  props: PropState[];
   layout: SceneLayout | null;
   // Movement intent vector (-1..1 per axis) + sprint flag. Sent at network
   // tick rate; the server is authoritative.
@@ -108,6 +110,7 @@ export type SceneState = {
   loot: LootState[];
   corpses: CorpseState[];
   buildings: BuildingState[];
+  props: PropState[];
   layout: SceneLayout | null;
 };
 
@@ -153,6 +156,9 @@ export type GameHandle = {
   spawnBuilding(b: BuildingState): void;
   setBuildingHp(id: string, hp: number, maxHp: number): void;
   removeBuilding(id: string): void;
+  spawnProp(p: PropState): void;
+  setPropHp(id: string, hp: number, maxHp: number): void;
+  removeProp(id: string): void;
   // Pass a BuildingKind to enter build mode placing that kind, or null to
   // exit. Build mode also requires the current scene to be the surface;
   // pixi enforces that via the layout.tileSize > 0 + sceneId check.
@@ -276,6 +282,13 @@ type RenderedBuilding = {
   hpFill: Graphics;
 };
 
+type RenderedProp = {
+  data: PropState;
+  container: Container;
+  flashOverlay: Graphics;
+  flashUntil: number;
+};
+
 export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   const app = new Application();
   let initialized = false;
@@ -297,6 +310,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   const loot = new Map<string, RenderedLoot>();
   const corpses = new Map<string, RenderedCorpse>();
   const buildings = new Map<string, RenderedBuilding>();
+  const props = new Map<string, RenderedProp>();
 
   const world = new Container();
   const layoutLayer = new Container(); // floor / walkable rects
@@ -476,6 +490,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       for (const l of init.loot) addLoot(l);
       for (const c of init.corpses) addCorpse(c);
       for (const b of init.buildings) addBuilding(b);
+      for (const p of init.props) addProp(p);
 
       // Drain any handle calls that arrived before init resolved.
       const queued = pendingOps.splice(0, pendingOps.length);
@@ -668,6 +683,17 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         e.flashUntil = 0;
       } else {
         e.flashOverlay.alpha = Math.min(0.7, (remaining / 120) * 0.7);
+      }
+    }
+    // Prop hit-flash decay — same shape as enemies'.
+    for (const rp of props.values()) {
+      if (rp.flashUntil <= 0) continue;
+      const remaining = rp.flashUntil - now;
+      if (remaining <= 0) {
+        rp.flashOverlay.alpha = 0;
+        rp.flashUntil = 0;
+      } else {
+        rp.flashOverlay.alpha = Math.min(0.7, (remaining / 120) * 0.7);
       }
     }
 
@@ -1339,6 +1365,32 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const w = rb.data.width * tileSize;
     const ratio = Math.max(0, rb.data.hp / rb.data.maxHp);
     rb.hpFill.rect(2, -6, (w - 4) * ratio, 3).fill({ color: 0x22c55e });
+  }
+
+  // Decorator props — barrels, crates, conduits, etc. Flat
+  // top-down circle with a per-kind tint pulled from the prop's
+  // texture-override colour (or a generic gray if none). No HP
+  // bar by design (see GDD § Props); damage feedback is hit-flash
+  // + the eventual prop_destroyed removal.
+  function addProp(p: PropState) {
+    if (props.has(p.id)) return;
+    const container = new Container();
+    container.position.set(p.x, p.y);
+    const body = new Graphics();
+    body.circle(0, 0, 12).fill({ color: 0x71717a });
+    body.circle(0, 0, 12).stroke({ color: 0x000000, width: 2 });
+    container.addChild(body);
+    const flashOverlay = new Graphics();
+    flashOverlay.circle(0, 0, 12).fill({ color: 0xffffff });
+    flashOverlay.alpha = 0;
+    container.addChild(flashOverlay);
+    lootLayer.addChild(container);
+    props.set(p.id, {
+      data: { ...p },
+      container,
+      flashOverlay,
+      flashUntil: 0,
+    });
   }
 
   function addCorpse(c: CorpseState) {
@@ -2335,6 +2387,30 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       buildings.delete(id);
       buildingsVersion++;
     },
+    spawnProp(p: PropState) {
+      ifReady(() => addProp(p));
+    },
+    setPropHp(id: string, hp: number, maxHp: number) {
+      const rp = props.get(id);
+      if (!rp) return;
+      rp.data.hp = hp;
+      rp.data.maxHp = maxHp;
+      // Hit-flash for visual feedback. No HP bar — props are
+      // intentionally bar-less per the GDD design (sustained
+      // chip-off communicates the breakage).
+      rp.flashUntil = performance.now() + 120;
+      rp.flashOverlay.alpha = 0.7;
+      // Hide-on-zero in case prop_destroyed lands a tick later;
+      // matches the same defence we added for enemy sprites.
+      if (hp <= 0) rp.container.visible = false;
+    },
+    removeProp(id: string) {
+      const rp = props.get(id);
+      if (!rp) return;
+      lootLayer.removeChild(rp.container);
+      rp.container.destroy({ children: true });
+      props.delete(id);
+    },
     setBuildMode(kind: BuildingKind | null) {
       buildKind = kind;
       if (kind !== null) mouseDown = false;
@@ -2375,6 +2451,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         buildings.clear();
         buildingsLayer.removeChildren();
 
+        for (const rp of props.values())
+          rp.container.destroy({ children: true });
+        props.clear();
+
         // FX particles outlive scene boundaries visually but get cleared so
         // residual numbers from the previous scene don't float into this one.
         for (const p of particles) p.obj.destroy({ children: true });
@@ -2400,6 +2480,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         for (const l of state.loot) addLoot(l);
         for (const c of state.corpses) addCorpse(c);
         for (const b of state.buildings) addBuilding(b);
+        for (const p of state.props) addProp(p);
         // Build mode is surface-only; if the new scene has no grid, exit it.
         if ((state.layout?.tileSize ?? 0) <= 0) buildKind = null;
       });
@@ -2472,6 +2553,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         loot: [...loot.values()].map((l) => ({ ...l.data })),
         corpses: [...corpses.values()].map((c) => ({ ...c.data })),
         buildings: [...buildings.values()].map((b) => ({ ...b.data })),
+        props: [...props.values()].map((rp) => ({ ...rp.data })),
         layout: currentLayout,
       };
     },
@@ -2496,6 +2578,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       loot.clear();
       corpses.clear();
       buildings.clear();
+      props.clear();
       for (const it of interactables.values())
         it.container.destroy({ children: true });
       interactables.clear();

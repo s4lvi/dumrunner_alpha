@@ -43,6 +43,7 @@ import type {
   LootState,
   Player,
   ProjectileState,
+  PropState,
   SceneLayout,
 } from '@dumrunner/shared';
 import {
@@ -141,6 +142,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const loot = new Map<string, LootState>();
   const corpses = new Map<string, CorpseState>();
   const buildings = new Map<string, BuildingState>();
+  const props = new Map<string, PropState>();
   const projectiles = new Map<string, ProjectileState>();
   // Server only emits projectile_spawned + projectile_despawned; the client
   // extrapolates motion locally using vx/vy from spawn time. Mirrors the
@@ -152,6 +154,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   for (const l of init.loot) loot.set(l.id, l);
   for (const c of init.corpses) corpses.set(c.id, c);
   for (const b of init.buildings) buildings.set(b.id, b);
+  for (const p of init.props) props.set(p.id, p);
   for (const p of init.projectiles) {
     projectiles.set(p.id, p);
     projectileSpawnedAt.set(p.id, performance.now());
@@ -1021,6 +1024,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     for (const c of corpses.values()) {
       pushSprite(c.x, c.y, CORPSE_COLOR, CORPSE_SIZE);
     }
+    for (const p of props.values()) {
+      // hp=0 races: also defended in setPropHp, but safe-guard
+      // here in case a snapshot brings a dead one in.
+      if (p.hp <= 0) continue;
+      pushSprite(p.x, p.y, 0x71717a, 22);
+    }
     for (const l of loot.values()) {
       let color: number;
       if (l.content.kind === 'material') {
@@ -1364,6 +1373,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     loot.clear();
     corpses.clear();
     buildings.clear();
+    props.clear();
     projectiles.clear();
     projectileSpawnedAt.clear();
     for (const p of [state.self, ...state.players]) players.set(p.characterId, p);
@@ -1371,6 +1381,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     for (const l of state.loot) loot.set(l.id, l);
     for (const c of state.corpses) corpses.set(c.id, c);
     for (const b of state.buildings) buildings.set(b.id, b);
+    for (const p of state.props) props.set(p.id, p);
     for (const p of state.projectiles) {
       projectiles.set(p.id, p);
       projectileSpawnedAt.set(p.id, performance.now());
@@ -1507,6 +1518,20 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     removeBuilding(id) {
       buildings.delete(id);
     },
+    spawnProp(p) {
+      props.set(p.id, p);
+    },
+    setPropHp(id, hp, maxHp) {
+      const p = props.get(id);
+      if (p) {
+        p.hp = hp;
+        p.maxHp = maxHp;
+        if (hp <= 0) props.delete(id); // hide-on-zero defence
+      }
+    },
+    removeProp(id) {
+      props.delete(id);
+    },
     setBuildMode(kind) {
       buildKind = kind;
       // Switching out of build mode discards a queued action so a stale
@@ -1587,6 +1612,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         loot: [...loot.values()].map((l) => ({ ...l })),
         corpses: [...corpses.values()].map((c) => ({ ...c })),
         buildings: [...buildings.values()].map((b) => ({ ...b })),
+        props: [...props.values()].map((p) => ({ ...p })),
         layout,
       };
     },

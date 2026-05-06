@@ -834,6 +834,7 @@ function EnemyPreview({ draft }: { draft: EnemyDef }) {
       loot: [],
       corpses: [],
       buildings: [],
+      props: [],
       layout,
       sendInput: () => {},
       sendFire: () => {},

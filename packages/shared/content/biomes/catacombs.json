@@ -20,7 +20,11 @@
     { "id": "swarmer",      "weight": 1.5 },
     { "id": "chem_bloater", "weight": 0.4 }
   ],
-  "propPalette": [],
+  "propPalette": [
+    { "id": "barrel", "weight": 1.0 },
+    { "id": "crate", "weight": 0.8 },
+    { "id": "explosive_barrel", "weight": 0.4 }
+  ],
   "lootBias": [
     { "materialId": "biotic", "multiplier": 1.6 },
     { "materialId": "wire",   "multiplier": 1.2 }

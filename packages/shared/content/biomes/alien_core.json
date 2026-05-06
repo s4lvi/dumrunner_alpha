@@ -16,7 +16,11 @@
     "hazardIntensity": 0.7
   },
   "enemyRoster": [],
-  "propPalette": [],
+  "propPalette": [
+    { "id": "barrel", "weight": 0.8 },
+    { "id": "crate", "weight": 1.0 },
+    { "id": "explosive_barrel", "weight": 0.5 }
+  ],
   "lootBias": [
     { "materialId": "crystal",  "multiplier": 1.6 },
     { "materialId": "artifact", "multiplier": 1.4 }

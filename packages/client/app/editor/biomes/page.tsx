@@ -592,6 +592,7 @@ function BiomePreview({ draft }: { draft: BiomeDef }) {
       loot: [],
       corpses: [],
       buildings: [],
+      props: [],
       layout,
       sendInput: () => {},
       sendFire: () => {},

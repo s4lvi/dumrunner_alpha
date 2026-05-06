@@ -23,14 +23,16 @@ import { supabase } from './supabase.js';
 import { registry } from './registry.js';
 import { initTemplates } from './ai/templates.js';
 import { initBiomes } from './biomes.js';
+import { initProps } from './props.js';
 import type { World } from './world.js';
 
 // Hydrate JSON-backed content registries before accepting
 // connections. Templates is hard-required (no enemies = no game,
-// throws). Biomes is soft — empty content dir falls back to
-// legacy depth-banded weights for spawning.
+// throws). Biomes + props are soft — empty content dir means no
+// biome variety / no decorators, but the server still boots.
 await initTemplates();
 await initBiomes();
+await initProps();
 
 // Typed dispatch map for inbound client messages. Each key is a
 // ClientMessage['type']; each value handles ONLY that type (TS narrows

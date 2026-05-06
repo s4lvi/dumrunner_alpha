@@ -1,0 +1,13 @@
+{
+  "id": "crate",
+  "label": "Crate",
+  "biomeAffinity": ["sun_bleached", "catacombs", "frozen", "alien_core"],
+  "hp": 60,
+  "solid": true,
+  "onDestroy": "drop_loot",
+  "loot": [
+    { "materialId": "scrap", "min": 2, "max": 4, "chance": 1.0 },
+    { "materialId": "wire", "min": 1, "max": 2, "chance": 0.4 }
+  ],
+  "visual": { "tint": "#a16207" }
+}

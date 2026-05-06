@@ -20,7 +20,12 @@
     { "id": "brute_chaser", "weight": 0.6 },
     { "id": "flame_drone",  "weight": 0.8 }
   ],
-  "propPalette": [],
+  "propPalette": [
+    { "id": "rock", "weight": 1.5, "naturalOnly": true },
+    { "id": "barrel", "weight": 1.0 },
+    { "id": "crate", "weight": 0.6 },
+    { "id": "explosive_barrel", "weight": 0.3 }
+  ],
   "lootBias": [
     { "materialId": "alloy",  "multiplier": 1.4 },
     { "materialId": "scrap",  "multiplier": 1.1 }

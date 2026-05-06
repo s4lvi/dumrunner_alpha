@@ -24,6 +24,7 @@ import type {
   PlayerEffect,
   ProjectileOwnerKind,
   ProjectileState,
+  PropState,
   SceneLayout,
   ServerMessage,
   WeaponFamily,
@@ -62,6 +63,7 @@ import {
   type AiBuildingTarget,
 } from './ai/fsm.js';
 import type { EnemyRuntime } from './ai/runtime.js';
+import { PROPS, type PropRuntime } from './props.js';
 import { rollDropsForKill, killTierBiasFromHp } from './loot.js';
 import {
   ensureBuildingAsset,
@@ -73,6 +75,7 @@ import {
   type InitialDoor,
   type InitialEnemySpawn,
   type InitialLootDrop,
+  type InitialPropSpawn,
 } from './procgen.js';
 import type { AiEnvironment } from './ai/fsm.js';
 
@@ -298,11 +301,17 @@ export class Scene {
   private loot = new Map<string, LootRuntime>();
   private corpses = new Map<string, CorpseRuntime>();
   private buildings = new Map<string, BuildingRuntime>();
+  // Decorator props (barrels, crates, conduits, …). Spawned by
+  // procgen per biome.propPalette; destroyed by player/enemy
+  // damage. Solid props block movement + projectiles via the
+  // same collision helpers buildings use.
+  private props = new Map<string, PropRuntime>();
   // Tracks turret ids we've already logged as "no power" so the log
   // line fires once per power-state transition rather than every
   // tick. Cleared per-id when the turret comes back online.
   private unpoweredLogged = new Set<string>();
   private nextEnemyId = 0;
+  private nextPropId = 0;
   private nextProjectileId = 0;
   private nextCorpseId = 0;
   private nextBuildingId = 0;
@@ -328,7 +337,8 @@ export class Scene {
     layout: SceneLayout | null = null,
     initialSpawns: InitialEnemySpawn[] | null = null,
     initialLoot: InitialLootDrop[] | null = null,
-    initialDoors: InitialDoor[] | null = null
+    initialDoors: InitialDoor[] | null = null,
+    initialProps: InitialPropSpawn[] | null = null,
   ) {
     this.id = id;
     this.kind = kind;
@@ -345,6 +355,26 @@ export class Scene {
     }
     if (kind === 'dungeon_floor' && initialDoors) {
       this.populateDoors(initialDoors);
+    }
+    if (kind === 'dungeon_floor' && initialProps) {
+      this.populateInitialProps(initialProps);
+    }
+  }
+
+  private populateInitialProps(spawns: InitialPropSpawn[]): void {
+    for (const s of spawns) {
+      const def = PROPS[s.kind];
+      if (!def) continue;
+      const id = `prop_${this.nextPropId++}`;
+      this.props.set(id, {
+        id,
+        kind: s.kind,
+        x: s.x,
+        y: s.y,
+        hp: def.hp,
+        maxHp: def.hp,
+        alive: true,
+      });
     }
   }
 
@@ -539,6 +569,7 @@ export class Scene {
     loot: LootState[];
     corpses: CorpseState[];
     buildings: BuildingState[];
+    props: PropState[];
   } {
     return {
       enemies: [...this.enemies.values()].filter((e) => e.alive).map(toEnemyState),
@@ -546,6 +577,7 @@ export class Scene {
       loot: [...this.loot.values()].map(toLootState),
       corpses: [...this.corpses.values()].map(toCorpseState),
       buildings: [...this.buildings.values()].map(toBuildingState),
+      props: [...this.props.values()].filter((p) => p.alive).map(toPropState),
     };
   }
 
@@ -1846,6 +1878,29 @@ export class Scene {
             }
           }
         }
+        // Decorator props — solid props block bullets the same
+        // way as buildings; non-solid (grass tufts, etc) let the
+        // projectile pass.
+        for (const prop of this.props.values()) {
+          if (!prop.alive) continue;
+          const def = PROPS[prop.kind];
+          if (!def || !def.solid) continue;
+          const radius = (this.layout?.tileSize ?? 32) * 0.4 + p.radius;
+          const t = sweptCircleHit(
+            fromX,
+            fromY,
+            stepX,
+            stepY,
+            prop.x,
+            prop.y,
+            radius,
+          );
+          if (t !== null && t < earliestT) {
+            earliestT = t;
+            const target = prop;
+            hitAction = () => this.damageProp(target, p.damage, now);
+          }
+        }
       } else {
         for (const memberId of this.members) {
           const conn = this.bindings.connection(memberId);
@@ -1909,6 +1964,92 @@ export class Scene {
       // No hit — commit the full step.
       p.x = newX;
       p.y = newY;
+    }
+  }
+
+  // Decorator-prop damage. Same shape as buildings: hp counts
+  // down, broadcast on every hit, destruction flips alive=false +
+  // applies the def's onDestroy (drop_loot / explode) before the
+  // entry is removed from this.props.
+  private damageProp(prop: PropRuntime, amount: number, now: number): void {
+    if (!prop.alive || amount <= 0) return;
+    prop.hp = Math.max(0, prop.hp - amount);
+    this.broadcast({
+      type: 'prop_damaged',
+      id: prop.id,
+      hp: prop.hp,
+      maxHp: prop.maxHp,
+    });
+    if (prop.hp > 0) return;
+    prop.alive = false;
+    const def = PROPS[prop.kind];
+    if (def) this.applyPropDestruction(prop, def, now);
+    this.broadcast({ type: 'prop_destroyed', id: prop.id });
+    this.props.delete(prop.id);
+  }
+
+  private applyPropDestruction(
+    prop: PropRuntime,
+    def: import('@dumrunner/shared').PropDef,
+    now: number,
+  ): void {
+    if (def.onDestroy === 'explode' && def.explode) {
+      // AoE damage: walk every entity in the blast radius and
+      // route damage through the standard paths so kill detection
+      // / drops / broadcasts stay consistent. Includes self
+      // (player) — explosive barrels are dangerous to everyone.
+      const r = def.explode.radius;
+      const r2 = r * r;
+      const dmg = def.explode.damage;
+      // Players in radius.
+      for (const memberId of this.members) {
+        const conn = this.bindings.connection(memberId);
+        if (!conn || !conn.alive) continue;
+        const dx = conn.x - prop.x;
+        const dy = conn.y - prop.y;
+        if (dx * dx + dy * dy > r2) continue;
+        this.applyDamageToPlayer(conn.characterId, dmg, now);
+      }
+      // Enemies in radius.
+      for (const enemy of this.enemies.values()) {
+        if (!enemy.alive) continue;
+        const dx = enemy.x - prop.x;
+        const dy = enemy.y - prop.y;
+        if (dx * dx + dy * dy > r2) continue;
+        this.damageEnemy(enemy, dmg, now);
+      }
+      // Chain-react adjacent props — explosive barrel + barrel
+      // adjacency reads as fun emergent behaviour rather than
+      // stacking detonation calculations. Skip self.
+      for (const other of this.props.values()) {
+        if (other === prop || !other.alive) continue;
+        const dx = other.x - prop.x;
+        const dy = other.y - prop.y;
+        if (dx * dx + dy * dy > r2) continue;
+        this.damageProp(other, dmg, now);
+      }
+    }
+    if (def.onDestroy === 'drop_loot' && def.loot) {
+      for (const drop of def.loot) {
+        if (Math.random() > drop.chance) continue;
+        const count =
+          drop.min + Math.floor(Math.random() * (drop.max - drop.min + 1));
+        if (count <= 0) continue;
+        const id = `lp${nextLootCounter()}`;
+        const lr: LootRuntime = {
+          id,
+          content: {
+            kind: 'material',
+            materialId: drop.materialId as MaterialKind,
+            count,
+          },
+          x: prop.x + (Math.random() - 0.5) * 24,
+          y: prop.y + (Math.random() - 0.5) * 24,
+          expiresAt: now + COMBAT.LOOT_TTL_MS,
+        };
+        this.loot.set(id, lr);
+        this.broadcast({ type: 'loot_spawned', loot: toLootState(lr) });
+      }
     }
   }
 
@@ -2761,6 +2902,17 @@ function toCorpseState(c: CorpseRuntime): CorpseState {
     x: c.x,
     y: c.y,
     inventory: c.inventory,
+  };
+}
+
+function toPropState(p: PropRuntime): PropState {
+  return {
+    id: p.id,
+    kind: p.kind,
+    x: p.x,
+    y: p.y,
+    hp: p.hp,
+    maxHp: p.maxHp,
   };
 }
 

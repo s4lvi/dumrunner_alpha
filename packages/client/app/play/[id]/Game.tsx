@@ -578,6 +578,7 @@ export function Game({ serverId }: { serverId: string }) {
             loot: msg.loot,
             corpses: msg.corpses,
             buildings: msg.buildings,
+            props: msg.props,
             layout: msg.layout,
             getEnemyTexture: (kind) => getOverride('enemy', kind),
             ...cb,
@@ -736,6 +737,7 @@ export function Game({ serverId }: { serverId: string }) {
           loot: msg.loot,
           corpses: msg.corpses,
           buildings: msg.buildings,
+          props: msg.props,
           layout: msg.layout,
         });
         break;
@@ -823,6 +825,15 @@ export function Game({ serverId }: { serverId: string }) {
           next.delete(msg.id);
           return next;
         });
+        break;
+      case 'prop_spawned':
+        gameRef.current?.spawnProp(msg.prop);
+        break;
+      case 'prop_damaged':
+        gameRef.current?.setPropHp(msg.id, msg.hp, msg.maxHp);
+        break;
+      case 'prop_destroyed':
+        gameRef.current?.removeProp(msg.id);
         break;
       case 'world_clock':
         setWorldClock({
@@ -1105,6 +1116,7 @@ export function Game({ serverId }: { serverId: string }) {
       loot: snapshot.loot,
       corpses: snapshot.corpses,
       buildings: snapshot.buildings,
+      props: snapshot.props,
       layout: snapshot.layout,
       getEnemyTexture: (kind) =>
         assetIndexRef.current?.getEnemyTexture(kind) ?? null,

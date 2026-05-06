@@ -292,6 +292,20 @@ export type EnemyState = {
   maxHp: number;
 };
 
+// Decorator props (barrels, crates, conduits, …). Static
+// position + HP. `kind` cross-references PropDef.id authored
+// under packages/shared/content/props/. Renderers use it for
+// the visual + texture-override lookup; server uses it for
+// the destruction behaviour (drop_loot / explode).
+export type PropState = {
+  id: string;
+  kind: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+};
+
 export type ProjectileOwnerKind = 'player' | 'enemy';
 
 export type ProjectileState = {
@@ -707,6 +721,7 @@ export type ServerMessage =
       loot: LootState[];
       corpses: CorpseState[];
       buildings: BuildingState[];
+      props: PropState[];
       inventory: Inventory;
       equipment: Equipment;
       hotbarSelection: number;
@@ -743,6 +758,7 @@ export type ServerMessage =
       loot: LootState[];
       corpses: CorpseState[];
       buildings: BuildingState[];
+      props: PropState[];
       equipment: Equipment;
       layout: SceneLayout | null;
     }
@@ -766,6 +782,9 @@ export type ServerMessage =
   | { type: 'building_placed'; building: BuildingState }
   | { type: 'building_damaged'; id: string; hp: number; maxHp: number }
   | { type: 'building_destroyed'; id: string }
+  | { type: 'prop_spawned'; prop: PropState }
+  | { type: 'prop_damaged'; id: string; hp: number; maxHp: number }
+  | { type: 'prop_destroyed'; id: string }
   | {
       // Periodic world-clock broadcast. cycle = current cycle index
       // (1-based). secondsToPerihelion = real seconds until the next horde
@@ -895,4 +914,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 39;
+export const PROTOCOL_VERSION = 40;

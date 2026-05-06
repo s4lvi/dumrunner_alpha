@@ -18,7 +18,11 @@
   "enemyRoster": [
     { "id": "shooter_drone", "weight": 1.0 }
   ],
-  "propPalette": [],
+  "propPalette": [
+    { "id": "rock", "weight": 1.2, "naturalOnly": true },
+    { "id": "barrel", "weight": 0.5 },
+    { "id": "crate", "weight": 0.7 }
+  ],
   "lootBias": [
     { "materialId": "circuit", "multiplier": 1.3 },
     { "materialId": "wire",    "multiplier": 1.2 }

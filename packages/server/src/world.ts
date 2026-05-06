@@ -75,6 +75,7 @@ import {
   generateFloorLayout,
   generateInitialEnemies,
   generateInitialLoot,
+  generateInitialProps,
   generateLockedRoomMeta,
 } from './procgen.js';
 import type { SceneLayout } from '@dumrunner/shared';
@@ -562,6 +563,7 @@ export class World {
       loot: wireSnap.loot,
       corpses: wireSnap.corpses,
       buildings: wireSnap.buildings,
+      props: wireSnap.props,
       inventory,
       equipment: conn.equipment,
       hotbarSelection: conn.hotbarSelection,
@@ -660,6 +662,7 @@ export class World {
       loot: wireSnap.loot,
       corpses: wireSnap.corpses,
       buildings: wireSnap.buildings,
+      props: wireSnap.props,
       equipment: conn.equipment,
       layout: toScene.layout,
     });
@@ -2750,6 +2753,12 @@ export class World {
       floorIndex,
       meta.lockedRoomIndices
     );
+    const initialProps = generateInitialProps(
+      layout,
+      this.worldSeed,
+      this.cycle,
+      floorIndex,
+    );
     const scene = new Scene(
       sceneId,
       'dungeon_floor',
@@ -2757,7 +2766,8 @@ export class World {
       layout,
       initialSpawns,
       initialLoot,
-      meta.doors
+      meta.doors,
+      initialProps,
     );
     this.scenes.set(sceneId, scene);
     return scene;

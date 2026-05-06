@@ -1,0 +1,10 @@
+{
+  "id": "explosive_barrel",
+  "label": "Explosive Barrel",
+  "biomeAffinity": ["sun_bleached", "catacombs", "alien_core"],
+  "hp": 5,
+  "solid": true,
+  "onDestroy": "explode",
+  "explode": { "radius": 96, "damage": 60 },
+  "visual": { "tint": "#dc2626" }
+}

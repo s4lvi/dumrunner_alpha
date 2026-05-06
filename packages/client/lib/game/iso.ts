@@ -49,6 +49,7 @@ import {
   type LootState,
   type Player,
   type ProjectileState,
+  type PropState,
 } from "@dumrunner/shared";
 import type { GameHandle, GameInit, SceneState } from "./pixi";
 import { buildingsToMinimapList, type MinimapSnapshot } from "./minimap";
@@ -117,6 +118,12 @@ type BuildingSprite = {
   container: Container;
   body: Graphics;
   hpBar: Graphics;
+};
+
+type PropSprite = {
+  data: PropState;
+  container: Container;
+  body: Graphics;
 };
 
 type ProjectileSprite = {
@@ -261,6 +268,7 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
   const loot = new Map<string, LootSprite>();
   const corpses = new Map<string, CorpseSprite>();
   const buildings = new Map<string, BuildingSprite>();
+  const props = new Map<string, PropSprite>();
   const projectiles = new Map<string, ProjectileSprite>();
 
   let currentLayout = init.layout;
@@ -993,6 +1001,33 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
     return { data: c, container };
   }
 
+  // ---------- prop sprites ----------
+  // Decorator props (barrels, crates, conduits, etc) — billboard
+  // sprites in iso (no per-prop renderer-side AI / hp bar). The
+  // visual is a simple upright shape with a ground shadow until
+  // textures land via the editor's `prop` upload category.
+  function makePropSprite(p: PropState): PropSprite {
+    const container = new Container();
+    const body = new Graphics();
+    drawPropBody(body);
+    container.addChild(body);
+    placeAtWorld(container, p.x, p.y);
+    return { data: { ...p }, container, body };
+  }
+
+  function drawPropBody(g: Graphics): void {
+    g.clear();
+    // Ground shadow.
+    g.ellipse(0, 0, 14, 7);
+    g.fill({ color: 0x000000, alpha: 0.35 });
+    // Upright crate-ish silhouette so it reads as "stuff" in
+    // the world. Per-kind visuals + texture overrides land
+    // alongside biome content authoring.
+    g.roundRect(-12, -22, 24, 22, 3);
+    g.fill({ color: 0x71717a });
+    g.stroke({ color: 0x0b0d10, width: 1 });
+  }
+
   // ---------- building sprites ----------
   function makeBuildingSprite(b: BuildingState): BuildingSprite {
     const container = new Container();
@@ -1390,6 +1425,11 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
       entityLayer.addChild(sprite.container);
       buildings.set(b.id, sprite);
     }
+    for (const p of init.props) {
+      const sprite = makePropSprite(p);
+      entityLayer.addChild(sprite.container);
+      props.set(p.id, sprite);
+    }
     for (const pr of init.projectiles) {
       const sprite = makeProjectileSprite(pr);
       entityLayer.addChild(sprite.container);
@@ -1722,6 +1762,27 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
       entityLayer.removeChild(s.container);
       buildings.delete(id);
     },
+    spawnProp(p) {
+      if (props.has(p.id)) return;
+      const sprite = makePropSprite(p);
+      entityLayer.addChild(sprite.container);
+      props.set(p.id, sprite);
+    },
+    setPropHp(id, hp, maxHp) {
+      const s = props.get(id);
+      if (!s) return;
+      s.data.hp = hp;
+      s.data.maxHp = maxHp;
+      // Hide-on-zero (defence against the prop_destroyed broadcast
+      // landing a tick after prop_damaged during a renderer swap).
+      if (hp <= 0) s.container.visible = false;
+    },
+    removeProp(id) {
+      const s = props.get(id);
+      if (!s) return;
+      entityLayer.removeChild(s.container);
+      props.delete(id);
+    },
     setBuildMode(kind) {
       buildModeKind = kind;
       // Drop hold-to-fire when entering build mode so a held trigger
@@ -1752,6 +1813,8 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
       corpses.clear();
       for (const s of buildings.values()) entityLayer.removeChild(s.container);
       buildings.clear();
+      for (const s of props.values()) entityLayer.removeChild(s.container);
+      props.clear();
       for (const s of projectiles.values())
         entityLayer.removeChild(s.container);
       projectiles.clear();
@@ -1790,6 +1853,11 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
         entityLayer.addChild(sprite.container);
         buildings.set(b.id, sprite);
       }
+      for (const p of state.props) {
+        const sprite = makePropSprite(p);
+        entityLayer.addChild(sprite.container);
+        props.set(p.id, sprite);
+      }
       for (const pr of state.projectiles) {
         const sprite = makeProjectileSprite(pr);
         entityLayer.addChild(sprite.container);
@@ -1823,6 +1891,7 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
         loot: [...loot.values()].map((l) => l.data),
         corpses: [...corpses.values()].map((c) => c.data),
         buildings: [...buildings.values()].map((b) => b.data),
+        props: [...props.values()].map((p) => p.data),
         layout: currentLayout,
       };
     },

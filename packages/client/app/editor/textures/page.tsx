@@ -362,6 +362,7 @@ function buildDemoInit({
     loot: [],
     corpses: [],
     buildings,
+    props: [],
     layout,
     sendInput: (mx, my, sprint) => onInput(mx, my, sprint),
     sendFire: () => {},
