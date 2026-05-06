@@ -505,6 +505,10 @@ export class World {
       suitSpeedMult: 0,
       suitStaminaRegenBonus: 0,
       suitBuildRadiusBonus: 0,
+      suitHeatResist: 0,
+      suitColdResist: 0,
+      suitRadiationResist: 0,
+      suitToxicResist: 0,
       // Mild grace window so the surface stairs aren't triggered the moment
       // a returning player reconnects on top of them.
       interactCooldownUntil: Date.now() + TRANSITION_COOLDOWN_MS,
@@ -536,6 +540,10 @@ export class World {
     conn.suitSpeedMult = stats.moveSpeedMult;
     conn.suitStaminaRegenBonus = stats.staminaRegenBonus;
     conn.suitBuildRadiusBonus = Math.floor(stats.buildRadiusBonus);
+    conn.suitHeatResist = stats.heatResist;
+    conn.suitColdResist = stats.coldResist;
+    conn.suitRadiationResist = stats.radiationResist;
+    conn.suitToxicResist = stats.toxicResist;
     // Cargo grid: grow/shrink the inventory bag accordingly. Server
     // never drops items — resizeInventory keeps existing entries even
     // if the bonus is removed (cargo unequip).
@@ -2201,6 +2209,10 @@ export class World {
     conn.suitSpeedMult = stats.moveSpeedMult + effectSpeedMult;
     conn.suitStaminaRegenBonus = stats.staminaRegenBonus + effectStaminaRegen;
     conn.suitBuildRadiusBonus = Math.floor(stats.buildRadiusBonus);
+    conn.suitHeatResist = stats.heatResist;
+    conn.suitColdResist = stats.coldResist;
+    conn.suitRadiationResist = stats.radiationResist;
+    conn.suitToxicResist = stats.toxicResist;
     // Resize the bag to match the new cargo bonus. The helper
     // refuses to shrink below the highest non-empty slot, so
     // unequipping a cargo grid is safe.

@@ -64,6 +64,13 @@ export type CarriedPart = {
   // affixes. Older saves that stored plain string defIds get
   // migrated on character hydrate (see worldsnapshot migration).
   appliedAttachments?: import('./inventory').AttachmentInstanceFwd[];
+  // Life-support only: which hazard kind this part specialises
+  // against (highest resist roll). The other 3 hazards roll the
+  // off-coverage value at the same tier. Pre-E3.3 saves omit this
+  // field; the resist computation in inventory.ts falls back to
+  // `defaultSpecialtyForPartId` (deterministic from the part id)
+  // so legacy parts still produce sensible numbers.
+  specialtyHazard?: 'heat' | 'radiation' | 'cold' | 'toxic';
 };
 
 // Active timed buff/debuff on a player. Server tracks the
@@ -261,6 +268,15 @@ export type SceneLayout = {
   // BiomeDef.id authored under packages/shared/content/biomes/.
   // 'default' is the safe / surface starter biome (no hazard).
   biome: string;
+  // Per-room hazard zone category, parallel to `rooms`. Procgen
+  // tags every room with one of 'safe' / 'hazard' / 'extreme'
+  // (corridors are uniformly the 'corridor' category — flat per
+  // GDD design choice). The hazard tick on the server resolves
+  // a player's current room → category → intensity → DPS via the
+  // biome's hazardZoneIntensities table. Optional so pre-E3.3
+  // snapshots (no per-room categories baked in) don't fail to
+  // deserialize; absent ⇒ treat every room as 'hazard'.
+  roomCategories?: Array<'safe' | 'corridor' | 'hazard' | 'extreme'>;
 };
 
 export type Player = {
@@ -737,11 +753,25 @@ export type ServerMessage =
         string,
         { shape: 'square' | 'circle' | 'triangle'; color: number; size: number }
       >;
-      // Biome registry — per-id palette used by the renderer
-      // for layout.biome lookup. Hex strings (renderer parses).
+      // Biome registry — per-id palette + hazard summary used by
+      // the renderer for layout.biome lookup. Hex strings; hazard
+      // fields drive the HUD indicator + client-side hazard DPS
+      // estimate (server is authoritative for damage application).
       biomes: Record<
         string,
-        { floor: string; wall: string; accent: string }
+        {
+          floor: string;
+          wall: string;
+          accent: string;
+          dominantHazard: 'none' | 'heat' | 'radiation' | 'cold' | 'toxic';
+          hazardIntensity: number;
+          hazardZoneIntensities?: Partial<{
+            safe: number;
+            corridor: number;
+            hazard: number;
+            extreme: number;
+          }>;
+        }
       >;
     }
   | {
@@ -914,4 +944,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 40;
+export const PROTOCOL_VERSION = 41;

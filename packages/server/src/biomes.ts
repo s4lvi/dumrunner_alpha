@@ -90,17 +90,40 @@ export function biomeForFloor(
   return pickBandBiome(worldSeed, cycle, bandIndexOf(floorIndex));
 }
 
-// Snapshot for the welcome message. Just the per-id palette;
-// the rest of BiomeDef (generation params, rosters) is server-
-// only.
+// Snapshot for the welcome message. Per-id palette + the hazard
+// fields the client needs to drive the HUD indicator and compute
+// a local-DPS estimate. The rest of BiomeDef (generation params,
+// rosters) is server-only.
 export function getBiomesForWire(): Record<
   string,
-  { floor: string; wall: string; accent: string }
+  {
+    floor: string;
+    wall: string;
+    accent: string;
+    dominantHazard: BiomeDef['dominantHazard'];
+    hazardIntensity: number;
+    hazardZoneIntensities?: BiomeDef['generation']['hazardZoneIntensities'];
+  }
 > {
-  const out: Record<string, { floor: string; wall: string; accent: string }> =
-    {};
+  const out: Record<
+    string,
+    {
+      floor: string;
+      wall: string;
+      accent: string;
+      dominantHazard: BiomeDef['dominantHazard'];
+      hazardIntensity: number;
+      hazardZoneIntensities?: BiomeDef['generation']['hazardZoneIntensities'];
+    }
+  > = {};
   for (const id of Object.keys(BIOMES)) {
-    out[id] = { ...BIOMES[id].palette };
+    const def = BIOMES[id];
+    out[id] = {
+      ...def.palette,
+      dominantHazard: def.dominantHazard,
+      hazardIntensity: def.generation.hazardIntensity,
+      hazardZoneIntensities: def.generation.hazardZoneIntensities,
+    };
   }
   return out;
 }

@@ -60,6 +60,8 @@ function makeBlank(id = 'new_biome'): BiomeDef {
       enemyDensity: 0.04,
       lootDensity: 0.5,
       hazardIntensity: 0.5,
+      safeRoomChance: 0.2,
+      extremeRoomChance: 0.05,
     },
     enemyRoster: [],
     propPalette: [],
@@ -458,6 +460,26 @@ export default function BiomeEditorPage() {
                   setDraft({
                     ...draft,
                     generation: { ...draft.generation, hazardIntensity: v },
+                  })
+                }
+              />
+              <SliderField
+                label="safe-room chance"
+                value={draft.generation.safeRoomChance ?? 0}
+                onChange={(v) =>
+                  setDraft({
+                    ...draft,
+                    generation: { ...draft.generation, safeRoomChance: v },
+                  })
+                }
+              />
+              <SliderField
+                label="extreme-room chance"
+                value={draft.generation.extremeRoomChance ?? 0}
+                onChange={(v) =>
+                  setDraft({
+                    ...draft,
+                    generation: { ...draft.generation, extremeRoomChance: v },
                   })
                 }
               />

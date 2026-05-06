@@ -7,6 +7,10 @@ export * from './inventory';
 export * from './crafting';
 export * from './buildings';
 export * from './visuals';
+// Hazard math (E3.3). Pure functions — both server tick and
+// client HUD indicator import the same helpers so net DPS shown
+// to the player matches what the server applies.
+export * from './hazards';
 export * from './itemNames';
 export * from './weaponStats';
 // Editor-suite content schemas (BiomeDef, EnemyDef, PropDef + their

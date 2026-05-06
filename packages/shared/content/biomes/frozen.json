@@ -13,7 +13,12 @@
     "propDensity": 0.04,
     "enemyDensity": 0.04,
     "lootDensity": 0.55,
-    "hazardIntensity": 0.5
+    "hazardIntensity": 0.5,
+    "safeRoomChance": 0.15,
+    "extremeRoomChance": 0.1,
+    "hazardZoneIntensities": {
+      "corridor": 0.7
+    }
   },
   "enemyRoster": [
     { "id": "shooter_drone", "weight": 1.0 }

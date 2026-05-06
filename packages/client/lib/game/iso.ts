@@ -1952,6 +1952,8 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
         selfId,
         tileSize: currentLayout?.tileSize ?? 32,
         walkables: currentLayout?.walkables ?? [],
+        rooms: currentLayout?.rooms,
+        roomCategories: currentLayout?.roomCategories,
         buildings: buildingsToMinimapList(
           [...buildings.values()].map((rb) => rb.data),
         ),
@@ -1968,6 +1970,9 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
           visible: e.container.visible,
         })),
       };
+    },
+    getSelfPosition() {
+      return { x: selfX, y: selfY };
     },
     destroy() {
       // Mark as destroyed FIRST so the init.then() callback above
