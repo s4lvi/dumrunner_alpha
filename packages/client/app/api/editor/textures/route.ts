@@ -13,7 +13,12 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 const TEXTURES_DIR = path.join(process.cwd(), 'public', 'textures');
-const ALLOWED_CATEGORIES = new Set(['enemy', 'building']);
+const ALLOWED_CATEGORIES = new Set([
+  'enemy',
+  'building',
+  'prop',
+  'material',
+]);
 const SAFE_ID = /^[a-z0-9_-]+$/i;
 const ALLOWED_EXTS = ['png', 'webp', 'jpg'] as const;
 const MAX_BYTES = 5 * 1024 * 1024; // 5 MB per asset — plenty for sprites
