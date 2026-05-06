@@ -9,11 +9,18 @@
 // — same inputs across the cycle yield the same layout, so all
 // players on the same server see the same dive plan.
 
-import { loadBiomes } from '@dumrunner/shared/content/loader';
+import { loadBiomes, loadWorld } from '@dumrunner/shared/content/loader';
 import { setBiomePalettes } from '@dumrunner/shared';
-import type { BiomeDef } from '@dumrunner/shared';
+import type { BiomeDef, WorldDef } from '@dumrunner/shared';
 
 export const BIOMES: Record<string, BiomeDef> = {};
+
+// World config — populated by initBiomes(). bandBiomes maps a
+// band index (as a number) to a biome id; biomeForFloor consults
+// this before doing the random per-band roll, so the dev can
+// pin specific bands (e.g. "first 1-2 levels = default safe
+// zone") without changing the seed math.
+let worldConfig: WorldDef = { bandBiomes: {} };
 
 // Floors per band — same as the GDD's "roughly five floors each".
 export const BAND_SIZE = 5;
@@ -63,6 +70,10 @@ export function pickBandBiome(
   cycle: number,
   bandIndex: number,
 ): string {
+  // World-config override wins. Useful for "first N bands always
+  // default safe-zone" without touching the seed math.
+  const override = worldConfig.bandBiomes[String(bandIndex)];
+  if (override && BIOMES[override]) return override;
   const eligible = eligibleBiomeIds();
   if (eligible.length === 0) return DEFAULT_BIOME_ID;
   const r = bandRng(worldSeed, cycle, bandIndex);
@@ -95,7 +106,17 @@ export function getBiomesForWire(): Record<
 }
 
 export async function initBiomes(): Promise<void> {
-  const defs = await loadBiomes();
+  const [defs, world] = await Promise.all([loadBiomes(), loadWorld()]);
+  worldConfig = world;
+  const overrideKeys = Object.keys(world.bandBiomes);
+  if (overrideKeys.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[biomes] world override active for ${overrideKeys.length} band(s): ${overrideKeys
+        .map((k) => `${k}→${world.bandBiomes[k]}`)
+        .join(', ')}`,
+    );
+  }
   // Empty content dir is a soft fault — we fall back to a
   // hardcoded 'default' biome so the server can still boot
   // without any biome JSON authored. The dungeon spawn picker

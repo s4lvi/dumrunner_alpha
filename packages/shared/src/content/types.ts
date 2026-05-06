@@ -55,6 +55,21 @@ export type LootDrop = z.infer<typeof LootDropSchema>;
 
 // ---------- BiomeDef ----------
 
+// World-level configuration: per-cycle band biome overrides
+// and other knobs that don't fit on any single entity. The
+// shallowBandBiomes map fixes the biome for specific band
+// indices (band 0 = floors 0-4, band 1 = 5-9, …); any band
+// not in the map falls through to the deterministic roll
+// in biomes.ts.
+export const WorldDefSchema = z
+  .object({
+    // Map of band-index → biome id. Use string keys because JSON
+    // doesn't have integer keys; the loader parses them.
+    bandBiomes: z.record(z.string().regex(/^\d+$/), idSchema),
+  })
+  .strict();
+export type WorldDef = z.infer<typeof WorldDefSchema>;
+
 // 'none' represents the default / hazard-less biome (e.g.
 // surface base, neutral starter zone). The hazard tick system
 // no-ops for this kind.

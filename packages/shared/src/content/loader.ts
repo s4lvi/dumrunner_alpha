@@ -21,9 +21,11 @@ import {
   BiomeDefSchema,
   EnemyDefSchema,
   PropDefSchema,
+  WorldDefSchema,
   type BiomeDef,
   type EnemyDef,
   type PropDef,
+  type WorldDef,
 } from './types';
 
 // .../packages/shared/src/content/loader.ts → up two = packages/shared,
@@ -155,6 +157,45 @@ export const saveEnemy = (data: unknown) =>
   saveEntity('enemies', data, EnemyDefSchema);
 export const saveProp = (data: unknown) =>
   saveEntity('props', data, PropDefSchema);
+
+// World config — single file, not file-per-entity. Read at
+// boot; absent / malformed = empty config (no overrides).
+const WORLD_FILE = join(CONTENT_ROOT, 'world.json');
+
+export async function loadWorld(): Promise<WorldDef> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(WORLD_FILE, 'utf8');
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err?.code === 'ENOENT') return { bandBiomes: {} };
+    throw e;
+  }
+  const parsed: unknown = JSON.parse(raw);
+  const result = WorldDefSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(
+      `[content] world.json: ${result.error.toString()}`,
+    );
+  }
+  return result.data;
+}
+
+export async function saveWorld(data: unknown): Promise<WorldDef> {
+  const result = WorldDefSchema.safeParse(data);
+  if (!result.success) {
+    throw new Error(
+      `[content] world save validation failed:\n${result.error.toString()}`,
+    );
+  }
+  await fs.mkdir(CONTENT_ROOT, { recursive: true });
+  await fs.writeFile(
+    WORLD_FILE,
+    JSON.stringify(result.data, null, 2) + '\n',
+    'utf8',
+  );
+  return result.data;
+}
 
 export async function deleteEntity(
   area: 'biomes' | 'enemies' | 'props',
