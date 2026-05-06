@@ -936,13 +936,11 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
       w2iY(-sw, sh),
     ];
     const bodyHeight =
-      sprite.data.kind === "wall"
+      sprite.data.kind === "wall" || sprite.data.kind === "door"
         ? WALL_HEIGHT_PX
-        : sprite.data.kind === "door"
-          ? Math.round(WALL_HEIGHT_PX * 0.35)
-          : isStation
-            ? Math.round(WALL_HEIGHT_PX * 0.5)
-            : Math.round(WALL_HEIGHT_PX * 0.75);
+        : isStation
+          ? Math.round(WALL_HEIGHT_PX * 0.33)
+          : Math.round(WALL_HEIGHT_PX * 0.75);
     addTexturedCubeFaces(sprite.container, top, bodyHeight, tex);
   }
 
@@ -1105,7 +1103,7 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
         : b.kind === "door"
           ? Math.round(WALL_HEIGHT_PX * 0.35)
           : isStation
-            ? Math.round(WALL_HEIGHT_PX * 0.5)
+            ? Math.round(WALL_HEIGHT_PX * 0.33)
             : Math.round(WALL_HEIGHT_PX * 0.75);
     const palette = buildingPalette(b);
     // Front face (south-east edge — the two tile edges visible to

@@ -16,7 +16,9 @@ const TEXTURES_DIR = path.join(process.cwd(), 'public', 'textures');
 const ALLOWED_CATEGORIES = new Set([
   'enemy',
   'building',
+  'building_top',
   'prop',
+  'prop_top',
   'material',
 ]);
 const SAFE_ID = /^[a-z0-9_-]+$/i;

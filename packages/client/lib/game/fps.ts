@@ -196,6 +196,18 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // so textured strips render on top of the solid fallback for
   // columns whose hit kind has a texture override.
   const wallTexLayer = new Container();
+  // Top-surface rendering for short obstacles. Two layers:
+  //   wallTopLayer — Mesh quads with proper UVs for textured
+  //     top surfaces, projected from the obstacle's near + far
+  //     edges. Per-frame meshes get destroy()'d on clear so
+  //     MeshGeometry buffers don't leak.
+  //   wallCapLayer — solid-colour seam + face fallback when no
+  //     top texture is authored. Single reusable Graphics; rect
+  //     calls + clear() per frame.
+  // Both sit ABOVE wallTexLayer so the top surface always draws
+  // on top of any front-face transparency.
+  const wallTopLayer = new Container();
+  const wallCapLayer = new Graphics();
   const spriteLayer = new Graphics();
   // Textured sprite columns (enemies). Same per-column z-test as
   // the flat-color sprite pass; rendered as one Mesh per visible
@@ -274,6 +286,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   shieldText.anchor.set(0.5, 0.5);
   root.addChild(wallLayer);
   root.addChild(wallTexLayer);
+  root.addChild(wallTopLayer);
+  root.addChild(wallCapLayer);
   root.addChild(spriteLayer);
   root.addChild(spriteTexLayer);
   root.addChild(hudLayer);
@@ -564,8 +578,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     spriteLayer.clear();
     // Drop last frame's textured meshes. Cheap — typical counts
     // are sub-500 quads across walls + sprites.
-    wallTexLayer.removeChildren();
-    spriteTexLayer.removeChildren();
+    // Mesh-per-column wall + sprite passes allocate fresh
+    // MeshGeometry every frame. removeChildren() only detaches —
+    // it doesn't release the GPU buffers — so we explicitly
+    // destroy each child to keep memory flat across long
+    // sessions.
+    disposeChildren(wallTexLayer);
+    disposeChildren(wallTopLayer);
+    disposeChildren(spriteTexLayer);
+    wallCapLayer.clear();
 
     // Per-scene horizon palette: bright dusk on the surface, dark void in
     // a dungeon. Both gradients meet at the horizon line so walls & sprites
@@ -625,77 +646,161 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const ux = rdx / rlen;
       const uy = rdy / rlen;
 
-      const hit = castRay(selfX, selfY, ux, uy);
-      if (!hit) continue;
+      const hits = castRay(selfX, selfY, ux, uy);
+      if (hits.length === 0) continue;
 
-      // Perp distance = projection of the hit onto the camera forward axis.
-      // Removes fish-eye exactly (no cos approximation needed).
-      const perp = hit.dist * (ux * dirX + uy * dirY);
-      if (perp <= 0.0001) continue;
-      zBuffer[i] = perp;
+      // Z-buffer holds the FAREST hit (the back wall). Sprites
+      // behind everything we hit are properly occluded. Sprites
+      // that should appear above a short obstacle are admittedly
+      // imperfect with a single per-column z value — fixing that
+      // properly needs per-column min-y tracking, deferred.
+      const zHit = hits[hits.length - 1];
+      const zPerp = zHit.dist * (ux * dirX + uy * dirY);
+      if (zPerp <= 0.0001) continue;
+      zBuffer[i] = zPerp;
 
-      // Per-kind world height. Stations (workbench / forge /
-      // weapon_bench / etc) are half the height of a wall so they
-      // read as workstations rather than full walls. Doors are
-      // shorter still; full walls + dungeon walls keep the
-      // canonical WALL_HEIGHT_WORLD.
-      const heightMult = stationHeightMultFor(hit);
-      const fullWallH = (WALL_HEIGHT_WORLD * H) / perp;
-      const lineH = fullWallH * heightMult;
-      // Anchor the wall on the floor line at this distance, so a
-      // half-height obstacle sits on the ground rather than
-      // floating around the horizon.
-      const groundY = horizonY + fullWallH / 2;
-      const top = groundY - lineH;
+      // Paint slices far-to-near so closer obstacles overdraw
+      // the back wall. Each slice ground-anchored: short
+      // obstacles sit on the floor, full walls span the canonical
+      // height range around the horizon.
+      for (let h = hits.length - 1; h >= 0; h--) {
+        const hit = hits[h];
+        const perp = hit.dist * (ux * dirX + uy * dirY);
+        if (perp <= 0.0001) continue;
+        const heightMult = stationHeightMultFor(hit);
+        const fullWallH = (WALL_HEIGHT_WORLD * H) / perp;
+        const lineH = fullWallH * heightMult;
+        const groundY = horizonY + fullWallH / 2;
+        const top = groundY - lineH;
 
-      const baseColor = hit.isBuilding
-        ? hit.faceNS
-          ? BUILDING_WALL_COLOR_NS
-          : BUILDING_WALL_COLOR_EW
-        : hit.faceNS
-          ? WALL_COLOR_NS
-          : WALL_COLOR_EW;
-      // Distance fog: blend the wall toward the horizon colour so the far
-      // edge of vision fades out instead of clipping to a flat hue.
-      const color = applyFog(baseColor, perp, palette.fog);
-      // Solid-fill column always renders as a base layer. Textured
-      // wall strips are layered on top in wallTexLayer when an
-      // override exists for this hit's kind.
-      wallLayer.rect(screenX, top, COLUMN_STEP_PX, lineH).fill({ color });
+        const texKind = hit.isBuilding ? hit.buildingKind ?? 'wall' : 'wall';
+        const tex = getFpsOverrideTexture('building', texKind);
 
-      // Texture pass. Resolve the right override (per-kind for
-      // player buildings, fallback to 'wall' for dungeon walls).
-      // Each column samples a single texel column from the
-      // texture, stretched to the projected line height — the
-      // standard Wolfenstein-style raycaster texturing.
-      const texKind = hit.isBuilding ? hit.buildingKind ?? 'wall' : 'wall';
-      const tex = getFpsOverrideTexture('building', texKind);
-      if (tex) {
-        const texW = tex.width || 1;
-        // Width of a single texel-column in UV space, plus a tiny
-        // bias so the quad isn't degenerate when texW is small.
-        const uvX = Math.max(0, Math.min(0.999, hit.wallU));
-        const uvX2 = Math.min(1, uvX + 1 / texW);
-        const positions = new Float32Array([
-          screenX, top,
-          screenX + COLUMN_STEP_PX, top,
-          screenX + COLUMN_STEP_PX, top + lineH,
-          screenX, top + lineH,
-        ]);
-        const uvs = new Float32Array([
-          uvX, 0,
-          uvX2, 0,
-          uvX2, 1,
-          uvX, 1,
-        ]);
-        const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
-        const geom = new MeshGeometry({ positions, uvs, indices });
-        const mesh = new Mesh({ geometry: geom, texture: tex });
-        // Distance-fog tint. White stays full-bright at near
-        // range; far walls fade toward palette.fog so textured
-        // walls match the solid-color path's distance shading.
-        mesh.tint = applyFog(0xffffff, perp, palette.fog);
-        wallTexLayer.addChild(mesh);
+        // Solid-fill column ONLY when no texture exists. A
+        // solid underlay shining through a texture's transparent
+        // pixels reads as "gray paneling behind my barrel" —
+        // wrong. With no fill, transparent texels reveal whatever
+        // was painted earlier in the far-to-near pass (the back
+        // wall, sky, or floor) — correct.
+        if (!tex) {
+          const baseColor = hit.isBuilding
+            ? hit.faceNS
+              ? BUILDING_WALL_COLOR_NS
+              : BUILDING_WALL_COLOR_EW
+            : hit.faceNS
+              ? WALL_COLOR_NS
+              : WALL_COLOR_EW;
+          const color = applyFog(baseColor, perp, palette.fog);
+          wallLayer.rect(screenX, top, COLUMN_STEP_PX, lineH).fill({ color });
+        }
+
+        if (tex) {
+          const texW = tex.width || 1;
+          const uvX = Math.max(0, Math.min(0.999, hit.wallU));
+          const uvX2 = Math.min(1, uvX + 1 / texW);
+          const positions = new Float32Array([
+            screenX, top,
+            screenX + COLUMN_STEP_PX, top,
+            screenX + COLUMN_STEP_PX, top + lineH,
+            screenX, top + lineH,
+          ]);
+          const uvs = new Float32Array([
+            uvX, 0,
+            uvX2, 0,
+            uvX2, 1,
+            uvX, 1,
+          ]);
+          const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+          const geom = new MeshGeometry({ positions, uvs, indices });
+          const mesh = new Mesh({ geometry: geom, texture: tex });
+          mesh.tint = applyFog(0xffffff, perp, palette.fog);
+          wallTexLayer.addChild(mesh);
+        }
+
+        // Top surface for short obstacles. Floor-cast: project
+        // the obstacle's near + far world edges (entry/exit
+        // points along the ray) at the obstacle's top height,
+        // build a textured Mesh quad between them. UVs sample
+        // 'building_top' / 'prop_top' textures; falls back to
+        // a flat-colour cap strip when no top texture is
+        // authored.
+        if (heightMult < 1.0) {
+          // Far-edge perp distance and screen y. The top
+          // surface stretches from near (current `top` y) to
+          // far (smaller y, closer to horizon).
+          const farPerp = hit.exitDist * (ux * dirX + uy * dirY);
+          if (farPerp > 0.0001 && farPerp > perp) {
+            const obstacleH = WALL_HEIGHT_WORLD * heightMult;
+            const yFar =
+              horizonY + ((WALL_HEIGHT_WORLD * 0.5 - obstacleH) * H) / farPerp;
+            const yNear = top;
+            // Skip degenerate strips.
+            if (yNear - yFar > 0.5) {
+              const topTexKind = hit.isBuilding
+                ? hit.buildingKind ?? 'wall'
+                : 'wall';
+              const topTex = getFpsOverrideTexture(
+                'building_top',
+                topTexKind,
+              );
+              if (topTex) {
+                // World coords of the entry / exit points; UVs
+                // wrap mod tileSize so the top texture tiles
+                // across multi-tile obstacles consistently with
+                // the floor / wall texturing convention.
+                const tile = layout?.tileSize ?? 32;
+                const nx = selfX + ux * hit.dist;
+                const ny = selfY + uy * hit.dist;
+                const fx = selfX + ux * hit.exitDist;
+                const fy = selfY + uy * hit.exitDist;
+                const uNear =
+                  (((nx % tile) + tile) % tile) / tile;
+                const vNear =
+                  (((ny % tile) + tile) % tile) / tile;
+                const uFar = (((fx % tile) + tile) % tile) / tile;
+                const vFar = (((fy % tile) + tile) % tile) / tile;
+                const positions = new Float32Array([
+                  screenX, yFar,
+                  screenX + COLUMN_STEP_PX, yFar,
+                  screenX + COLUMN_STEP_PX, yNear,
+                  screenX, yNear,
+                ]);
+                const uvs = new Float32Array([
+                  uFar, vFar,
+                  uFar, vFar,
+                  uNear, vNear,
+                  uNear, vNear,
+                ]);
+                const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+                const geom = new MeshGeometry({ positions, uvs, indices });
+                const mesh = new Mesh({ geometry: geom, texture: topTex });
+                // Distance-fog: tint by the average of near +
+                // far perp distances for a smooth seam with
+                // adjacent columns' wall meshes.
+                const avgPerp = (perp + farPerp) * 0.5;
+                mesh.tint = applyFog(0xffffff, avgPerp, palette.fog);
+                wallTopLayer.addChild(mesh);
+              } else {
+                // Fallback: solid two-tone cap when no top texture
+                // exists. Reads as a 3D top edge regardless of
+                // the front-face texture's alpha.
+                const seamColor = applyFog(0x0b0d10, perp, palette.fog);
+                const faceColor = applyFog(0xa1a1aa, perp, palette.fog);
+                wallCapLayer
+                  .rect(
+                    screenX,
+                    yFar,
+                    COLUMN_STEP_PX,
+                    Math.max(0, yNear - yFar),
+                  )
+                  .fill({ color: faceColor });
+                wallCapLayer
+                  .rect(screenX, yFar, COLUMN_STEP_PX, 1)
+                  .fill({ color: seamColor });
+              }
+            }
+          }
+        }
       }
     }
 
@@ -1217,9 +1322,31 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     if (!hit.isBuilding || !hit.buildingKind) return 1.0;
     const def = BUILDING_REGISTRY[hit.buildingKind];
     if (!def) return 1.0;
-    if (hit.buildingKind === 'door') return 0.35;
-    if (def.isStation) return 0.5;
+    // Doors are tagged isStation in the registry but visually
+    // they're full-height (you walk through them, not over them).
+    // Special-case before the isStation check.
+    if (hit.buildingKind === 'door') return 1.0;
+    // Workstations are roughly waist-high — 1/3 of a wall reads
+    // as "you can see over it" rather than "short wall".
+    if (def.isStation) return 0.33;
     return 1.0;
+  }
+
+  // Destroys + removes every child of a layer. Call this on
+  // per-frame mesh containers (wallTexLayer / spriteTexLayer)
+  // because the meshes hold MeshGeometry buffers that leak when
+  // only detached — over a few minutes of play the heap grows
+  // until the tab dies.
+  function disposeChildren(layer: Container): void {
+    while (layer.children.length > 0) {
+      const child = layer.children[0];
+      layer.removeChildAt(0);
+      try {
+        child.destroy({ children: true });
+      } catch {
+        /* best-effort; some children may already be torn down */
+      }
+    }
   }
 
   function applyFog(base: number, dist: number, fog: number): number {
@@ -1249,6 +1376,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // texture pass pick the right per-kind override.
   type RayHit = {
     dist: number;
+    // Along-ray distance at which the ray EXITS the hit tile.
+    // For full-height walls it's irrelevant (ray stops there);
+    // for short obstacles it defines the far edge of the top
+    // surface used by the floor-cast top renderer.
+    exitDist: number;
     faceNS: boolean;
     isBuilding: boolean;
     wallU: number;
@@ -1266,15 +1398,22 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   //   - a player-placed building occupies the tile.
   // Surfaces with no walkables (open world) treat every empty tile as
   // walkable; only buildings act as walls.
+  // Walks the ray collecting every wall / building tile in its
+  // path. Stops at the first FULL-HEIGHT obstruction (walls,
+  // doors and stations are short and let the ray pass; the back
+  // wall behind a workstation still gets rendered). Hits come
+  // back near-to-far; the render loop paints them far-to-near so
+  // closer slices correctly overdraw the back wall.
   function castRay(
     ox: number,
     oy: number,
     dx: number,
-    dy: number
-  ): RayHit | null {
-    if (!layout) return null;
+    dy: number,
+  ): RayHit[] {
+    const out: RayHit[] = [];
+    if (!layout) return out;
     const tileSize = layout.tileSize;
-    if (tileSize <= 0) return null;
+    if (tileSize <= 0) return out;
     const hasWalkables = layout.walkables.length > 0;
 
     // Avoid divide-by-zero on a perfectly axis-aligned ray. ε keeps the
@@ -1315,7 +1454,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         my += stepY;
         faceNS = true; // crossed a north/south tile face
       }
-      if (dist > RAY_MAX_DIST) return null;
+      if (dist > RAY_MAX_DIST) return out;
 
       // Wall classification at the tile we just stepped into.
       const cx = (mx + 0.5) * tileSize;
@@ -1338,10 +1477,27 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           wallU = ((hitY % tileSize) + tileSize) % tileSize;
           wallU /= tileSize;
         }
-        return { dist, faceNS, isBuilding, wallU, buildingKind };
+        // Along-ray distance at which we EXIT the tile. We just
+        // entered, so sideX/sideY have been advanced past this
+        // tile boundary on whichever axis we crossed; the next
+        // boundary is min(current sideX, current sideY).
+        const exitDist = Math.min(sideX, sideY);
+        const hit: RayHit = {
+          dist,
+          exitDist,
+          faceNS,
+          isBuilding,
+          wallU,
+          buildingKind,
+        };
+        out.push(hit);
+        // Stop only when we hit a full-height obstruction. Short
+        // obstacles (workstations, doors) are recorded then we
+        // keep walking to find the wall behind them.
+        if (stationHeightMultFor(hit) >= 1.0) return out;
       }
     }
-    return null;
+    return out;
   }
 
 

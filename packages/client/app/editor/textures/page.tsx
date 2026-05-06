@@ -184,7 +184,7 @@ export default function EditorPage() {
             <TextureRow key={`enemy-${id}`} category="enemy" id={id} />
           ))}
         </Section>
-        <Section title="Decorators">
+        <Section title="Decorators (front)">
           {propIds.length === 0 && (
             <p className="text-[10px] text-zinc-500 px-2">
               No decorators authored yet. Add some at{' '}
@@ -195,9 +195,27 @@ export default function EditorPage() {
             <TextureRow key={`prop-${id}`} category="prop" id={id} />
           ))}
         </Section>
-        <Section title="Buildings">
+        <Section title="Decorators (top)">
+          {propIds.map((id) => (
+            <TextureRow
+              key={`prop_top-${id}`}
+              category="prop_top"
+              id={id}
+            />
+          ))}
+        </Section>
+        <Section title="Buildings (front)">
           {BUILDING_KINDS.map((id) => (
             <TextureRow key={`building-${id}`} category="building" id={id} />
+          ))}
+        </Section>
+        <Section title="Buildings (top)">
+          {BUILDING_KINDS.map((id) => (
+            <TextureRow
+              key={`building_top-${id}`}
+              category="building_top"
+              id={id}
+            />
           ))}
         </Section>
         <Section title="Materials">

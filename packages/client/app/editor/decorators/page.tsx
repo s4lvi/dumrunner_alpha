@@ -298,13 +298,27 @@ export default function DecoratorEditorPage() {
 
             <FormSection title="Visual">
               <p className="text-[10px] text-zinc-500">
-                Upload a billboard sprite below — saved under category{' '}
-                <code className="text-zinc-300">prop</code>, id{' '}
+                Upload a billboard sprite (front face) and an
+                optional top-surface texture below. Front saves
+                under category <code className="text-zinc-300">prop</code>;
+                top saves under{' '}
+                <code className="text-zinc-300">prop_top</code>, id{' '}
                 <code className="text-zinc-300">{draft.id}</code>.
                 The tint is the procedural fallback when no sprite
                 is uploaded.
               </p>
-              <TextureRow category="prop" id={draft.id} hideLabel />
+              <div>
+                <div className="text-[10px] text-zinc-500 px-2 mb-1">
+                  Front
+                </div>
+                <TextureRow category="prop" id={draft.id} hideLabel />
+              </div>
+              <div>
+                <div className="text-[10px] text-zinc-500 px-2 mb-1">
+                  Top
+                </div>
+                <TextureRow category="prop_top" id={draft.id} hideLabel />
+              </div>
               <ColorField
                 label="tint (fallback)"
                 value={draft.visual.tint ?? '#52525b'}
