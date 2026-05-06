@@ -30,6 +30,7 @@ import {
   Mesh,
   MeshGeometry,
   Text,
+  TilingSprite,
   type Texture,
 } from 'pixi.js';
 import {
@@ -195,6 +196,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // Textured wall columns. Sits above wallLayer (sky+floor+solid)
   // so textured strips render on top of the solid fallback for
   // columns whose hit kind has a texture override.
+  // Skybox sprite (or sky gradient when no biome_skybox texture).
+  // Below everything so walls / floor / ceiling overdraw it.
+  const skyboxLayer = new Container();
+  // Per-column floor / ceiling Meshes — same Mesh-quad-per-column
+  // technique used for short-obstacle tops, just at world_height
+  // 0 (floor) or WALL_HEIGHT_WORLD (ceiling). Below wallLayer so
+  // walls overdraw.
+  const floorLayer = new Container();
+  const ceilingLayer = new Container();
   const wallTexLayer = new Container();
   // Top-surface rendering for short obstacles. Two layers:
   //   wallTopLayer — Mesh quads with proper UVs for textured
@@ -284,7 +294,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   hpText.anchor.set(0.5, 0.5);
   staminaText.anchor.set(0.5, 0.5);
   shieldText.anchor.set(0.5, 0.5);
+  root.addChild(skyboxLayer);
   root.addChild(wallLayer);
+  root.addChild(floorLayer);
+  root.addChild(ceilingLayer);
   root.addChild(wallTexLayer);
   root.addChild(wallTopLayer);
   root.addChild(wallCapLayer);
@@ -586,11 +599,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     disposeChildren(wallTexLayer);
     disposeChildren(wallTopLayer);
     disposeChildren(spriteTexLayer);
+    disposeChildren(floorLayer);
+    disposeChildren(ceilingLayer);
+    disposeChildren(skyboxLayer);
     wallCapLayer.clear();
 
     // Per-scene horizon palette: bright dusk on the surface, dark void in
     // a dungeon. Both gradients meet at the horizon line so walls & sprites
-    // can fog into the same colour as they recede.
+    // can fog into the same colour as they recede. The gradients act as a
+    // FALLBACK when no biome skybox / floor texture is uploaded — biome
+    // meshes paint over them in the floor / ceiling / skybox layers.
     const palette = paletteForScene();
     if (horizonY > 0) {
       drawVerticalGradient(
@@ -616,6 +634,37 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         FLOOR_GRADIENT_STEPS
       );
     }
+
+    // Skybox: a horizontal-panning TilingSprite covering the sky
+    // region. Pans with yaw so turning rotates the world. Only
+    // renders when a biome_skybox texture exists; otherwise the
+    // sky gradient stays visible.
+    const biomeId = layout?.biome ?? 'default';
+    const skyTex = getFpsOverrideTexture('biome_skybox', biomeId);
+    if (skyTex && horizonY > 0) {
+      const spr = new TilingSprite({
+        texture: skyTex,
+        width: W,
+        height: horizonY,
+      });
+      // 360° (yaw 0 → 2π) corresponds to one full texture width
+      // of horizontal pan. tilePosition wraps automatically.
+      const texW = skyTex.width || W;
+      spr.tilePosition.x = -(yaw / (Math.PI * 2)) * texW;
+      // Stretch vertically so the texture height fits the sky
+      // region; horizontal stays at native scale for tiling.
+      spr.tileScale.y = horizonY / (skyTex.height || horizonY);
+      skyboxLayer.addChild(spr);
+    }
+
+    // Biome floor + ceiling textures resolved once per frame
+    // (constant per scene). Floor / ceiling per-column meshes
+    // only build when the override is authored; otherwise the
+    // sky / floor gradients still show through.
+    const floorTex = getFpsOverrideTexture('biome_floor', biomeId);
+    const ceilTex = getFpsOverrideTexture('biome_ceiling', biomeId);
+    const camHeight = WALL_HEIGHT_WORLD / 2;
+    const floorTile = layout?.tileSize ?? 32;
 
     // Per-column raycast. Uses camera-plane rays (Lode-style) rather than
     // an angular sweep so wall projection is linear-in-screen-x and the
@@ -799,6 +848,88 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
                   .fill({ color: seamColor });
               }
             }
+          }
+        }
+      }
+
+      // Per-column floor + ceiling meshes. Same Mesh-quad-per-
+      // column technique as the obstacle tops: project the back-
+      // wall hit (far) and the player's near plane (perp =
+      // 2 * camHeight; corresponds to screen-bottom for floor,
+      // screen-top for ceiling) into screen space, sample the
+      // tile-coord world position at each end for the UVs, build
+      // a quad. Affine UV interpolation across a thin column is
+      // close enough to perspective-correct for visual purposes.
+      const dotForward = ux * dirX + uy * dirY;
+      if ((floorTex || ceilTex) && dotForward > 0.0001) {
+        const farAlong = zPerp / dotForward;
+        const nearAlong = (2 * camHeight) / dotForward;
+        const wxFar = selfX + ux * farAlong;
+        const wyFar = selfY + uy * farAlong;
+        const wxNear = selfX + ux * nearAlong;
+        const wyNear = selfY + uy * nearAlong;
+        const uFar = (((wxFar % floorTile) + floorTile) % floorTile) / floorTile;
+        const vFar = (((wyFar % floorTile) + floorTile) % floorTile) / floorTile;
+        const uNear =
+          (((wxNear % floorTile) + floorTile) % floorTile) / floorTile;
+        const vNear =
+          (((wyNear % floorTile) + floorTile) % floorTile) / floorTile;
+
+        if (floorTex) {
+          // Floor visible from horizon down to wall-slice-bottom
+          // for the back wall; below that the wall takes over (and
+          // closer floor extends to screen bottom).
+          const yFloorFar = horizonY + (camHeight * H) / zPerp;
+          const yFloorNear = H;
+          if (yFloorNear - yFloorFar > 0.5) {
+            const positions = new Float32Array([
+              screenX, yFloorFar,
+              screenX + COLUMN_STEP_PX, yFloorFar,
+              screenX + COLUMN_STEP_PX, yFloorNear,
+              screenX, yFloorNear,
+            ]);
+            const uvs = new Float32Array([
+              uFar, vFar,
+              uFar, vFar,
+              uNear, vNear,
+              uNear, vNear,
+            ]);
+            const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+            const geom = new MeshGeometry({ positions, uvs, indices });
+            const mesh = new Mesh({ geometry: geom, texture: floorTex });
+            // Ramp fog along the floor strip — far edge tinted
+            // by zPerp, near edge stays bright. Single avg tint
+            // is the cheapest visually-okay approximation.
+            const avgPerp = (zPerp + 2 * camHeight) * 0.5;
+            mesh.tint = applyFog(0xffffff, avgPerp, palette.fog);
+            floorLayer.addChild(mesh);
+          }
+        }
+
+        if (ceilTex) {
+          // Ceiling at world y = WALL_HEIGHT_WORLD. Mirrored
+          // formula above the horizon.
+          const yCeilFar = horizonY - (camHeight * H) / zPerp;
+          const yCeilNear = 0;
+          if (yCeilFar - yCeilNear > 0.5) {
+            const positions = new Float32Array([
+              screenX, yCeilNear,
+              screenX + COLUMN_STEP_PX, yCeilNear,
+              screenX + COLUMN_STEP_PX, yCeilFar,
+              screenX, yCeilFar,
+            ]);
+            const uvs = new Float32Array([
+              uNear, vNear,
+              uNear, vNear,
+              uFar, vFar,
+              uFar, vFar,
+            ]);
+            const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+            const geom = new MeshGeometry({ positions, uvs, indices });
+            const mesh = new Mesh({ geometry: geom, texture: ceilTex });
+            const avgPerp = (zPerp + 2 * camHeight) * 0.5;
+            mesh.tint = applyFog(0xffffff, avgPerp, palette.fog);
+            ceilingLayer.addChild(mesh);
           }
         }
       }

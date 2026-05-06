@@ -68,18 +68,21 @@ export default function EditorPage() {
   const [rendererMode, setRendererMode] = useState<RendererMode>('iso');
   // Content ids load from the JSON content via API so fresh
   // authoring shows up here without a code edit. Single fetch
-  // resolves all three lists in parallel.
+  // resolves all the lists in parallel.
   const [enemyIds, setEnemyIds] = useState<string[]>([]);
   const [propIds, setPropIds] = useState<string[]>([]);
+  const [biomeIds, setBiomeIds] = useState<string[]>([]);
   useEffect(() => {
     void (async () => {
       try {
-        const [enemies, props] = await Promise.all([
+        const [enemies, props, biomes] = await Promise.all([
           listEntities('enemies'),
           listEntities('props'),
+          listEntities('biomes'),
         ]);
         setEnemyIds(enemies.map((e) => e.id));
         setPropIds(props.map((p) => p.id));
+        setBiomeIds(biomes.map((b) => b.id));
       } catch {
         // No content yet — leave the sections empty.
       }
@@ -214,6 +217,38 @@ export default function EditorPage() {
             <TextureRow
               key={`building_top-${id}`}
               category="building_top"
+              id={id}
+            />
+          ))}
+        </Section>
+        <Section title="Biomes (floor)">
+          {biomeIds.length === 0 && (
+            <p className="text-[10px] text-zinc-500 px-2">
+              No biomes authored yet.
+            </p>
+          )}
+          {biomeIds.map((id) => (
+            <TextureRow
+              key={`biome_floor-${id}`}
+              category="biome_floor"
+              id={id}
+            />
+          ))}
+        </Section>
+        <Section title="Biomes (ceiling)">
+          {biomeIds.map((id) => (
+            <TextureRow
+              key={`biome_ceiling-${id}`}
+              category="biome_ceiling"
+              id={id}
+            />
+          ))}
+        </Section>
+        <Section title="Biomes (skybox)">
+          {biomeIds.map((id) => (
+            <TextureRow
+              key={`biome_skybox-${id}`}
+              category="biome_skybox"
               id={id}
             />
           ))}

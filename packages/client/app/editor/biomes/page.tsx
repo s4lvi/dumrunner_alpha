@@ -31,6 +31,7 @@ import {
   TextField,
 } from '../_components/Form';
 import { IsoPreview } from '../_components/IsoPreview';
+import { TextureRow } from '../_components/TextureRow';
 
 const HAZARDS: readonly HazardKind[] = [
   'none',
@@ -282,6 +283,49 @@ export default function BiomeEditorPage() {
                   })
                 }
               />
+            </FormSection>
+
+            <FormSection title="Textures">
+              <p className="text-[10px] text-zinc-500">
+                Optional. Floor + ceiling textures tile across walkable
+                tiles in FPS view. Skybox replaces the sky gradient
+                above the horizon (no tiling needed; pans with yaw).
+                Saved under{' '}
+                <code className="text-zinc-300">biome_floor</code> /{' '}
+                <code className="text-zinc-300">biome_ceiling</code> /{' '}
+                <code className="text-zinc-300">biome_skybox</code>,
+                id <code className="text-zinc-300">{draft.id}</code>.
+              </p>
+              <div>
+                <div className="text-[10px] text-zinc-500 px-2 mb-1">
+                  Floor
+                </div>
+                <TextureRow
+                  category="biome_floor"
+                  id={draft.id}
+                  hideLabel
+                />
+              </div>
+              <div>
+                <div className="text-[10px] text-zinc-500 px-2 mb-1">
+                  Ceiling
+                </div>
+                <TextureRow
+                  category="biome_ceiling"
+                  id={draft.id}
+                  hideLabel
+                />
+              </div>
+              <div>
+                <div className="text-[10px] text-zinc-500 px-2 mb-1">
+                  Skybox
+                </div>
+                <TextureRow
+                  category="biome_skybox"
+                  id={draft.id}
+                  hideLabel
+                />
+              </div>
             </FormSection>
 
             <FormSection title="Generation">
