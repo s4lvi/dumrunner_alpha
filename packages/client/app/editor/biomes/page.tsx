@@ -10,9 +10,11 @@ import { useEffect, useState } from 'react';
 import type {
   BiomeDef,
   HazardKind,
+  MaterialKind,
   Player,
   SceneLayout,
 } from '@dumrunner/shared';
+import { MATERIALS } from '@dumrunner/shared';
 import type { GameInit } from '@/lib/game/pixi';
 import {
   listEntities,
@@ -73,6 +75,28 @@ export default function BiomeEditorPage() {
   // full-pane iso scene rendered with this biome's settings.
   // Sidebar stays mounted in both so biome switches are quick.
   const [tab, setTab] = useState<'edit' | 'preview'>('edit');
+  // Cross-reference id pickers for the enemy roster / prop
+  // palette / loot bias dropdowns. Loaded from the JSON content
+  // so newly authored entities show up without a code edit.
+  // Materials come from the shared registry (no editor for those
+  // yet).
+  const [enemyOptions, setEnemyOptions] = useState<string[]>([]);
+  const [propOptions, setPropOptions] = useState<string[]>([]);
+  const materialOptions = Object.keys(MATERIALS) as MaterialKind[];
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [enemies, props] = await Promise.all([
+          listEntities('enemies'),
+          listEntities('props'),
+        ]);
+        setEnemyOptions(enemies.map((e) => e.id).sort());
+        setPropOptions(props.map((p) => p.id).sort());
+      } catch {
+        // No content yet — dropdowns fall back to text entry.
+      }
+    })();
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -441,16 +465,19 @@ export default function BiomeEditorPage() {
 
             <ListField
               label="Enemy roster"
-              hint="weighted picks. id must match an EnemyDef.id."
+              hint="weighted picks; pulls from authored enemies."
               entries={draft.enemyRoster}
-              newEntry={() => ({ id: '', weight: 1 })}
+              newEntry={() => ({
+                id: enemyOptions[0] ?? '',
+                weight: 1,
+              })}
               onChange={(next) => setDraft({ ...draft, enemyRoster: next })}
               renderRow={(entry, _i, update) => (
                 <div className="grid grid-cols-[1fr_80px] gap-2">
-                  <TextField
-                    label="id"
+                  <IdPicker
+                    label="enemy"
                     value={entry.id}
-                    monospace
+                    options={enemyOptions}
                     onChange={(v) => update({ ...entry, id: v })}
                   />
                   <NumberField
@@ -466,17 +493,20 @@ export default function BiomeEditorPage() {
 
             <ListField<BiomeDef['propPalette'][number]>
               label="Prop palette"
-              hint="id must match a PropDef.id."
+              hint="weighted picks; pulls from authored decorators."
               entries={draft.propPalette}
-              newEntry={() => ({ id: '', weight: 1 })}
+              newEntry={() => ({
+                id: propOptions[0] ?? '',
+                weight: 1,
+              })}
               onChange={(next) => setDraft({ ...draft, propPalette: next })}
               renderRow={(entry, _i, update) => (
                 <div className="space-y-1">
                   <div className="grid grid-cols-[1fr_80px] gap-2">
-                    <TextField
-                      label="id"
+                    <IdPicker
+                      label="prop"
                       value={entry.id}
-                      monospace
+                      options={propOptions}
                       onChange={(v) => update({ ...entry, id: v })}
                     />
                     <NumberField
@@ -511,14 +541,17 @@ export default function BiomeEditorPage() {
               label="Loot bias"
               hint="multiplier on a material's scatter-loot weight in this biome."
               entries={draft.lootBias}
-              newEntry={() => ({ materialId: '', multiplier: 1 })}
+              newEntry={() => ({
+                materialId: materialOptions[0] ?? '',
+                multiplier: 1,
+              })}
               onChange={(next) => setDraft({ ...draft, lootBias: next })}
               renderRow={(entry, _i, update) => (
                 <div className="grid grid-cols-[1fr_100px] gap-2">
-                  <TextField
-                    label="materialId"
+                  <IdPicker
+                    label="material"
                     value={entry.materialId}
-                    monospace
+                    options={materialOptions}
                     onChange={(v) => update({ ...entry, materialId: v })}
                   />
                   <NumberField
@@ -578,6 +611,60 @@ export default function BiomeEditorPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// Cross-reference picker. Native <select> with the supplied
+// options + a sentinel "(unset)" entry. Falls back to a freeform
+// text input when no options are authored yet so the dev can
+// still scaffold a biome before the referenced entities exist.
+function IdPicker({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: readonly string[];
+  onChange: (v: string) => void;
+}) {
+  if (options.length === 0) {
+    return (
+      <label className="flex flex-col gap-0.5 text-xs">
+        <span className="text-zinc-300">{label}</span>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono"
+          placeholder="no options yet — type id"
+        />
+      </label>
+    );
+  }
+  // Show the current value even if it's not in the options list
+  // (e.g. referencing a deleted entity). Marks it as missing so
+  // the dev sees the broken reference.
+  const missing = value && !options.includes(value);
+  return (
+    <label className="flex flex-col gap-0.5 text-xs">
+      <span className="text-zinc-300">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`bg-zinc-900 border rounded px-2 py-1 text-sm font-mono ${
+          missing ? 'border-red-700 text-red-300' : 'border-zinc-700'
+        }`}
+      >
+        {missing && <option value={value}>{value} (missing)</option>}
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
