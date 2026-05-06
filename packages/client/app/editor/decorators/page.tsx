@@ -23,6 +23,7 @@ import {
   SliderField,
   TextField,
 } from '../_components/Form';
+import { TextureRow } from '../_components/TextureRow';
 
 const DESTROY_KINDS = ['nothing', 'drop_loot', 'explode'] as const;
 
@@ -297,13 +298,13 @@ export default function DecoratorEditorPage() {
 
             <FormSection title="Visual">
               <p className="text-[10px] text-zinc-500">
-                Upload a sprite at{' '}
-                <code className="text-zinc-300">/editor/textures</code> under
-                category <code className="text-zinc-300">building</code>{' '}
-                (props share the building texture category for now), id{' '}
-                <code className="text-zinc-300">{draft.id}</code>. The tint
-                below is the procedural fallback when no sprite is uploaded.
+                Upload a billboard sprite below — saved under category{' '}
+                <code className="text-zinc-300">prop</code>, id{' '}
+                <code className="text-zinc-300">{draft.id}</code>.
+                The tint is the procedural fallback when no sprite
+                is uploaded.
               </p>
+              <TextureRow category="prop" id={draft.id} hideLabel />
               <ColorField
                 label="tint (fallback)"
                 value={draft.visual.tint ?? '#52525b'}

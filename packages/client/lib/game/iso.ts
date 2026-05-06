@@ -787,6 +787,17 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
       drawBuildingBody(sprite.body, sprite.data);
       applyBuildingTexture(sprite);
     }
+    for (const [, sprite] of props) {
+      // Wipe extra children added by a previous applyPropTexture
+      // run; the body Graphics itself stays in place.
+      while (sprite.container.children.length > 1) {
+        const child = sprite.container.children[1];
+        sprite.container.removeChild(child);
+      }
+      sprite.body.visible = true;
+      drawPropBody(sprite.body);
+      applyPropTexture(sprite);
+    }
     rebuildWalls();
   }
   // Subscribe once. The unsubscribe is fired in destroy().
@@ -864,6 +875,22 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
         ),
       );
     }
+  }
+
+  function applyPropTexture(sprite: PropSprite): void {
+    const tex = getOverrideTexture('prop', sprite.data.kind);
+    if (!tex) return;
+    sprite.body.visible = false;
+    // Sprite size matches the procedural billboard (roughly 24px
+    // wide); height scales with the texture's aspect.
+    const target = 28;
+    const s = new Sprite(tex);
+    s.anchor.set(0.5, 1);
+    const aspect =
+      tex.width > 0 && tex.height > 0 ? tex.width / tex.height : 1;
+    s.height = target;
+    s.width = target * aspect;
+    sprite.container.addChild(s);
   }
 
   function applyEnemyTexture(sprite: EnemySprite): void {
@@ -1012,7 +1039,9 @@ export function runIsoGame(host: HTMLElement, init: GameInit): GameHandle {
     drawPropBody(body);
     container.addChild(body);
     placeAtWorld(container, p.x, p.y);
-    return { data: { ...p }, container, body };
+    const sprite: PropSprite = { data: { ...p }, container, body };
+    applyPropTexture(sprite);
+    return sprite;
   }
 
   function drawPropBody(g: Graphics): void {

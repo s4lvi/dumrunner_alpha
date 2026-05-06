@@ -35,6 +35,7 @@ import {
   TextField,
 } from '../_components/Form';
 import { IsoPreview } from '../_components/IsoPreview';
+import { TextureRow } from '../_components/TextureRow';
 
 const FACTIONS: readonly Faction[] = [
   'catacombs',
@@ -359,12 +360,12 @@ export default function EnemyEditorPage() {
                 }
               />
               <p className="text-[10px] text-zinc-500">
-                Procedural shape is the fallback. Upload a sprite at{' '}
-                <code className="text-zinc-300">/editor/textures</code> under
-                category <code className="text-zinc-300">enemy</code>, id{' '}
-                <code className="text-zinc-300">{draft.id}</code> for a
-                proper billboard.
+                Procedural shape is the fallback. Upload a billboard
+                sprite below — saved under category{' '}
+                <code className="text-zinc-300">enemy</code>, id{' '}
+                <code className="text-zinc-300">{draft.id}</code>.
               </p>
+              <TextureRow category="enemy" id={draft.id} hideLabel />
             </FormSection>
 
             <ListField

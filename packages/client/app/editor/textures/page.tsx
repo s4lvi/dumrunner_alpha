@@ -21,25 +21,22 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   BUILDING_REGISTRY,
+  MATERIALS,
   type BuildingKind,
   type BuildingState,
   type EnemyState,
+  type MaterialKind,
   type Player,
   type SceneLayout,
 } from '@dumrunner/shared';
 import { runGame, type GameHandle, type GameInit } from '@/lib/game/pixi';
 import { runIsoGame } from '@/lib/game/iso';
 import { runFpsGame } from '@/lib/game/fps';
-import {
-  clearOverride,
-  fileToDataUrl,
-  getOverride,
-  setOverride,
-  subscribe as subscribeOverrides,
-} from '@/lib/textureOverrides';
 import { listEntities } from '@/lib/editorContentClient';
+import { TextureRow } from '../_components/TextureRow';
 
 const BUILDING_KINDS = Object.keys(BUILDING_REGISTRY) as BuildingKind[];
+const MATERIAL_KINDS = Object.keys(MATERIALS) as MaterialKind[];
 
 // World-space tile size for the demo scene. Same as the live game
 // dungeons so iso scaling reads identically.
@@ -69,16 +66,22 @@ export default function EditorPage() {
   const inputRef = useRef({ mx: 0, my: 0, sprint: false });
 
   const [rendererMode, setRendererMode] = useState<RendererMode>('iso');
-  // Enemy ids load from /api/editor/content/enemies so fresh
-  // /editor/enemies authoring shows up here without a code edit.
+  // Content ids load from the JSON content via API so fresh
+  // authoring shows up here without a code edit. Single fetch
+  // resolves all three lists in parallel.
   const [enemyIds, setEnemyIds] = useState<string[]>([]);
+  const [propIds, setPropIds] = useState<string[]>([]);
   useEffect(() => {
     void (async () => {
       try {
-        const r = await listEntities('enemies');
-        setEnemyIds(r.map((e) => e.id));
+        const [enemies, props] = await Promise.all([
+          listEntities('enemies'),
+          listEntities('props'),
+        ]);
+        setEnemyIds(enemies.map((e) => e.id));
+        setPropIds(props.map((p) => p.id));
       } catch {
-        // No content yet — leave the section empty.
+        // No content yet — leave the sections empty.
       }
     })();
   }, []);
@@ -181,9 +184,25 @@ export default function EditorPage() {
             <TextureRow key={`enemy-${id}`} category="enemy" id={id} />
           ))}
         </Section>
+        <Section title="Decorators">
+          {propIds.length === 0 && (
+            <p className="text-[10px] text-zinc-500 px-2">
+              No decorators authored yet. Add some at{' '}
+              <code className="text-zinc-300">/editor/decorators</code>.
+            </p>
+          )}
+          {propIds.map((id) => (
+            <TextureRow key={`prop-${id}`} category="prop" id={id} />
+          ))}
+        </Section>
         <Section title="Buildings">
           {BUILDING_KINDS.map((id) => (
             <TextureRow key={`building-${id}`} category="building" id={id} />
+          ))}
+        </Section>
+        <Section title="Materials">
+          {MATERIAL_KINDS.map((id) => (
+            <TextureRow key={`material-${id}`} category="material" id={id} />
           ))}
         </Section>
       </aside>
@@ -211,88 +230,6 @@ function Section({
       </h2>
       <div className="space-y-1">{children}</div>
     </section>
-  );
-}
-
-// Reads the current override after mount to avoid a hydration
-// mismatch: localStorage isn't available during SSR, so reading
-// it inside render returns null on the server but the real value
-// on the client's first render — React flags the diff. Deferring
-// to useEffect makes both passes start at null, then re-render
-// with the value once we're on the client.
-function useOverride(category: string, id: string): string | null {
-  const [val, setVal] = useState<string | null>(null);
-  useEffect(() => {
-    setVal(getOverride(category, id));
-    return subscribeOverrides(() => setVal(getOverride(category, id)));
-  }, [category, id]);
-  return val;
-}
-
-function TextureRow({ category, id }: { category: string; id: string }) {
-  const dataUrl = useOverride(category, id);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  async function onPick(file: File | null) {
-    if (!file) return;
-    try {
-      const url = await fileToDataUrl(file);
-      await setOverride(category, id, url);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('texture save failed', e);
-    }
-  }
-
-  return (
-    <div className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-zinc-900">
-      <div className="w-10 h-10 rounded border border-zinc-800 bg-zinc-900 flex items-center justify-center overflow-hidden shrink-0">
-        {dataUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={dataUrl}
-            alt={id}
-            className="max-w-full max-h-full object-contain"
-          />
-        ) : (
-          <span className="text-[9px] text-zinc-600 text-center leading-tight">
-            no
-            <br />
-            texture
-          </span>
-        )}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-mono truncate">{id}</div>
-        <div className="flex gap-1 mt-1">
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700"
-          >
-            {dataUrl ? 'Replace' : 'Upload'}
-          </button>
-          {dataUrl && (
-            <button
-              type="button"
-              onClick={() => {
-                void clearOverride(category, id);
-              }}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/png,image/webp,image/jpeg"
-        className="hidden"
-        onChange={(e) => onPick(e.target.files?.[0] ?? null)}
-      />
-    </div>
   );
 }
 
