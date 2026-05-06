@@ -885,39 +885,69 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
                 topTexKind,
               );
               if (topTex) {
-                // World coords of the entry / exit points; UVs
-                // wrap mod tileSize so the top texture tiles
-                // across multi-tile obstacles consistently with
-                // the floor / wall texturing convention.
+                // Subdivided per-column row strip — same fix as
+                // the floor / ceiling pass. The obstacle top has
+                // the same projection (depth = (camHeight - obstacleH)
+                // * H / |y - horizon|), so a single quad with corner-
+                // only UVs warps for any obstacle spanning more than
+                // ~1 tile. Subdividing into thin rows keeps the UV
+                // interpolation close to perspective-correct, and raw
+                // world/tile UVs (no mod) tile cleanly because the
+                // texture is loaded with addressMode = 'repeat'.
                 const tile = layout?.tileSize ?? 32;
-                const nx = selfX + ux * hit.dist;
-                const ny = selfY + uy * hit.dist;
-                const fx = selfX + ux * hit.exitDist;
-                const fy = selfY + uy * hit.exitDist;
-                const uNear =
-                  (((nx % tile) + tile) % tile) / tile;
-                const vNear =
-                  (((ny % tile) + tile) % tile) / tile;
-                const uFar = (((fx % tile) + tile) % tile) / tile;
-                const vFar = (((fy % tile) + tile) % tile) / tile;
-                const positions = new Float32Array([
-                  screenX, yFar,
-                  screenX + COLUMN_STEP_PX, yFar,
-                  screenX + COLUMN_STEP_PX, yNear,
-                  screenX, yNear,
-                ]);
-                const uvs = new Float32Array([
-                  uFar, vFar,
-                  uFar, vFar,
-                  uNear, vNear,
-                  uNear, vNear,
-                ]);
-                const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+                const TOP_ROWS = 12;
+                const numVerts = (TOP_ROWS + 1) * 2;
+                const positions = new Float32Array(numVerts * 2);
+                const uvs = new Float32Array(numVerts * 2);
+                const indices = new Uint32Array(TOP_ROWS * 6);
+                const dyHeight = WALL_HEIGHT_WORLD * 0.5 - obstacleH;
+                for (let r = 0; r <= TOP_ROWS; r++) {
+                  const y = yFar + ((yNear - yFar) * r) / TOP_ROWS;
+                  // Depth at this row from the floor-cast formula
+                  // mirrored above the horizon line. Clamp the
+                  // denominator to a small positive so a row that
+                  // grazes the horizon doesn't blow up.
+                  const dy = Math.max(0.5, y - horizonY);
+                  const rowPerp = (dyHeight * H) / dy;
+                  // Walk the column's center ray to that depth and
+                  // sample the world position. (Column is thin; one
+                  // ray for both edges is fine for the horizontal
+                  // axis — same shrug we make for any per-column
+                  // raycast at 1-2px granularity.)
+                  const along = rowPerp / Math.max(0.0001, ux * dirX + uy * dirY);
+                  const wx = selfX + ux * along;
+                  const wy = selfY + uy * along;
+                  const u = wx / tile;
+                  const v = wy / tile;
+                  const base = r * 4;
+                  positions[base + 0] = screenX;
+                  positions[base + 1] = y;
+                  positions[base + 2] = screenX + COLUMN_STEP_PX;
+                  positions[base + 3] = y;
+                  uvs[base + 0] = u;
+                  uvs[base + 1] = v;
+                  uvs[base + 2] = u;
+                  uvs[base + 3] = v;
+                }
+                for (let r = 0; r < TOP_ROWS; r++) {
+                  const a = r * 2;
+                  const b = r * 2 + 1;
+                  const c = (r + 1) * 2 + 1;
+                  const d = (r + 1) * 2;
+                  const i6 = r * 6;
+                  indices[i6 + 0] = a;
+                  indices[i6 + 1] = b;
+                  indices[i6 + 2] = c;
+                  indices[i6 + 3] = a;
+                  indices[i6 + 4] = c;
+                  indices[i6 + 5] = d;
+                }
                 const geom = new MeshGeometry({ positions, uvs, indices });
                 const mesh = new Mesh({ geometry: geom, texture: topTex });
-                // Distance-fog: tint by the average of near +
-                // far perp distances for a smooth seam with
-                // adjacent columns' wall meshes.
+                // Single tint at mid-distance — same trade as the
+                // floor / ceiling mesh. Per-row fog would need vertex
+                // colors; walls fog independently so the scene still
+                // reads with depth.
                 const avgPerp = (perp + farPerp) * 0.5;
                 mesh.tint = applyFog(0xffffff, avgPerp, palette.fog);
                 wallTopLayer.addChild(mesh);
