@@ -39,13 +39,13 @@ Tactical extraction-shooter feel. Slower and more deliberate than arcade twin-st
 - **Per-template enemy stuns.** Hits briefly stun the enemy (200ms typical, 80ms for brutes who shrug it off), so kiting and burst windows are real.
 - **Player-vs-player is off** in the alpha. All servers are co-op only.
 
-**Weapon classes that ship in the alpha:** four ranged families — **Pistol** (balanced baseline), **SMG** (high RoF, low damage), **Shotgun** (6-pellet pattern, short range), **Rifle** (high single-shot damage, slower cadence) — plus a **Knife** (melee arc swing). Each ranged weapon carries a per-family stat sheet:
+**Weapon classes that ship in the alpha:** seven ranged families — **Pistol** (balanced baseline), **SMG** (high RoF, low damage), **Shotgun** (6-pellet pattern, short range), **Rifle** (high single-shot damage, slower cadence), **Sniper** (very high damage, slow cadence, long range), **Heavy** (slug cannon — chunky single shot), **Energy** (alien-tech projectiles) — plus four melee families: **Knife**, **Sword**, **Hammer**, **Energy Blade** (each with its own arc / range / damage profile). Each ranged weapon carries a per-family stat sheet:
 
 - `damage` / `fireIntervalMs` / `projectileSpeed` / `projectileTtlMs`.
 - `pelletCount` + `spreadRad` (the shotgun's pattern; pellet count = 1 collapses to a single shot).
 - `accuracy` ∈ [0..1] — per-shot uniform jitter offset within `(1 - acc) × MAX_INACCURACY_RAD`. Independent of pellet pattern; a tight shotgun can have wide pellets.
 - `magazineSize` + `reloadMs`. Reserve ammo lives in inventory; only consumed during reload, not per shot. **R** triggers a reload; fire is locked while reloading.
-- `ammoKind` per family (`pistol_basic`, `smg_basic`, `shotgun_shells`, `rifle_rounds`).
+- `ammoKind` per family (`pistol_basic`, `smg_basic`, `shotgun_shells`, `rifle_rounds`, `sniper_rounds`, `heavy_slugs`, `energy_cells`).
 
 Mods + piece-affix attachments scale these stats per weapon instance via `computeWeaponEffect` (damage / fire-interval / spread / projectile-speed multipliers stack from every attached piece + mod). The full part-driven assembly described in [Items & Procedural Generation](#items--procedural-generation) is the long-term direction; today's mods + affixes are the alpha foundation of that system.
 
@@ -115,9 +115,9 @@ The dungeon contains four biomes for the alpha. Each biome has its own environme
 
 Within any band, the last floor (the fifth) hosts a faction champion (themed to that band's biome) guarding the stairs down. Artifacts (the only Alien-tier source) become more common with depth and drop most reliably from faction champions.
 
-### Props (planned)
+### Props
 
-Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, terminals, trees, rocks, scrap heaps, alien growths, broken furniture. Server-authoritative, destructible by attacks, biome-themed. Scope: pure set-dressing first, then a thin layer of interactive specials (explosive barrels, lootable crates, EMP terminals). Lands as Roadmap **E3.2** once the biome scaffolding (E3.1) and editor suite (E3.0) are in place — prop spawn rules are biome-coupled and prop kinds are authored in the decorator editor, not by hand.
+Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, terminals, trees, rocks, scrap heaps, alien growths, broken furniture. Server-authoritative, destructible by attacks, biome-themed. Scope: pure set-dressing first, then a thin layer of interactive specials (explosive barrels, lootable crates, EMP terminals). **Shipped (E3.2).** Server prop entities + biome-coupled spawning + three-renderer billboards live; initial roster is `barrel`, `crate`, `explosive_barrel`, `rock` (more land as the decorator editor authors them). Prop kinds are authored in the decorator editor, not by hand.
 
 **Design intent.**
 
@@ -267,7 +267,7 @@ Suits assemble from five slot types. The **chassis** defines class and slot capa
 | **Plating** (class-locked to chassis weight) | Damage-type resistance | `kineticResist`, `electricResist`, `acidResist`, `bonusHP` |
 | **Life-Support** (universal) | Environmental hazard resistance | `radiationResist`, `toxicResist`, `coldResist`, `heatResist`, optional `airSupplyDuration` |
 | **Utility mod(s)** (universal, 1–3 slots from chassis) | Stealth, movement, scanning, support | One discrete effect — sound dampening, light dampening, heat-signature dampening, sprint/dash, loot scanner, minimap reveal, auto-medkit, faster-revive, etc. |
-| **Cargo grid** (universal) | Tetris-style inventory grid for run loot | `gridShape` (W×H within chassis envelope), optional bonuses (e.g. extra slots for artifacts, faster artifact stash) |
+| **Cargo grid** (universal) | Tetris-style inventory grid for run loot | `gridShape` (W×H within chassis envelope), optional bonuses (e.g. extra slots for artifacts, faster artifact stash). *Today's cargo grid is a flat slot count that grows with tier; the W×H grid lands post-alpha — see [Deferred past alpha](#deferred-past-alpha).* |
 
 **Chassis classes:**
 - **Light** — fast, low health, fewer plating/utility slots, smaller cargo. Built for stealth and speed.
@@ -315,7 +315,7 @@ Affixes are bonus stat lines drawn from a per-slot pool. Each affix is one of:
 - A status proc chance (e.g. `8% chance to apply Burn on hit`).
 - A small conditional behavior (e.g. `+15% damage to enemies above 75% HP`).
 
-**Pool by slot** (representative, not exhaustive):
+**Pool by slot** (representative, not exhaustive — long-term design; the alpha collapses suit affixes to a 5-kind any-slot pool, see [Affix System — Alpha Implementation](#affix-system--alpha-implementation) below):
 
 - **Barrel** — extra damage, extra range, crit chance, status proc by damage type, penetration.
 - **Frame** — handling, sprint speed while equipped, swap speed, reduced ADS penalty.
@@ -348,7 +348,7 @@ Tier multiplier curve: Mk1 ×1, Mk2 ×2.2, Mk3 ×4, Mk4 ×7, Alien ×12.
 
 - **Weapon mods** sit in a free mod-slot list on the weapon. Slot count tier-gated (T1 = 0, T4 = 3).
 - **Weapon piece affixes** are piece-bound: at most one per `frame / grip / magazine / barrel` slot. Slot count tier-gated (T1 = frame only, T4 = all four).
-- **Suit-part affixes** are *piece-bound to a specific equipped suit part*. They bolt onto a particular plating / utility-mod / etc. via `CarriedPart.appliedAttachments`, mirroring how weapon mods bolt onto a `WeaponItem`. The two shipped suit affix classes (`aff_shield_25` "Hardened Plating", `aff_speed_5` "Servomotor Tune") have no UI surface for the alpha — they're modeled but unused. The proper home is a dedicated **Suit Assembly Bench** mirroring the Weapon Bench (Phase 2.5 — see Roadmap).
+- **Suit-part affixes** are *piece-bound to a specific equipped suit part*. They bolt onto a particular plating / utility-mod / etc. via `CarriedPart.appliedAttachments`, mirroring how weapon mods bolt onto a `WeaponItem`. Crafted at the Electronics Bench, attached at the **Suit Assembly Bench** (`suit_bench`, hand-craftable from the Workbench). Two shipped suit affix classes today: `aff_shield_25` "Hardened Plating" and `aff_speed_5` "Servomotor Tune". Per-part attachment slot cap scales with the part's tier (Mk1=1 ⋯ Alien=4); suit-side tier-mismatch follows the same `0.05 × |Δtier|` curve as weapons.
 
 **Stat composition.** `computeWeaponEffect(weapon)` walks every piece affix instance + mod instance and returns one resolved multiplier set (damage / fire-interval / spread / projectile-speed). Server's fire path applies them; client's tooltip + Weapon Bench stats panel show the resulting "effective" stats so the player sees real numbers, not the bare baseline. Suit affix effects fold into `computeSuitStats` alongside the primary slot stat and rolled affixes — `appliedAttachments` is read via `attachmentInstanceSuitEffect` for per-instance rolls.
 
@@ -405,7 +405,7 @@ The registry (`MATERIALS` in shared) is one entry per material; adding a new com
 
 ### Crafting & Assembly
 
-Crafting in the alpha is **station-driven, blueprint-gated, and (planned) time-and-power-bound**.
+Crafting in the alpha is **station-driven, blueprint-gated, and time-and-power-bound** (async crafting + power capacity scaled by deepest-floor reached are shipped).
 
 **Workstations.** Each crafting station is a placeable building on the surface. Recipes declare which station they require; the player has to be physically near it to craft. Multiple players can share a station.
 
@@ -535,7 +535,7 @@ Computed assembly stats = sum/composition of base stats + affixes from all slots
 - **Grid-snapped tile placement** on the 32-pixel surface grid.
 - Build mode is driven by the equipped hotbar slot — selecting a placeable item enters build mode automatically; deselecting exits. No separate toggle key.
 - In top-down view, the build ghost shows under the cursor; in first-person, a translucent **3D ghost cube** is raycast at the tile under the camera reticle.
-- Base persists across deaths and perihelion cycles. The Power Link auto-rebuilds at cycle reset; everything else stays as the player left it.
+- Base persists across deaths and perihelion cycles. The Power Link auto-rebuilds at full HP at perihelion (whether or not it was destroyed); everything else stays as the player left it.
 - Build mode is **surface-only** — not accessible inside the dungeon.
 
 ### Buildings (alpha set)
@@ -582,7 +582,7 @@ This means coming back up to bank loot or repair the base is cheap (the portal i
 
 ## Perihelion & Horde
 
-- The planet reaches perihelion every **3 in-game days**. One in-game day = 5 real minutes during the alpha (a full cycle is 15 real minutes — short enough to test the loop in one sitting; the GDD-canonical 1–2 hr/day pacing returns post-alpha).
+- The planet reaches perihelion every **N in-game days** (default 3, server-configurable 1–7 at create time). One in-game day defaults to 5 real minutes (server-configurable 30–3600s) — at defaults a full cycle is 15 real minutes, short enough to test the loop in one sitting. The GDD-canonical 1–2 hr/day pacing is reachable today by tuning the server world settings; the defaults bias toward short test cycles.
 - A world clock + countdown HUD is always visible at the top of the screen: `Cycle N • perihelion in M:SS`. The HUD turns red and pulses while a horde is active.
 
 ### Horde Mechanics (alpha-shipped)
@@ -595,7 +595,7 @@ This means coming back up to bank loot or repair the base is cheap (the portal i
   2. All dungeon scenes are dropped; procgen reseeds them next descent.
   3. Surface corpses + dropped loot are wiped (the "recover before perihelion or lose it" pressure).
   4. Per-cycle blueprints wipe; persistent blueprints stay.
-  5. The Power Link is rebuilt at full HP *(once shipped)*.
+  5. The Power Link is rebuilt at full HP.
 
 ### Hostile AI During Perihelion
 
@@ -730,9 +730,9 @@ The editor suite lives at `/editor` in the client app. Each tool is its own sub-
 | Editor | Scope | Status |
 |--------|-------|--------|
 | **Texture** | PNG/WEBP per `(category, id)`. | shipped |
-| **Biome** | `BiomeDef` — palette, generation params, asset palettes, hazard intensity. Preview = generated demo dungeon. | E3.0 |
-| **Enemy** | `EnemyDef` — stats, AI template + params, visual, loot. Preview = AI sandbox vs dummy player. | E3.0 |
-| **Decorator** (props) | `PropDef` — HP, solid flag, on-destroy behavior, loot. Preview = row of the selected prop kinds. | E3.0 |
+| **Biome** | `BiomeDef` — palette, generation params, asset palettes, hazard intensity. Preview = generated demo dungeon. | shipped (E3.0) |
+| **Enemy** | `EnemyDef` — stats, AI template + params, visual, loot. Preview = AI sandbox vs dummy player. | shipped (E3.0) |
+| **Decorator** (props) | `PropDef` — HP, solid flag, on-destroy behavior, loot. Preview = row of the selected prop kinds. | shipped (E3.0) |
 | **Weapon** | `WeaponDef` — base stats per kind, per-tier scaling table, tier-mismatch curve. Preview = side-by-side DPS / TTK panel against a dummy. | post-E3 |
 | **Building** | `BuildingDef` — HP, footprint, station + workstation flags, upgrade chains. Preview = placed cube with stats panel. | post-E3 |
 | **Recipe** | `RecipeDef` — inputs, outputs, station, tier requirement, time cost. UI is an item-input/output composer. | aligns with E1 |
@@ -768,7 +768,7 @@ Already live at `/editor`. Side panel lists every `EnemyKind` and `BuildingKind`
 
 When the suite expands, `/editor` becomes a top-nav landing page; the existing texture UI moves to `/editor/textures` unchanged. Build a `prop` category alongside `enemy` and `building` so prop sprites land in the same flow.
 
-### Biome Editor (planned)
+### Biome Editor (shipped)
 
 `/editor/biomes`. Author and tune the 4-biome lore set (Sun-Bleached / Catacombs / Frozen / Alien Core) plus any future biomes.
 
@@ -820,7 +820,7 @@ type BiomeDef = {
 
 **Save** writes the JSON file. Server reads `packages/shared/content/biomes/*.json` at boot; the next perihelion uses the new params. Preview's "Generate" runs purely client-side (no server round-trip) so iteration is instant.
 
-### Enemy Editor (planned)
+### Enemy Editor (shipped)
 
 `/editor/enemies`. Author and tune enemy classes — stats, AI behavior, visual.
 
@@ -897,11 +897,11 @@ type ProjectileSpec = {
   - **AI sandbox** — toggles a "let AI run" mode where the enemy chases / attacks the dummy player so you can see the behavior.
   - **Reset**.
 
-Server's spawn picker reads `packages/shared/content/enemies/*.json` at boot; biome roster references resolve against this list. Existing hand-coded enemy templates (in `server/src/ai/templates.ts`) migrate into JSON files as a one-time port.
+Server's spawn picker reads `packages/shared/content/enemies/*.json` at boot; biome roster references resolve against this list. Hand-coded enemy templates migrated into JSON files during E3.0 (one-time port; the TS module is now a thin loader).
 
-### Decorator Editor (planned)
+### Decorator Editor (shipped)
 
-`/editor/decorators`. Same shape as the Enemy Editor, but for `PropDef` (see [Dungeon → Props](#props-planned) for the design).
+`/editor/decorators`. Same shape as the Enemy Editor, but for `PropDef` (see [Dungeon → Props](#props) for the design).
 
 **Schema (`PropDef` in `packages/shared/content/props/<id>.json`):**
 
@@ -947,9 +947,9 @@ The hardest risk to get out of the way was realtime sync over websockets between
 - Server-authoritative movement with client prediction + soft reconciliation. Stamina + sprint, shield system, per-template enemy stuns. Snap-on-jump + always-lerp client smoothing fixes invisible-attacker / rubber-band desync class.
 - Dungeon descent with procedural floor layouts, deterministic from `(worldSeed, cycle, floorIndex)`. Per-floor extract pad → surface. Locked-rooms procgen (key-gated doors, indestructible) with guaranteed-clear entrance→stairs path. LoS thickness fix prevents visibility leaking through diagonal-corner gaps.
 - Top-down (Pixi) renderer + 2.5D first-person renderer (raycaster with grid DDA + sprite billboards). Toggle with **V**. Fog visibility cache: per-tile LoS scan only re-runs on player tile / layout / buildings change.
-- 6 enemy templates (chaser_melee, shooter_drone, brute_chaser, swarmer, armored, dummy_target) with mix-and-match movement / attack profiles, FSM, line-of-sight gating.
+- 8 enemy templates (chaser_melee, shooter_drone, brute_chaser, swarmer, armored, chem_bloater, flame_drone, dummy_target) with mix-and-match movement / attack profiles, FSM, line-of-sight gating. Templates live in `packages/shared/content/enemies/<id>.json` (migrated from hand-coded TS in E3.0).
 - Slot-based inventory (base 36 slots, hotbar 9 + bag 27), grows with cargo grid tier (Mk1 +4 ⋯ Alien +48). Drag/drop, sort, suit equipment slots.
-- **Combat**: 4 ranged weapon families (pistol/SMG/shotgun/rifle) + knife. Per-weapon stats (damage / fire rate / projectile speed / pellet count / spread / accuracy / magazine / reload). Per-shot accuracy jitter (±~8.6° max half-cone scaled by `1 - accuracy`). Magazine + **R**-key reload. Mods + piece affixes scale stats via `computeWeaponEffect`. Borderlands-style adjective-stacking weapon names. Effective stats shown in inventory tooltip.
+- **Combat**: 7 ranged weapon families (pistol/SMG/shotgun/rifle/sniper/heavy/energy) + 4 melee (knife/sword/hammer/energy_blade). Per-weapon stats (damage / fire rate / projectile speed / pellet count / spread / accuracy / magazine / reload). Per-shot accuracy jitter (±~8.6° max half-cone scaled by `1 - accuracy`). Magazine + **R**-key reload. Mods + piece affixes scale stats via `computeWeaponEffect`. Borderlands-style adjective-stacking weapon names. Effective stats shown in inventory tooltip.
 - Naked respawn (corpse retains all loot at death position; corpse persists until perihelion or pickup). Per-server `dropItemsOnDeath` toggle.
 - Audio: per-event SFX (player-shoot per-family, enemy-shoot, hits, footsteps, pickups, UI click/hover, modal open, reload), music with crossfade per scene. Volume + mute persisted to localStorage. **M** toggles mute.
 
@@ -998,6 +998,12 @@ The hardest risk to get out of the way was realtime sync over websockets between
 - Discord Activity entry point at `/discord`. Boots `@discord/embedded-app-sdk` (lazy import), authorises with `identify` scope, exchanges through `/api/auth/discord/exchange`, calls `sdk.commands.authenticate`, and binds the call's `instance_id` → a server row via `/api/discord/instance`. First caller in the call provisions the room (full server-config form: name, max slots, world seed, day length, days/perihelion, drop-on-death) + display name; subsequent callers see a read-only room summary and just confirm display name. Activity-bound rooms are hidden from the public lobby.
 - **Iframe survival kit:** Supabase session cookies forced to `SameSite=None; Secure; Partitioned` (CHIPS) so they survive Discord's third-party iframe context; `/` server-redirects to `/discord` when `frame_id` is present so URL Mappings can stay at `prefix=/`; game-server WebSocket routed through a second URL Mapping (`/game-ws` → fly host) so the cross-origin `wss://` upgrade isn't blocked by the Activity CSP.
 - `/terms` + `/privacy` pages cover Discord app-verification requirements; both linked from the landing page footer + below each auth form.
+
+**Content + editor suite (E3.0 / E3.1 / E3.2)**
+- Editor sub-routes at `/editor/{textures,biomes,enemies,decorators}` — sidebar list + form + preview pane each. Schemas (Zod-validated) for `BiomeDef` / `EnemyDef` / `PropDef` in `packages/shared/src/content/types.ts`. POST/GET routes write JSON to `packages/shared/content/<area>/<id>.json`; server reads at boot.
+- 5 biomes shipped (`default` / `sun_bleached` / `catacombs` / `frozen` / `alien_core`). Per-band biome assignment (`pickBandBiome`) deterministic from `(worldSeed, cycle, bandIndex)`. World-config band overrides (`world.json`) for pinning surface bands to `default` so new players don't drop into Alien Core.
+- Server-side prop entities + biome-coupled spawning + three-renderer billboards. Initial roster: `barrel`, `crate`, `explosive_barrel`, `rock` (more land as the decorator editor authors them). `prop_damaged` / `prop_destroyed` wire messages.
+- IdPicker dropdowns in the biome editor for enemy roster / prop palette / loot bias references (no manual id typing).
 
 **Asset generation pipeline (separate package)**
 - `@dumrunner/asset_gen`: HTTP service that generates sprite PNGs on demand via OpenAI's image API. Stable cache-key dedup. Live game posts `/v1/assets/generate` for entities it doesn't have yet; client fetches `/v1/assets/index` at boot to build a kind→texture map. Single-call animation sheet (one image-edit call → wide canvas → trim+slice into N frames) replaces the legacy per-frame N-call pipeline.
@@ -1124,7 +1130,7 @@ reload / use / interact, hamburger for inventory. FPS view
 needs a touch-look gesture (right-half drag for aim + auto-fire
 on tap) — trickier; can ship with top-down only at first.
 
-**E3.0. Editor suite.** Prerequisite for everything else in E3.
+**~~E3.0~~. Editor suite. Shipped.** Prerequisite for everything else in E3.
 Full design under [Content Pipeline & Editor Suite](#content-pipeline--editor-suite). Slice:
 
 - Top-nav landing at `/editor`. Existing texture editor moves
@@ -1151,8 +1157,8 @@ Full design under [Content Pipeline & Editor Suite](#content-pipeline--editor-su
   game session via a dev-only WS message — no real perihelion
   needed for iteration.
 
-**E3.1. Biome scaffolding + per-band assignment + enemy rosters.**
-Foundation. Lands once the editor suite from E3.0 can author the data.
+**~~E3.1~~. Biome scaffolding + per-band assignment + enemy rosters. Shipped.**
+Foundation. Landed once the editor suite from E3.0 could author the data.
 
 - `Biome` enum + `BiomeDef` JSON content (4 biomes: Sun-Bleached
   / Catacombs / Frozen / Alien Core), authored in the biome
@@ -1168,9 +1174,9 @@ Foundation. Lands once the editor suite from E3.0 can author the data.
   working but now know what biome they are, with per-biome
   floor / wall colour palettes from `BiomeDef.palette`.
 
-**E3.2. Props system.** Self-contained, slots into biome
+**~~E3.2~~. Props system. Shipped.** Self-contained, slots into biome
 palettes from E3.1. Full design under
-[Dungeon → Props](#props-planned).
+[Dungeon → Props](#props).
 
 - Server-side prop entities with HP + destruction handling.
   `PROP_REGISTRY` migrates to `PropDef` JSON; biome palettes
@@ -1284,8 +1290,11 @@ scheduled. Listed so the next agent doesn't re-discover them.
   If you change attachment shapes again, update the migration.
   Pre-Phase-2 cleanup includes a fix for an over-expansion bug
   there.
-- **`PROTOCOL_VERSION` is 36** (bumped during Phase 1 for
-  `assemble_weapon`). Bump on any wire-shape change.
+- **`PROTOCOL_VERSION` is 40** (bumped most recently in Sprint D
+  for new weapon kinds + widened `weapon_swung`; assemble_weapon
+  bumped 36 in Phase 1, suit-bench bumped 38 in Phase 2.5). Bump
+  on any wire-shape change. Source of truth is
+  `packages/shared/src/protocol.ts`.
 - **`BUILDING_REGISTRY`** is the single source of truth for HP,
   horde priority, parallel slots, station / workstation flags,
   and label. Every per-kind lookup goes through it.
