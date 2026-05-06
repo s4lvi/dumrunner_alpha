@@ -5,6 +5,7 @@
 import {
   emptyInventory,
   ATTACHMENT_DEFS,
+  LIFE_SUPPORT_SPECIALTIES,
   makeWeapon,
   rollAffixesForPart,
   rollAttachmentInstance,
@@ -25,6 +26,13 @@ function makeTestPart(slot: PartSlot, tier: PartTier): CarriedPart {
     affixCount: 1,
     affixes: rollAffixesForPart(slot, tier, 1),
     appliedAttachments: [],
+    // Pick a specialty for life_support; ignored for other slots.
+    // Cycles through the four kinds across consecutive calls so a
+    // playtest equipment with one of each tier gets variety.
+    specialtyHazard:
+      slot === 'life_support'
+        ? LIFE_SUPPORT_SPECIALTIES[_testPartSeq % LIFE_SUPPORT_SPECIALTIES.length]
+        : undefined,
   };
 }
 

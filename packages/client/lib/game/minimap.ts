@@ -1,6 +1,7 @@
 import type {
   BuildingKind,
   BuildingState,
+  HazardZoneCategory,
   Rect,
 } from '@dumrunner/shared';
 
@@ -14,6 +15,13 @@ export type MinimapSnapshot = {
   selfId: string;
   tileSize: number;
   walkables: Rect[];
+  // Per-room hazard zone category (parallel to layout.rooms; the
+  // first N entries of walkables are the rooms). Optional so the
+  // surface scene's empty layout can omit it. When present, the
+  // minimap tints rooms by category — green for safe, red for
+  // extreme — so players can see where the breather pockets are.
+  rooms?: Rect[];
+  roomCategories?: HazardZoneCategory[];
   buildings: ReadonlyArray<{
     tileX: number;
     tileY: number;
@@ -33,6 +41,15 @@ export type MinimapSnapshot = {
     hp: number;
     visible: boolean;
   }>;
+};
+
+// Per-zone tint used on the minimap. Subtle; the room outline
+// (default fillStyle) reads through where alpha is low.
+const ZONE_TINT: Record<HazardZoneCategory, string> = {
+  safe: 'rgba(34, 197, 94, 0.35)',     // green
+  corridor: 'rgba(82, 82, 91, 0.45)',  // matches the default
+  hazard: 'rgba(82, 82, 91, 0.45)',    // default look
+  extreme: 'rgba(239, 68, 68, 0.40)',  // red
 };
 
 export function buildingMinimapColor(b: { kind: BuildingKind }): string {
@@ -71,11 +88,28 @@ export function paintMinimap(
   ctx.fillRect(0, 0, w, h);
 
   if (snap.walkables.length > 0) {
+    // Walkables = rooms ∪ corridors. We over-paint rooms with
+    // category-tinted fills below, so corridors get the baseline
+    // gray everyone's used to.
     ctx.fillStyle = 'rgba(82, 82, 91, 0.45)';
     for (const r of snap.walkables) {
       const x = (r.x - snap.selfX) * scale + cx;
       const y = (r.y - snap.selfY) * scale + cy;
       ctx.fillRect(x, y, r.w * scale, r.h * scale);
+    }
+    // Per-room category tint (E3.3). Skips corridors entirely;
+    // skips when no roomCategories are set (surface, pre-E3.3).
+    if (snap.rooms && snap.roomCategories) {
+      for (let i = 0; i < snap.rooms.length; i++) {
+        const r = snap.rooms[i];
+        const cat = snap.roomCategories[i] ?? 'hazard';
+        const tint = ZONE_TINT[cat];
+        if (cat === 'hazard') continue; // baseline gray already shown
+        ctx.fillStyle = tint;
+        const x = (r.x - snap.selfX) * scale + cx;
+        const y = (r.y - snap.selfY) * scale + cy;
+        ctx.fillRect(x, y, r.w * scale, r.h * scale);
+      }
     }
   } else {
     ctx.fillStyle = 'rgba(82, 82, 91, 0.18)';

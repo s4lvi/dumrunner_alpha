@@ -221,6 +221,16 @@ export default function EditorPage() {
             />
           ))}
         </Section>
+        <Section title="Overworld / Base">
+          <p className="text-[10px] text-zinc-500 px-2 mb-2">
+            Surface scene (no dungeon layout). The renderer looks up
+            these under the pseudo-biome id <code className="text-zinc-300">surface</code>.
+          </p>
+          <div className="text-[10px] text-zinc-500 px-2 mb-1">Floor</div>
+          <TextureRow category="biome_floor" id="surface" hideLabel />
+          <div className="text-[10px] text-zinc-500 px-2 mt-2 mb-1">Skybox</div>
+          <TextureRow category="biome_skybox" id="surface" hideLabel />
+        </Section>
         <Section title="Biomes (floor)">
           {biomeIds.length === 0 && (
             <p className="text-[10px] text-zinc-500 px-2">

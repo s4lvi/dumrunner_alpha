@@ -3,7 +3,12 @@
 // (the layout itself never enters world_states snapshots) and lets shared
 // servers see consistent floors.
 
-import type { Interactable, Rect, SceneLayout } from '@dumrunner/shared';
+import type {
+  HazardZoneCategory,
+  Interactable,
+  Rect,
+  SceneLayout,
+} from '@dumrunner/shared';
 import { BIOMES } from './biomes.js';
 import { PROPS } from './props.js';
 
@@ -205,6 +210,41 @@ export function generateFloorLayout(
     h: maxY - minY + TILE_SIZE * 4,
   };
 
+  // Assign per-room hazard zone categories. Entrance always rolls
+  // 'safe' (you need a breather where you arrive); the stairs-down
+  // room is forced 'hazard' (no free safe room next to the exit).
+  // All other rooms roll against the biome's safeRoomChance →
+  // extremeRoomChance ladder. Same RNG advance as the rest of
+  // procgen so cycles are deterministic.
+  const biomeDef = BIOMES[biome];
+  const safeChance = biomeDef?.generation.safeRoomChance ?? 0;
+  const extremeChance = biomeDef?.generation.extremeRoomChance ?? 0;
+  // Find the stairs-down room index (matches the same furthest-
+  // from-spawn pick logic above; recompute to avoid tracking an
+  // extra index through the interactable build).
+  let stairsRoomIndex = -1;
+  if (rooms.length > 1) {
+    let furthestDistSq = 0;
+    for (let i = 1; i < rooms.length; i++) {
+      const c = center(rooms[i]);
+      const dx = c.x - spawn.x;
+      const dy = c.y - spawn.y;
+      const dsq = dx * dx + dy * dy;
+      if (dsq > furthestDistSq) {
+        stairsRoomIndex = i;
+        furthestDistSq = dsq;
+      }
+    }
+  }
+  const roomCategories: HazardZoneCategory[] = rooms.map((_, idx) => {
+    if (idx === 0) return 'safe';
+    if (idx === stairsRoomIndex) return 'hazard';
+    const r = rng();
+    if (r < safeChance) return 'safe';
+    if (r < safeChance + extremeChance) return 'extreme';
+    return 'hazard';
+  });
+
   return {
     worldBounds,
     walkables,
@@ -213,6 +253,7 @@ export function generateFloorLayout(
     interactables,
     tileSize: TILE_SIZE,
     biome,
+    roomCategories,
   };
 }
 
@@ -297,14 +338,19 @@ export function generateInitialEnemies(
   const weights = weightsForFloor(layout, floorIndex);
 
   // First room is the entrance — leave it empty for safe arrival.
-  const candidateRooms = layout.rooms.slice(1);
-  if (candidateRooms.length === 0) return [];
-
-  // Roughly one enemy per non-entrance room, two for big rooms.
+  // We iterate the original index space (0..N-1) so we can read
+  // the parallel roomCategories without re-aligning indices.
   const spawns: InitialEnemySpawn[] = [];
-  for (const room of candidateRooms) {
-    const count = room.w * room.h > 30_000 ? 2 : 1;
-    for (let i = 0; i < count; i++) {
+  for (let i = 1; i < layout.rooms.length; i++) {
+    const room = layout.rooms[i];
+    const category = layout.roomCategories?.[i] ?? 'hazard';
+    // Safe rooms host nothing (breather pockets); extreme rooms
+    // stuff in extra spawns to make the risk-reward visible.
+    if (category === 'safe') continue;
+    const baseCount = room.w * room.h > 30_000 ? 2 : 1;
+    const count =
+      category === 'extreme' ? baseCount + 2 : baseCount;
+    for (let j = 0; j < count; j++) {
       const templateId = pickWeighted(rng, weights);
       // Random point inside the room, with a small inset so enemies aren't
       // flush against walls.

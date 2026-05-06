@@ -186,6 +186,10 @@ export type GameHandle = {
   // component (see lib/game/minimap.ts). Visibility flags reflect
   // each renderer's LOS / fog state at the time of the call.
   getMinimapSnapshot(): MinimapSnapshot;
+  // Current self position. The React HazardHUD polls this to map
+  // the player's tile to a HazardZoneCategory using `categoryAt`.
+  // Returns null before the first scene state is hydrated.
+  getSelfPosition(): { x: number; y: number } | null;
   destroy(): void;
 };
 
@@ -2492,6 +2496,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         selfId: init.self.characterId,
         tileSize: currentLayout?.tileSize ?? 32,
         walkables: currentLayout?.walkables ?? [],
+        rooms: currentLayout?.rooms,
+        roomCategories: currentLayout?.roomCategories,
         buildings: buildingsToMinimapList(
           [...buildings.values()].map((rb) => rb.data),
         ),
@@ -2508,6 +2514,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           visible: e.container.visible,
         })),
       };
+    },
+    getSelfPosition() {
+      return { x: selfX, y: selfY };
     },
     nearbyPlayers(radiusPx: number) {
       const r2 = radiusPx * radiusPx;

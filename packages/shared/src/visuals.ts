@@ -58,7 +58,23 @@ export type BiomePalette = {
   wall: string;
   accent: string;
 };
+
+// Hazard summary the client needs to drive the HUD indicator and
+// estimate per-zone DPS. Server is authoritative for damage; the
+// client uses this for display only.
+export type BiomeHazardInfo = {
+  dominantHazard: 'none' | 'heat' | 'radiation' | 'cold' | 'toxic';
+  hazardIntensity: number;
+  hazardZoneIntensities?: Partial<{
+    safe: number;
+    corridor: number;
+    hazard: number;
+    extreme: number;
+  }>;
+};
+
 export const BIOMES: Record<string, BiomePalette> = {};
+export const BIOME_HAZARDS: Record<string, BiomeHazardInfo> = {};
 
 export const FALLBACK_BIOME_PALETTE: BiomePalette = {
   floor: '#1f242c',
@@ -71,9 +87,33 @@ export function biomePaletteFor(biomeId: string | undefined | null): BiomePalett
   return BIOMES[biomeId] ?? FALLBACK_BIOME_PALETTE;
 }
 
-export function setBiomePalettes(palettes: Record<string, BiomePalette>): void {
+export function biomeHazardFor(
+  biomeId: string | undefined | null,
+): BiomeHazardInfo | null {
+  if (!biomeId) return null;
+  return BIOME_HAZARDS[biomeId] ?? null;
+}
+
+export function setBiomePalettes(
+  palettes: Record<string, BiomePalette & Partial<BiomeHazardInfo>>,
+): void {
   for (const k of Object.keys(BIOMES)) delete BIOMES[k];
-  Object.assign(BIOMES, palettes);
+  for (const k of Object.keys(BIOME_HAZARDS)) delete BIOME_HAZARDS[k];
+  for (const id of Object.keys(palettes)) {
+    const entry = palettes[id];
+    BIOMES[id] = {
+      floor: entry.floor,
+      wall: entry.wall,
+      accent: entry.accent,
+    };
+    if (entry.dominantHazard !== undefined) {
+      BIOME_HAZARDS[id] = {
+        dominantHazard: entry.dominantHazard,
+        hazardIntensity: entry.hazardIntensity ?? 0,
+        hazardZoneIntensities: entry.hazardZoneIntensities,
+      };
+    }
+  }
 }
 
 // Part tier colours used by both the top-down loot drop tint and the

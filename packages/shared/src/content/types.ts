@@ -82,6 +82,38 @@ export const HazardKindSchema = z.enum([
 ]);
 export type HazardKind = z.infer<typeof HazardKindSchema>;
 
+// Per-room hazard zone category. Procgen tags every room with one
+// of these; corridors are uniformly 'corridor'. The biome's
+// `hazardZoneIntensities` table resolves each category to an
+// intensity multiplier on the floor's base hazard DPS.
+//
+//   safe     0.0    Heal/save rooms — breathers between hot zones.
+//   corridor 0.4    Transit space — elevated but survivable.
+//   hazard   1.0    Biome's normal hazard level.
+//   extreme  2.0    Pocket rooms / boss rooms / vault chambers.
+//
+// Defaults applied when a biome doesn't override
+// `hazardZoneIntensities`. Tunable per-biome (Alien Core might
+// want safe rooms still at 0.2 because the air is permanently
+// bad).
+export const HazardZoneCategorySchema = z.enum([
+  'safe',
+  'corridor',
+  'hazard',
+  'extreme',
+]);
+export type HazardZoneCategory = z.infer<typeof HazardZoneCategorySchema>;
+
+export const DEFAULT_HAZARD_ZONE_INTENSITIES: Record<
+  HazardZoneCategory,
+  number
+> = {
+  safe: 0,
+  corridor: 0.4,
+  hazard: 1,
+  extreme: 2,
+};
+
 const biomePaletteSchema = z
   .object({
     floor: hexColorSchema,
@@ -107,6 +139,30 @@ const biomeGenerationSchema = z
     lootDensity: z.number().min(0).max(1),
     // Multiplier on the dominant hazard's per-tick damage.
     hazardIntensity: z.number().min(0).max(1),
+    // 0..1 — fraction of non-entrance, non-stairs rooms that roll
+    // as `safe` hazard zones (breather pockets). Entrance always
+    // forces safe regardless of this; stairs-down always forces
+    // hazard. 0 = no breather rooms; 0.3 = ~3 of 10 rooms.
+    safeRoomChance: z.number().min(0).max(1).optional(),
+    // 0..1 — fraction of non-special rooms that roll as `extreme`
+    // (high-risk, high-reward pockets). Mutually exclusive with
+    // safe; the safe roll is checked first. Boss / champion rooms
+    // (band-end floors) force extreme regardless.
+    extremeRoomChance: z.number().min(0).max(1).optional(),
+    // Per-category intensity overrides. Sparse — any category not
+    // listed falls through to DEFAULT_HAZARD_ZONE_INTENSITIES.
+    // Useful for Alien Core "even safe rooms aren't really safe"
+    // (lift the safe value to 0.2) or Frozen "corridors are deadly
+    // exposure" (lift corridor to 0.7).
+    hazardZoneIntensities: z
+      .object({
+        safe: z.number().min(0).optional(),
+        corridor: z.number().min(0).optional(),
+        hazard: z.number().min(0).optional(),
+        extreme: z.number().min(0).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine((g) => g.roomCountMax >= g.roomCountMin, {

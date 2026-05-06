@@ -36,6 +36,12 @@ import {
   partPrimaryStat,
   PLAYER_BASE_STATS,
   PROTOCOL_VERSION,
+  defaultSpecialtyForPartId,
+  lifeSupportResists,
+  biomeHazardFor,
+  categoryAt,
+  effectiveHazardDps,
+  resistFor,
   setBiomePalettes,
   setEnemyVisuals,
   SUIT_ATTACHMENT_SLOTS,
@@ -108,6 +114,12 @@ export function Game({ serverId }: { serverId: string }) {
   const [equipment, setEquipment] = useState<Equipment>(() => emptyEquipment());
   const [hotbarSelection, setHotbarSelection] = useState(0);
   const [sceneId, setSceneId] = useState<string>('surface');
+  // Current scene's SceneLayout; lets the HazardHUD compute the
+  // player's room-zone category client-side using the same
+  // categoryAt helper the server's hazard tick uses. null = no
+  // layout (surface fallback).
+  const [currentLayout, setCurrentLayout] =
+    useState<import('@dumrunner/shared').SceneLayout | null>(null);
   // Epoch ms when an in-progress reload completes; null = not reloading.
   // Set on reload_started for the local player; cleared on weapon_reloaded.
   const [reloadEndsAt, setReloadEndsAt] = useState<number | null>(null);
@@ -496,6 +508,7 @@ export function Game({ serverId }: { serverId: string }) {
         setEquipment(msg.equipment);
         setHotbarSelection(msg.hotbarSelection);
         setSceneId(msg.sceneId);
+        setCurrentLayout(msg.layout);
         setKnownBlueprints(new Set(msg.knownBlueprints));
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
         selfIdRef.current = msg.self.characterId;
@@ -725,6 +738,7 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'scene_changed':
         setSceneId(msg.sceneId);
+        setCurrentLayout(msg.layout);
         setEquipment(msg.equipment);
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
         gameRef.current?.swapScene({
@@ -1358,6 +1372,16 @@ export function Game({ serverId }: { serverId: string }) {
           <PerihelionWarning
             clock={worldClock}
             inDungeon={sceneId.startsWith('dungeon:')}
+          />
+        )}
+        {sceneId.startsWith('dungeon:') && currentLayout && (
+          <HazardHud
+            layout={currentLayout}
+            sceneId={sceneId}
+            equipment={equipment}
+            getSelfPosition={() =>
+              gameRef.current?.getSelfPosition() ?? null
+            }
           />
         )}
         <PowerHud state={powerState} />
@@ -2349,6 +2373,87 @@ function ChatPanel({
   );
 }
 
+// Per-room hazard indicator. Reads the player's current room
+// category by polling getSelfPosition() at 2 Hz (cheap; rooms are
+// big and you don't cross them every frame). Resists come from
+// the equipped life-support, so the displayed netDPS matches
+// what the server tick actually deals (modulo timing jitter).
+function HazardHud({
+  layout,
+  sceneId,
+  equipment,
+  getSelfPosition,
+}: {
+  layout: import('@dumrunner/shared').SceneLayout;
+  sceneId: string;
+  equipment: Equipment;
+  getSelfPosition: () => { x: number; y: number } | null;
+}) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setPos(getSelfPosition());
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [getSelfPosition]);
+
+  const biome = useMemo(() => biomeHazardFor(layout.biome), [layout.biome]);
+  if (!biome || biome.dominantHazard === 'none') return null;
+
+  const floorIndex = sceneId.startsWith('dungeon:')
+    ? Number(sceneId.slice('dungeon:'.length)) || 0
+    : 0;
+  if (floorIndex <= 0) return null;
+
+  const category = pos
+    ? categoryAt(layout, pos.x, pos.y)
+    : 'hazard';
+  const { kind, dps } = effectiveHazardDps(biome, floorIndex, category);
+  if (kind === 'none' || dps <= 0) return null;
+
+  const suit = computeSuitStats(equipment);
+  const resist = resistFor(suit, kind);
+  const netDps = dps * (1 - resist);
+
+  // Color scaling on net DPS — yellow trickle, orange noticeable,
+  // red dangerous, dark-red death-clock-fast.
+  const tier =
+    netDps < 1
+      ? { bg: 'bg-yellow-950/80', border: 'border-yellow-700', text: 'text-yellow-100' }
+      : netDps < 3
+        ? { bg: 'bg-orange-950/85', border: 'border-orange-600', text: 'text-orange-100' }
+        : netDps < 6
+          ? { bg: 'bg-red-950/85', border: 'border-red-600', text: 'text-red-100' }
+          : { bg: 'bg-red-950/95 animate-pulse', border: 'border-red-400', text: 'text-red-50' };
+
+  const HAZARD_LABEL: Record<string, string> = {
+    heat: 'Heat',
+    cold: 'Cold',
+    radiation: 'Radiation',
+    toxic: 'Toxic',
+  };
+  const ZONE_LABEL: Record<string, string> = {
+    safe: 'Safe',
+    corridor: 'Corridor',
+    hazard: 'Hazard',
+    extreme: 'Extreme',
+  };
+
+  return (
+    <div className="absolute top-12 left-1/2 -translate-x-1/2 pointer-events-none select-none">
+      <div
+        className={`px-3 py-1.5 rounded-full border text-xs flex items-center gap-3 ${tier.bg} ${tier.border} ${tier.text}`}
+      >
+        <span className="font-semibold">{HAZARD_LABEL[kind]}</span>
+        <span className="opacity-60">•</span>
+        <span>{ZONE_LABEL[category]}</span>
+        <span className="opacity-60">•</span>
+        <span>−{netDps.toFixed(1)} hp/s</span>
+      </div>
+    </div>
+  );
+}
+
 function WorldClockHud({
   clock,
 }: {
@@ -2783,6 +2888,33 @@ function renderInspectBody(
             value={`+${Math.round(primary.moveSpeedMult * 100)}%`}
           />
         ) : null}
+        {part.slot === 'life_support' && (() => {
+          const specialty =
+            part.specialtyHazard ?? defaultSpecialtyForPartId(part.id);
+          const r = lifeSupportResists(part.tier, specialty);
+          const row = (
+            label: string,
+            value: number,
+            kind: typeof specialty,
+          ) => (
+            <StatRow
+              key={kind}
+              label={specialty === kind ? `${label} (specialty)` : label}
+              value={`${Math.round(value * 100)}%`}
+            />
+          );
+          return (
+            <div className="mt-1.5">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                Resists
+              </div>
+              {row('Heat', r.heatResist, 'heat')}
+              {row('Cold', r.coldResist, 'cold')}
+              {row('Radiation', r.radiationResist, 'radiation')}
+              {row('Toxic', r.toxicResist, 'toxic')}
+            </div>
+          );
+        })()}
         {part.affixes && part.affixes.length > 0 && (
           <div className="mt-1.5">
             <div className="text-[10px] uppercase tracking-wider text-zinc-500">
@@ -5415,6 +5547,17 @@ function slotTooltip(slot: InventorySlot): string | undefined {
       lines.push(`+${primary.staminaRegenBonus.toFixed(1)} stamina/s`);
     if (primary.moveSpeedMult)
       lines.push(`+${Math.round(primary.moveSpeedMult * 100)}% speed`);
+    // Life-support resists. Each part has a specialty hazard; the
+    // other 3 hazards roll the off-coverage value at the same tier.
+    if (part.slot === 'life_support') {
+      const specialty = part.specialtyHazard ?? defaultSpecialtyForPartId(part.id);
+      const r = lifeSupportResists(part.tier, specialty);
+      lines.push('— Resists —');
+      lines.push(`Heat: ${Math.round(r.heatResist * 100)}%${specialty === 'heat' ? '  (specialty)' : ''}`);
+      lines.push(`Cold: ${Math.round(r.coldResist * 100)}%${specialty === 'cold' ? '  (specialty)' : ''}`);
+      lines.push(`Radiation: ${Math.round(r.radiationResist * 100)}%${specialty === 'radiation' ? '  (specialty)' : ''}`);
+      lines.push(`Toxic: ${Math.round(r.toxicResist * 100)}%${specialty === 'toxic' ? '  (specialty)' : ''}`);
+    }
     // Each rolled affix gets its own line: flavored name + technical label.
     if (part.affixes && part.affixes.length > 0) {
       lines.push('— Affixes —');

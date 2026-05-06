@@ -13,7 +13,12 @@
     "propDensity": 0.06,
     "enemyDensity": 0.05,
     "lootDensity": 0.6,
-    "hazardIntensity": 0.7
+    "hazardIntensity": 0.7,
+    "safeRoomChance": 0.05,
+    "extremeRoomChance": 0.25,
+    "hazardZoneIntensities": {
+      "safe": 0.2
+    }
   },
   "enemyRoster": [],
   "propPalette": [

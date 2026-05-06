@@ -78,6 +78,13 @@ import {
   type InitialPropSpawn,
 } from './procgen.js';
 import type { AiEnvironment } from './ai/fsm.js';
+import { BIOMES } from './biomes.js';
+import {
+  HAZARD_TICK_INTERVAL_MS,
+  categoryAt,
+  effectiveHazardDps,
+  resistFor,
+} from '@dumrunner/shared';
 
 // 60 covers diagonal approaches to a 1×1 wall-tile building (e.g. the
 // Power Link): a player can't enter the tile so they stand at most
@@ -160,6 +167,14 @@ export interface SceneConnection {
   // (chassis primary stat + cargo grid). Already floor()'d to whole
   // tiles in recomputePlayerStats.
   suitBuildRadiusBonus: number;
+  // Hazard resists from the equipped life-support, 0..1. Cached
+  // per-connection so the per-second hazard tick doesn't have to
+  // walk the equipment tree. Recomputed in lockstep with the rest
+  // of the suit stats whenever equipment changes.
+  suitHeatResist: number;
+  suitColdResist: number;
+  suitRadiationResist: number;
+  suitToxicResist: number;
 }
 
 type ProjectileRuntime = ProjectileState & {
@@ -330,6 +345,16 @@ export class Scene {
   // Surface scenes have layout = null and skip collision.
   readonly layout: SceneLayout | null;
 
+  // Parsed from the scene id (`dungeon:N` → N). 0 for surface and
+  // any other non-dungeon scene. Drives the hazard tick's depth
+  // ramp without forcing every Scene caller to pass it in.
+  readonly floorIndex: number;
+
+  // Hazard tick accumulator. Counts up by `dt` each frame; once
+  // it crosses HAZARD_TICK_INTERVAL_MS we apply one tick of
+  // damage and reset.
+  private hazardAccumulator = 0;
+
   constructor(
     id: string,
     kind: SceneKind,
@@ -344,6 +369,14 @@ export class Scene {
     this.kind = kind;
     this.bindings = bindings;
     this.layout = layout;
+    // Parse the 1-based floor index from `dungeon:N`; surface and
+    // unknown scene ids fall through to 0 (no hazard).
+    if (id.startsWith('dungeon:')) {
+      const n = Number(id.slice('dungeon:'.length));
+      this.floorIndex = Number.isInteger(n) && n > 0 ? n : 0;
+    } else {
+      this.floorIndex = 0;
+    }
 
     if (kind === 'surface') {
       this.populateSurface();
@@ -938,7 +971,57 @@ export class Scene {
     this.handlePickupsAndLootExpiry(now);
     this.handleCorpsePickups();
     this.handleHordeWaves(now);
+    this.tickHazards(dt, now);
     this.respawnDeadEntities(now);
+  }
+
+  // Per-second environmental hazard pass. Sources the biome's
+  // `dominantHazard` from the registry, the player's current
+  // hazard zone category from layout, and the resist value from
+  // the player's cached suit stats. Skips entirely when the
+  // scene has no layout (surface) or the biome's hazard is
+  // 'none' (default / safe-zone biomes).
+  private tickHazards(dt: number, now: number): void {
+    if (!this.layout || this.floorIndex <= 0) return;
+    this.hazardAccumulator += dt * 1000;
+    if (this.hazardAccumulator < HAZARD_TICK_INTERVAL_MS) return;
+    // Snap the accumulator instead of carrying remainder so a
+    // long pause (e.g. server hitch) doesn't fire a burst of
+    // catch-up ticks the player can't react to.
+    this.hazardAccumulator = 0;
+    const biome = BIOMES[this.layout.biome];
+    if (!biome || biome.dominantHazard === 'none') return;
+    // Adapt the full server BiomeDef into the shared
+    // BiomeHazardInfo shape effectiveHazardDps expects. Same
+    // fields with a thin projection so the math lives in shared.
+    const hazardInfo = {
+      dominantHazard: biome.dominantHazard,
+      hazardIntensity: biome.generation.hazardIntensity,
+      hazardZoneIntensities: biome.generation.hazardZoneIntensities,
+    };
+    for (const characterId of this.members) {
+      const conn = this.bindings.connection(characterId);
+      if (!conn || !conn.alive) continue;
+      const category = categoryAt(this.layout, conn.x, conn.y);
+      const { kind, dps } = effectiveHazardDps(
+        hazardInfo,
+        this.floorIndex,
+        category,
+      );
+      if (kind === 'none' || dps <= 0) continue;
+      const resist = resistFor(
+        {
+          heatResist: conn.suitHeatResist,
+          coldResist: conn.suitColdResist,
+          radiationResist: conn.suitRadiationResist,
+          toxicResist: conn.suitToxicResist,
+        },
+        kind,
+      );
+      const damage = dps * (1 - resist);
+      if (damage <= 0) continue;
+      this.applyDamageToPlayer(characterId, damage, now);
+    }
   }
 
   private tickTurrets(now: number): void {

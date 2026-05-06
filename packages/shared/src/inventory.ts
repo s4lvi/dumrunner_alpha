@@ -447,6 +447,13 @@ export type SuitStats = {
   // inventoryBonus on equipment changes; never shrinks below the
   // last non-empty slot to avoid item loss.
   inventoryBonus: number;
+  // Hazard resists, 0..1 (capped at 0.95 effective at damage time).
+  // Driven by the equipped life-support part's tier + specialty.
+  // The specialty hazard rolls higher than the off-coverage three.
+  heatResist: number;
+  coldResist: number;
+  radiationResist: number;
+  toxicResist: number;
 };
 
 // Player base stats — must mirror the server's COMBAT constants. Used by
@@ -467,7 +474,73 @@ export function emptySuitStats(): SuitStats {
     moveSpeedMult: 0,
     buildRadiusBonus: 0,
     inventoryBonus: 0,
+    heatResist: 0,
+    coldResist: 0,
+    radiationResist: 0,
+    toxicResist: 0,
   };
+}
+
+// Per-tier life-support resist values. Specialty hazard gets
+// `spec`, the other 3 hazards get `off` — represents "every LS
+// has one focus + partial coverage on the rest" per the GDD.
+// Adding tiers is one entry; specialty selection is per-instance.
+//
+// Targets calibrated to the GDD progression promise:
+//   no resist     → seconds before death in a deep biome
+//   mid spec match → minutes of viable exploration
+//   high spec match → full run including band's deepest floors
+export const LIFE_SUPPORT_RESIST_TABLE: Record<
+  PartTier,
+  { spec: number; off: number }
+> = {
+  Mk1: { spec: 0.3, off: 0.05 },
+  Mk2: { spec: 0.45, off: 0.15 },
+  Mk3: { spec: 0.6, off: 0.25 },
+  Mk4: { spec: 0.75, off: 0.4 },
+  Alien: { spec: 0.85, off: 0.65 },
+};
+
+export type LifeSupportSpecialty = 'heat' | 'radiation' | 'cold' | 'toxic';
+export const LIFE_SUPPORT_SPECIALTIES: readonly LifeSupportSpecialty[] = [
+  'heat',
+  'radiation',
+  'cold',
+  'toxic',
+] as const;
+
+// Returns the four-resist tuple a life-support of a given tier
+// and specialty contributes. Used by computeSuitStats AND by the
+// inventory tooltip so the displayed numbers match what the
+// server applies during the hazard tick.
+export function lifeSupportResists(
+  tier: PartTier,
+  specialty: LifeSupportSpecialty,
+): {
+  heatResist: number;
+  coldResist: number;
+  radiationResist: number;
+  toxicResist: number;
+} {
+  const { spec, off } = LIFE_SUPPORT_RESIST_TABLE[tier];
+  return {
+    heatResist: specialty === 'heat' ? spec : off,
+    coldResist: specialty === 'cold' ? spec : off,
+    radiationResist: specialty === 'radiation' ? spec : off,
+    toxicResist: specialty === 'toxic' ? spec : off,
+  };
+}
+
+// Deterministic specialty pick when a part lacks one (legacy save
+// migration, or a starter LS that hasn't been authored with a
+// specific role). Hashes the part id for stability — same id
+// always resolves to the same specialty across reloads.
+export function defaultSpecialtyForPartId(id: string): LifeSupportSpecialty {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  }
+  return LIFE_SUPPORT_SPECIALTIES[h % LIFE_SUPPORT_SPECIALTIES.length];
 }
 
 // Tier multipliers — exponential-ish curve so high-tier loot is
@@ -523,6 +596,19 @@ export function computeSuitStats(equipment: Equipment): SuitStats {
     stats.moveSpeedMult += contrib.moveSpeedMult ?? 0;
     stats.buildRadiusBonus += contrib.buildRadiusBonus ?? 0;
     stats.inventoryBonus += contrib.inventoryBonus ?? 0;
+    // Life-support resists: derived from (tier, specialty). Other
+    // slots can't roll resists today, so this is gated to
+    // life_support. Tooltip surface mirrors this — a non-LS part
+    // shows zero resists.
+    if (slot === 'life_support') {
+      const specialty: LifeSupportSpecialty =
+        part.specialtyHazard ?? defaultSpecialtyForPartId(part.id);
+      const resists = lifeSupportResists(part.tier, specialty);
+      stats.heatResist += resists.heatResist;
+      stats.coldResist += resists.coldResist;
+      stats.radiationResist += resists.radiationResist;
+      stats.toxicResist += resists.toxicResist;
+    }
     // Stack rolled affix bonuses onto the same accumulator. Affixes use
     // the same units as the primary stat so they just add.
     for (const affix of part.affixes ?? []) {

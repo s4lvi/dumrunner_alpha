@@ -2,7 +2,11 @@
   "id": "default",
   "label": "Default",
   "dominantHazard": "none",
-  "palette": { "floor": "#1f242c", "wall": "#52525b", "accent": "#94a3b8" },
+  "palette": {
+    "floor": "#1f242c",
+    "wall": "#52525b",
+    "accent": "#94a3b8"
+  },
   "generation": {
     "roomCountMin": 6,
     "roomCountMax": 10,
@@ -13,11 +17,46 @@
     "propDensity": 0.04,
     "enemyDensity": 0.03,
     "lootDensity": 0.4,
-    "hazardIntensity": 0
+    "hazardIntensity": 0,
+    "safeRoomChance": 1,
+    "extremeRoomChance": 0
   },
   "enemyRoster": [
-    { "id": "dummy_target", "weight": 1.0 }
+    {
+      "id": "dummy_target",
+      "weight": 1
+    },
+    {
+      "id": "chaser_melee",
+      "weight": 1
+    },
+    {
+      "id": "shooter_drone",
+      "weight": 1
+    },
+    {
+      "id": "swarmer",
+      "weight": 1
+    }
   ],
-  "propPalette": [],
-  "lootBias": []
+  "propPalette": [
+    {
+      "id": "barrel",
+      "weight": 1
+    },
+    {
+      "id": "crate",
+      "weight": 1
+    }
+  ],
+  "lootBias": [
+    {
+      "materialId": "scrap",
+      "multiplier": 1
+    },
+    {
+      "materialId": "wire",
+      "multiplier": 1
+    }
+  ]
 }

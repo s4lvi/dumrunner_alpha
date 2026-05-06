@@ -4,7 +4,10 @@ import type {
   PartTier,
   WeaponClass,
 } from '@dumrunner/shared';
-import { rollAffixesForPart } from '@dumrunner/shared';
+import {
+  LIFE_SUPPORT_SPECIALTIES,
+  rollAffixesForPart,
+} from '@dumrunner/shared';
 
 // Roll a part-style drop on enemy kill. Slot, tier, and affix count are sampled
 // from the GDD's ontology; concrete stat values are deferred until crafting /
@@ -89,6 +92,14 @@ export function rollDropsForKill(killTierBias: number): CarriedPart[] {
       weaponClass: CLASS_LOCKED_SLOTS.has(slot) ? rollClass() : null,
       affixCount,
       affixes: rollAffixesForPart(slot, tier, affixCount),
+      // Life-support drops roll a specialty hazard (uniform over
+      // the 4 kinds). Other slots leave it undefined.
+      specialtyHazard:
+        slot === 'life_support'
+          ? LIFE_SUPPORT_SPECIALTIES[
+              Math.floor(Math.random() * LIFE_SUPPORT_SPECIALTIES.length)
+            ]
+          : undefined,
     });
   }
   return drops;
