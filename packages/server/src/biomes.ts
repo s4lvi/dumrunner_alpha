@@ -57,6 +57,7 @@ function eligibleBiomeIds(): string[] {
   for (const id of Object.keys(BIOMES)) {
     if (id === DEFAULT_BIOME_ID) continue;
     const def = BIOMES[id];
+    if (def.kind === 'overworld') continue;
     if (def.enemyRoster.length === 0) continue;
     ids.push(id);
   }
@@ -88,6 +89,19 @@ export function biomeForFloor(
   floorIndex: number,
 ): string {
   return pickBandBiome(worldSeed, cycle, bandIndexOf(floorIndex));
+}
+
+// Returns the first biome with kind === 'overworld', or null if none
+// authored. Surface scene init uses this to drive its biome id and
+// scattered-prop config. Sort by id for stable selection across
+// reorders / new biomes added in different positions.
+export function getOverworldBiome(): BiomeDef | null {
+  const ids = Object.keys(BIOMES).sort();
+  for (const id of ids) {
+    const def = BIOMES[id];
+    if (def.kind === 'overworld') return def;
+  }
+  return null;
 }
 
 // Snapshot for the welcome message. Per-id palette + the hazard

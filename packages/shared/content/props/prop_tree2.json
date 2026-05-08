@@ -1,5 +1,5 @@
 {
-  "id": "prop_mouixmbe",
+  "id": "prop_tree2",
   "label": "Tree",
   "biomeAffinity": [
     "sun_bleached"
@@ -8,7 +8,7 @@
   "solid": true,
   "onDestroy": "nothing",
   "visual": {
-    "spriteSize": 2.55,
+    "spriteSize": 0.65,
     "spriteGroundOffset": 0
   }
 }

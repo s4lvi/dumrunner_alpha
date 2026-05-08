@@ -370,10 +370,33 @@ const biomeTileSetSchema = z
     { message: 'tile ids must be unique within a biome', path: ['tiles'] },
   );
 
+// Two flavours of biome share the same schema:
+//  - dungeon (default): authored layouts with rooms, corridors,
+//    hazards, etc. The procgen + dungeon scene init reads these.
+//  - overworld: drives the surface scene. Rooms / hazards / tile
+//    set are unused; propPalette + overworldDensity drive the
+//    scattered props on the surface, palette + biome_floor /
+//    biome_skybox texture overrides drive its look. Only the
+//    first authored overworld biome is used (one surface per
+//    server). Older biomes without `kind` are treated as dungeon.
+const BiomeKindSchema = z
+  .enum(['dungeon', 'overworld'])
+  .default('dungeon');
+export type BiomeKind = z.infer<typeof BiomeKindSchema>;
+
+const overworldParamsSchema = z
+  .object({
+    // Props scattered per 100 surface tiles. 0 = none. Reasonable
+    // values are 0.5..3 (sparse to dense rubble-strewn surface).
+    propDensity: z.number().min(0).max(10).default(1),
+  })
+  .strict();
+
 export const BiomeDefSchema = z
   .object({
     id: idSchema,
     label: z.string().min(1),
+    kind: BiomeKindSchema,
     dominantHazard: HazardKindSchema,
     palette: biomePaletteSchema,
     generation: biomeGenerationSchema,
@@ -384,6 +407,8 @@ export const BiomeDefSchema = z
     // E3.4 Phase 1: per-tile registry. Optional — biomes without a
     // tileSet keep the legacy palette-only render path.
     tileSet: biomeTileSetSchema.optional(),
+    // Only meaningful when kind === 'overworld'. Ignored otherwise.
+    overworld: overworldParamsSchema.optional(),
   })
   .strict();
 export type BiomeDef = z.infer<typeof BiomeDefSchema>;

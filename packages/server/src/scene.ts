@@ -84,7 +84,7 @@ import {
   type InitialPropSpawn,
 } from './procgen.js';
 import type { AiEnvironment } from './ai/fsm.js';
-import { BIOMES } from './biomes.js';
+import { BIOMES, getOverworldBiome } from './biomes.js';
 import {
   HAZARD_TICK_INTERVAL_MS,
   categoryAt,
@@ -2905,6 +2905,77 @@ export class Scene {
       const id = `e${this.nextEnemyId++}`;
       this.enemies.set(id, instantiateEnemy(id, tpl, spawn.x, spawn.y));
       ensureEnemyAsset(tpl);
+    }
+    this.scatterOverworldProps();
+  }
+
+  // Scatter decorative props across the surface, driven by the
+  // first authored overworld biome's propPalette + propDensity.
+  // No-ops when no overworld biome exists or its palette is empty.
+  // Skips a clear zone around the spawn / power link so the player
+  // never lands inside a rock.
+  private scatterOverworldProps(): void {
+    const biome = getOverworldBiome();
+    if (!biome) return;
+    const palette = biome.propPalette;
+    if (palette.length === 0) return;
+    const density = biome.overworld?.propDensity ?? 1;
+    if (density <= 0) return;
+    const layout = this.layout;
+    if (!layout || !layout.worldBounds) return;
+    const ts = layout.tileSize;
+    const tilesW = Math.floor(layout.worldBounds.w / ts);
+    const tilesH = Math.floor(layout.worldBounds.h / ts);
+    // density = props per 100 tiles. Total area in tiles → count.
+    const propCount = Math.floor((tilesW * tilesH * density) / 100);
+    if (propCount <= 0) return;
+    // Cumulative weights for biased pick. Rolled with a deterministic
+    // RNG seeded by world bounds + density so reboots reproduce the
+    // same scatter (until the user re-authors the biome).
+    const totalWeight = palette.reduce((s, e) => s + Math.max(0, e.weight), 0);
+    if (totalWeight <= 0) return;
+    let seed = (tilesW * 0x9e3779b1) ^ (tilesH * 0x85ebca77);
+    const rand = (): number => {
+      seed = (seed + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    // Clear zone around the surface entry / power link so the
+    // player isn't trapped in scatter on spawn.
+    const CLEAR_RADIUS_PX = 256;
+    const clearX = layout.spawn?.x ?? 0;
+    const clearY = layout.spawn?.y ?? 0;
+    const clearR2 = CLEAR_RADIUS_PX * CLEAR_RADIUS_PX;
+    for (let i = 0; i < propCount; i++) {
+      const x = layout.worldBounds.x + rand() * layout.worldBounds.w;
+      const y = layout.worldBounds.y + rand() * layout.worldBounds.h;
+      const dxc = x - clearX;
+      const dyc = y - clearY;
+      if (dxc * dxc + dyc * dyc < clearR2) continue;
+      // Weighted palette pick.
+      const roll = rand() * totalWeight;
+      let acc = 0;
+      let chosen = palette[0];
+      for (const entry of palette) {
+        acc += Math.max(0, entry.weight);
+        if (roll <= acc) {
+          chosen = entry;
+          break;
+        }
+      }
+      const def = PROPS[chosen.id];
+      if (!def) continue;
+      const id = `prop_${this.nextPropId++}`;
+      this.props.set(id, {
+        id,
+        kind: chosen.id,
+        x,
+        y,
+        hp: def.hp,
+        maxHp: def.hp,
+        alive: true,
+      });
     }
   }
 

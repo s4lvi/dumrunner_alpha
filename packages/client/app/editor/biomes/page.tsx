@@ -43,6 +43,7 @@ function makeBlank(id = 'new_biome'): BiomeDef {
   return {
     id,
     label: 'New Biome',
+    kind: 'dungeon',
     dominantHazard: 'heat',
     palette: { floor: '#1f242c', wall: '#52525b', accent: '#fde68a' },
     generation: {
@@ -234,6 +235,15 @@ function BiomeEditorBody() {
                 onChange={(v) => setDraft({ ...draft, label: v })}
               />
               <EnumField
+                label="kind"
+                value={draft.kind ?? 'dungeon'}
+                options={['dungeon', 'overworld'] as const}
+                onChange={(v) =>
+                  setDraft({ ...draft, kind: v as BiomeDef['kind'] })
+                }
+                hint="overworld = surface / base biome (one used at a time)"
+              />
+              <EnumField
                 label="dominant hazard"
                 value={draft.dominantHazard}
                 options={HAZARDS}
@@ -242,6 +252,36 @@ function BiomeEditorBody() {
                 }
               />
             </FormSection>
+
+            {(draft.kind ?? 'dungeon') === 'overworld' && (
+              <FormSection title="Overworld">
+                <p className="text-[10px] text-zinc-500 mb-2">
+                  Drives the surface scene. Floor + skybox textures
+                  authored under{' '}
+                  <code className="text-zinc-300">/editor/textures</code>
+                  {' '}keyed by this biome's id. Scattered props pulled
+                  from <code className="text-zinc-300">propPalette</code>{' '}
+                  below.
+                </p>
+                <SliderField
+                  label="prop density"
+                  value={draft.overworld?.propDensity ?? 1}
+                  min={0}
+                  max={5}
+                  step={0.1}
+                  onChange={(v) =>
+                    setDraft({
+                      ...draft,
+                      overworld: {
+                        ...(draft.overworld ?? { propDensity: 1 }),
+                        propDensity: v,
+                      },
+                    })
+                  }
+                  hint="props per 100 surface tiles"
+                />
+              </FormSection>
+            )}
 
             <FormSection title="Palette">
               <ColorField
@@ -335,6 +375,7 @@ function BiomeEditorBody() {
               </div>
             </FormSection>
 
+            {(draft.kind ?? 'dungeon') === 'dungeon' && (
             <FormSection title="Generation">
               <EnumField<'tunneling' | 'walker'>
                 label="generator"
@@ -664,6 +705,7 @@ function BiomeEditorBody() {
                 }
               />
             </FormSection>
+            )}
 
             <ListField
               label="Enemy roster"

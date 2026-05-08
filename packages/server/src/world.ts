@@ -85,6 +85,7 @@ import {
   biomeForFloor,
   DEFAULT_BIOME_ID,
   getBiomesForWire,
+  getOverworldBiome,
 } from './biomes.js';
 import { getPropVisualsForWire } from './props.js';
 
@@ -128,10 +129,12 @@ function surfaceLayout(): SceneLayout {
     // cleanly. Walkables stays empty — no collision walls on the surface
     // itself; only player-placed buildings act as blockers.
     tileSize: 32,
-    // Surface = the player's base, no hazard biome. Renderers
-    // resolve this to the FALLBACK_BIOME_PALETTE (or whatever
-    // the 'default' biome JSON authors).
-    biome: DEFAULT_BIOME_ID,
+    // Surface biome — pulls the first authored overworld biome,
+    // falling back to the legacy 'default' id if none exists yet.
+    // The renderer uses this id for biome_floor / biome_skybox /
+    // biome_ceiling texture lookups so authors can reskin the
+    // base entirely from the editor.
+    biome: getOverworldBiome()?.id ?? DEFAULT_BIOME_ID,
   };
 }
 

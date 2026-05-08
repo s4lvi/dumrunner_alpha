@@ -1,0 +1,11 @@
+{
+  "id": "prop_mox9mxbs",
+  "label": "Tree 4",
+  "biomeAffinity": [],
+  "hp": 40,
+  "solid": true,
+  "onDestroy": "nothing",
+  "visual": {
+    "spriteSize": 2.1
+  }
+}

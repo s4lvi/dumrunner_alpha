@@ -286,6 +286,15 @@ export default function EditorPage() {
             />
           ))}
         </Section>
+        <Section title="Players">
+          <p className="text-[10px] text-zinc-500 px-2 mb-2">
+            Billboard sprite shown for other players in the FPS view.
+            Same shape as enemy / decorator sprites — full-height,
+            clamped UVs, transparent PNG. Falls back to a flat-color
+            rect if absent.
+          </p>
+          <TextureRow category="player" id="default" hideLabel />
+        </Section>
         <Section title="Materials">
           {MATERIAL_KINDS.map((id) => (
             <TextureRow key={`material-${id}`} category="material" id={id} />

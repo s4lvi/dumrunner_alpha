@@ -1,8 +1,10 @@
-import type {
-  BuildingKind,
-  BuildingState,
-  HazardZoneCategory,
-  Rect,
+import {
+  isWalkableTileId,
+  type BuildingKind,
+  type BuildingState,
+  type HazardZoneCategory,
+  type Rect,
+  type TileGrid,
 } from '@dumrunner/shared';
 
 // Renderer-agnostic minimap snapshot. Each renderer assembles
@@ -15,6 +17,17 @@ export type MinimapSnapshot = {
   selfId: string;
   tileSize: number;
   walkables: Rect[];
+  // Per-cell rendering source. When present, the painter walks the
+  // grid and draws a rect per walkable+seen cell — corridors carved
+  // by the tunneler show up faithfully. Falls back to walkables[]
+  // rects when omitted (legacy / non-grid layouts).
+  tileGrid?: TileGrid;
+  // Decoded tile ids parallel to tileGrid (row-major, len = w*h).
+  tiles?: Uint8Array;
+  // Per-cell seen bitmap (len = w*h). Nonzero = revealed. The
+  // minimap hides unseen cells; if omitted, every walkable cell
+  // is treated as seen.
+  seen?: Uint8Array;
   // Per-room hazard zone category (parallel to layout.rooms; the
   // first N entries of walkables are the rooms). Optional so the
   // surface scene's empty layout can omit it. When present, the
@@ -87,24 +100,56 @@ export function paintMinimap(
   ctx.fillStyle = 'rgba(10, 12, 18, 0.85)';
   ctx.fillRect(0, 0, w, h);
 
-  if (snap.walkables.length > 0) {
-    // Walkables = rooms ∪ corridors. We over-paint rooms with
-    // category-tinted fills below, so corridors get the baseline
-    // gray everyone's used to.
+  // Per-cell painter takes priority — corridors carved into the
+  // tile grid show up at full fidelity. Fog of war respects the
+  // seen[] bitmap; without it every walkable cell is drawn.
+  if (snap.tileGrid && snap.tiles) {
+    const tg = snap.tileGrid;
+    const ts = tg.tileSize;
+    const ox = tg.originTileX * ts;
+    const oy = tg.originTileY * ts;
+    const sx = ts * scale;
+    const sy = ts * scale;
+    const tiles = snap.tiles;
+    const seen = snap.seen;
+    ctx.fillStyle = 'rgba(82, 82, 91, 0.55)';
+    for (let cyIdx = 0; cyIdx < tg.height; cyIdx++) {
+      for (let cxIdx = 0; cxIdx < tg.width; cxIdx++) {
+        const i = cyIdx * tg.width + cxIdx;
+        if (seen && !seen[i]) continue;
+        if (!isWalkableTileId(tiles[i])) continue;
+        const x = (ox + cxIdx * ts - snap.selfX) * scale + cx;
+        const y = (oy + cyIdx * ts - snap.selfY) * scale + cy;
+        ctx.fillRect(x, y, sx + 0.5, sy + 0.5);
+      }
+    }
+    // Room category tint over the cell paint. Only seen rooms get
+    // tinted (cell paint already gates on seen, so this is purely
+    // additive and stays within the revealed area).
+    if (snap.rooms && snap.roomCategories) {
+      for (let i = 0; i < snap.rooms.length; i++) {
+        const r = snap.rooms[i];
+        const cat = snap.roomCategories[i] ?? 'hazard';
+        if (cat === 'hazard' || cat === 'corridor') continue;
+        ctx.fillStyle = ZONE_TINT[cat];
+        const x = (r.x - snap.selfX) * scale + cx;
+        const y = (r.y - snap.selfY) * scale + cy;
+        ctx.fillRect(x, y, r.w * scale, r.h * scale);
+      }
+    }
+  } else if (snap.walkables.length > 0) {
     ctx.fillStyle = 'rgba(82, 82, 91, 0.45)';
     for (const r of snap.walkables) {
       const x = (r.x - snap.selfX) * scale + cx;
       const y = (r.y - snap.selfY) * scale + cy;
       ctx.fillRect(x, y, r.w * scale, r.h * scale);
     }
-    // Per-room category tint (E3.3). Skips corridors entirely;
-    // skips when no roomCategories are set (surface, pre-E3.3).
     if (snap.rooms && snap.roomCategories) {
       for (let i = 0; i < snap.rooms.length; i++) {
         const r = snap.rooms[i];
         const cat = snap.roomCategories[i] ?? 'hazard';
         const tint = ZONE_TINT[cat];
-        if (cat === 'hazard') continue; // baseline gray already shown
+        if (cat === 'hazard') continue;
         ctx.fillStyle = tint;
         const x = (r.x - snap.selfX) * scale + cx;
         const y = (r.y - snap.selfY) * scale + cy;
@@ -119,7 +164,43 @@ export function paintMinimap(
   }
 
   const tileSize = snap.tileSize || 32;
+  // Fog test: returns true when the cell containing (worldX, worldY)
+  // has been revealed. Without seen[]/tileGrid, every cell counts as
+  // seen (legacy behaviour for the surface scene).
+  const isSeenWorld = (worldX: number, worldY: number): boolean => {
+    if (!snap.tileGrid || !snap.seen) return true;
+    const tg = snap.tileGrid;
+    const cellX = Math.floor(worldX / tg.tileSize) - tg.originTileX;
+    const cellY = Math.floor(worldY / tg.tileSize) - tg.originTileY;
+    if (cellX < 0 || cellY < 0 || cellX >= tg.width || cellY >= tg.height) {
+      return false;
+    }
+    return snap.seen[cellY * tg.width + cellX] !== 0;
+  };
   for (const b of snap.buildings) {
+    // Building footprint touches the grid; treat any seen cell in
+    // its rect as "seen". Player-built structures appear on the
+    // minimap only after the player has stood near them.
+    let anySeen = false;
+    if (snap.tileGrid && snap.seen) {
+      const tg = snap.tileGrid;
+      outer: for (let dy = 0; dy < b.height; dy++) {
+        for (let dx = 0; dx < b.width; dx++) {
+          const cx2 = b.tileX + dx - tg.originTileX;
+          const cy2 = b.tileY + dy - tg.originTileY;
+          if (cx2 < 0 || cy2 < 0 || cx2 >= tg.width || cy2 >= tg.height) {
+            continue;
+          }
+          if (snap.seen[cy2 * tg.width + cx2] !== 0) {
+            anySeen = true;
+            break outer;
+          }
+        }
+      }
+    } else {
+      anySeen = true;
+    }
+    if (!anySeen) continue;
     const x = (b.tileX * tileSize - snap.selfX) * scale + cx;
     const y = (b.tileY * tileSize - snap.selfY) * scale + cy;
     const sw = Math.max(2, b.width * tileSize * scale);
@@ -131,6 +212,7 @@ export function paintMinimap(
   for (const p of snap.players) {
     if (p.characterId === snap.selfId) continue;
     if (!p.visible) continue;
+    if (!isSeenWorld(p.x, p.y)) continue;
     const x = (p.x - snap.selfX) * scale + cx;
     const y = (p.y - snap.selfY) * scale + cy;
     ctx.fillStyle = '#34d399';
@@ -140,6 +222,7 @@ export function paintMinimap(
   }
   for (const e of snap.enemies) {
     if (!e.visible || e.hp <= 0) continue;
+    if (!isSeenWorld(e.x, e.y)) continue;
     const x = (e.x - snap.selfX) * scale + cx;
     const y = (e.y - snap.selfY) * scale + cy;
     ctx.fillStyle = '#ef4444';

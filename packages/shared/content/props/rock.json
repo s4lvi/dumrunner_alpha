@@ -1,12 +1,15 @@
 {
   "id": "rock",
   "label": "Rock",
-  "biomeAffinity": ["sun_bleached", "frozen"],
+  "biomeAffinity": [
+    "sun_bleached",
+    "frozen"
+  ],
   "hp": 150,
   "solid": true,
-  "onDestroy": "drop_loot",
-  "loot": [
-    { "materialId": "scrap", "min": 1, "max": 1, "chance": 0.5 }
-  ],
-  "visual": { "tint": "#52525b" }
+  "onDestroy": "nothing",
+  "visual": {
+    "tint": "#52525b",
+    "spriteSize": 0.7
+  }
 }

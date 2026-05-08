@@ -63,7 +63,11 @@ export function contentDir(area: string): string {
 // is a deploy-blocker we want to see immediately.
 async function loadArea<T extends { id: string }>(
   area: string,
-  schema: z.ZodType<T>,
+  // 3-arg ZodType lets schemas with .default() / .transform() be
+  // accepted here — input type differs from output type once a
+  // default is applied. T is the parsed output, the input shape
+  // is intentionally widened.
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
 ): Promise<T[]> {
   const dir = contentDir(area);
   let files: string[];

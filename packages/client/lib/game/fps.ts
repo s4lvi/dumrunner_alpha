@@ -143,7 +143,6 @@ const BUILD_GHOST_INVALID_COLOR = 0xef4444;
 // colors) come from @dumrunner/shared/visuals so the FPS view stays
 // in sync with the top-down view.
 const PLAYER_OTHER_COLOR = 0x4dd0e1;
-const PLAYER_SIZE = 14;
 const CORPSE_COLOR = 0x4a1d1d;
 const CORPSE_SIZE = 14;
 const PROJECTILE_DEFAULT_COLOR = 0xfde047;
@@ -190,6 +189,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // classification (walkability convention: id 1 = floor, else
   // wall). Falls back to walkables[] when no tileGrid is present.
   let layoutTiles: Uint8Array | null = decodeLayoutTiles(init.layout);
+  // Fog of war — one byte per cell (1 = revealed). Allocated when
+  // a layout with a tileGrid is applied. Marks cells in a circle
+  // around self each tick. Cleared whenever the scene swaps.
+  let seenTiles: Uint8Array | null = init.layout?.tileGrid
+    ? new Uint8Array(init.layout.tileGrid.width * init.layout.tileGrid.height)
+    : null;
+  // Visibility radius in tiles for fog reveals. Wide enough to
+  // feel useful in 3-tile-wide rooms but tight enough that the
+  // player still has to actually traverse corridors to map them.
+  const FOG_REVEAL_RADIUS_TILES = 8;
   let selfX = init.self.x;
   let selfY = init.self.y;
   // Server-authoritative target. movePlayer (driven by 20 Hz
@@ -407,10 +416,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   root.addChild(staminaText);
   root.addChild(shieldText);
 
-  // Per-column perpendicular distance to the wall hit. Indexed by column
-  // (i = screenX / COLUMN_STEP_PX). Sprites z-test against this so a wall
-  // in front of an enemy occludes the enemy.
+  // Per-column perpendicular distance to the NEAREST obstacle hit.
+  // Indexed by column (i = screenX / COLUMN_STEP_PX). Sprites z-test
+  // against this — closer obstacle than the sprite means the sprite
+  // is at least partially hidden in that column.
   let zBuffer: Float32Array = new Float32Array(0);
+  // Top-Y on screen of the nearest obstacle's drawn rect. Sprites
+  // behind that obstacle clip their bottom to this value — the part
+  // ABOVE the obstacle's top edge stays visible (so a player
+  // standing behind a half-height workstation still pokes up over
+  // it). Full-height walls record their full top y, which is high
+  // on screen, so anything past them is clipped to nothing → fully
+  // hidden as expected.
+  let wallTopBuf: Float32Array = new Float32Array(0);
 
   // Pixi v8's `app.canvas` is a getter that throws when accessed
   // before `app.init()` resolves (the renderer hasn't been built
@@ -552,9 +570,38 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     if (!ready) return;
     tickInput();
     tickSelfSmoothing();
+    revealAroundSelf();
     updateNearInteractable();
     updateNearStations();
     render();
+  }
+
+  // Mark every cell within FOG_REVEAL_RADIUS_TILES of the player as
+  // seen. Simple radius reveal — cheap (≈ 200 cells per call). Stops
+  // through walls because seen-but-walled cells just render as
+  // void on the minimap, so the gameplay leak is minimal.
+  function revealAroundSelf(): void {
+    if (!seenTiles || !layout?.tileGrid) return;
+    const tg = layout.tileGrid;
+    const ts = tg.tileSize;
+    const ox = tg.originTileX;
+    const oy = tg.originTileY;
+    const cellX = Math.floor(selfX / ts) - ox;
+    const cellY = Math.floor(selfY / ts) - oy;
+    const r = FOG_REVEAL_RADIUS_TILES;
+    const r2 = r * r;
+    const x0 = Math.max(0, cellX - r);
+    const x1 = Math.min(tg.width - 1, cellX + r);
+    const y0 = Math.max(0, cellY - r);
+    const y1 = Math.min(tg.height - 1, cellY + r);
+    for (let cy2 = y0; cy2 <= y1; cy2++) {
+      for (let cx2 = x0; cx2 <= x1; cx2++) {
+        const dx = cx2 - cellX;
+        const dy = cy2 - cellY;
+        if (dx * dx + dy * dy > r2) continue;
+        seenTiles[cy2 * tg.width + cx2] = 1;
+      }
+    }
   }
 
   function tickSelfSmoothing() {
@@ -761,7 +808,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // can author overworld/base floor + skybox textures distinct
     // from any dungeon biome.
     const isSurface = !layout || layout.walkables.length === 0;
-    const biomeId = isSurface ? 'surface' : (layout?.biome ?? 'default');
+    // On the surface, prefer the authored overworld biome id from
+    // layout.biome (so /editor/biomes drives skybox + floor). Fall
+    // back to the legacy 'surface' pseudo-id so existing texture
+    // uploads keyed under that id keep working.
+    const surfaceBiomeId = layout?.biome ?? 'surface';
+    const biomeId = isSurface ? surfaceBiomeId : (layout?.biome ?? 'default');
     // Surface gets a perihelion-variant skybox when the horde is
     // active. Falls back to the normal surface skybox if no
     // perihelion texture is uploaded.
@@ -769,8 +821,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       isSurface && hordeActive ? 'surface_perihelion' : biomeId;
     const skyTex =
       getFpsOverrideTexture('biome_skybox', skyboxId) ??
-      getFpsOverrideTexture('biome_skybox', biomeId);
-    const floorTex = getFpsOverrideTexture('biome_floor', biomeId);
+      getFpsOverrideTexture('biome_skybox', biomeId) ??
+      // Legacy fallback: pre-overworld-biome editors authored the
+      // surface skybox under the literal id 'surface'. Keep reading
+      // it so existing uploads survive the migration.
+      (isSurface ? getFpsOverrideTexture('biome_skybox', 'surface') : null);
+    const floorTex =
+      getFpsOverrideTexture('biome_floor', biomeId) ??
+      (isSurface ? getFpsOverrideTexture('biome_floor', 'surface') : null);
     const ceilTex = getFpsOverrideTexture('biome_ceiling', biomeId);
     // Skip the gradient when a biome texture covers that region.
     // Sky gradient is hidden by either a skybox texture OR a ceiling
@@ -867,6 +925,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const planeY = dirX * halfPlane;
     if (zBuffer.length !== numCols) zBuffer = new Float32Array(numCols);
     zBuffer.fill(Infinity);
+    if (wallTopBuf.length !== numCols) wallTopBuf = new Float32Array(numCols);
+    // No obstacle in this column → clip-bottom = +Infinity, so
+    // sprites pass through unclipped.
+    wallTopBuf.fill(Number.POSITIVE_INFINITY);
 
     // Floor + ceiling: classic Wolfenstein-style horizontal row
     // strips. Within a single screen row, depth is constant
@@ -929,13 +991,23 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
       const hits = castRay(selfX, selfY, ux, uy);
 
-      // Z-buffer holds the FAREST hit (the back wall) for sprite
-      // occlusion. Stays Infinity when the ray escapes — sprites
-      // can render that column uncovered.
+      // Z-buffer holds the NEAREST hit's perp + its drawn top y.
+      // Sprites past zBuffer[i] in this column clip their bottom
+      // to wallTopBuf[i] — so a sprite behind a half-height
+      // workstation still pokes up over it. Stays Infinity when
+      // the ray escaped without hitting anything (sprites pass
+      // freely).
       if (hits.length > 0) {
-        const zHit = hits[hits.length - 1];
+        const zHit = hits[0];
         const zPerp = zHit.dist * (ux * dirX + uy * dirY);
-        if (zPerp > 0.0001) zBuffer[i] = zPerp;
+        if (zPerp > 0.0001) {
+          zBuffer[i] = zPerp;
+          const fullWallH = (WALL_HEIGHT_WORLD * H) / zPerp;
+          const heightMult = stationHeightMultFor(zHit);
+          const lineH = fullWallH * heightMult;
+          const groundY = horizonY + fullWallH / 2;
+          wallTopBuf[i] = groundY - lineH;
+        }
       }
 
       // Paint slices far-to-near so closer obstacles overdraw
@@ -1410,7 +1482,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // the sprite renders as a textured billboard (per-column UV
     // strip with z-test); otherwise falls back to the flat-color
     // column path.
-    texCategory?: 'enemy' | 'building' | 'prop';
+    texCategory?: 'enemy' | 'building' | 'prop' | 'player';
     texId?: string;
     // When true, anchor the sprite's CENTRE at eye level (the
     // horizon line) rather than its bottom at the floor. Used for
@@ -1454,7 +1526,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     for (const p of players.values()) {
       if (p.characterId === selfId) continue;
       if (!p.alive) continue;
-      pushSprite(p.x, p.y, PLAYER_OTHER_COLOR, PLAYER_SIZE * 2);
+      // Other players render as full-height billboards. Renderer
+      // looks up ('player', 'default') via the texture override
+      // system; without an authored sprite, falls back to the
+      // flat-color rect path. Sized like a real wall column so the
+      // shape reads as humanoid rather than a chest-high block.
+      pushSprite(
+        p.x,
+        p.y,
+        PLAYER_OTHER_COLOR,
+        WALL_HEIGHT_WORLD * 0.85,
+        'player',
+        'default',
+      );
     }
     const flashWindow = 90;
     for (const e of enemies.values()) {
@@ -1477,10 +1561,21 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     for (const c of corpses.values()) {
       pushSprite(c.x, c.y, CORPSE_COLOR, CORPSE_SIZE);
     }
+    // Cull props past a max world distance. Surface scenes can
+    // ship hundreds of scattered decorators — without this gate,
+    // every prop runs through pushSprite and the stripe loop even
+    // when fog has fully blended them into the horizon. 32 tiles
+    // (1024 px) tracks the perceptual fog falloff — anything past
+    // it reads as solid fog colour.
+    const PROP_DRAW_DIST_PX = 1536;
+    const propMaxDsq = PROP_DRAW_DIST_PX * PROP_DRAW_DIST_PX;
     for (const p of props.values()) {
       // hp=0 races: also defended in setPropHp, but safe-guard
       // here in case a snapshot brings a dead one in.
       if (p.hp <= 0) continue;
+      const dx = p.x - selfX;
+      const dy = p.y - selfY;
+      if (dx * dx + dy * dy > propMaxDsq) continue;
       // Author-tunable per prop. spriteSize is in wall-heights
       // (1.0 = matches a tile); spriteGroundOffset 0..1 lifts the
       // anchor from the floor (0) toward the ceiling (1).
@@ -1598,9 +1693,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         horizonY - (WALL_HEIGHT_WORLD * 0.5 * H) / transformY;
       const off = s.groundOffset ?? 0;
       const groundAnchorY = floorY + (ceilY - floorY) * off;
-      const drawTop = s.floats
-        ? Math.floor(horizonY - spriteH / 2)
-        : Math.floor(groundAnchorY - spriteH);
+      // Round the BOTTOM (anchor) edge to integer screen y, then
+      // back into drawTop. floor()ing drawTop directly leaves a
+      // sub-pixel gap between the sprite bottom and the floor at
+      // groundAnchorY — reads as "hovering" for floor-anchored
+      // props, especially noticeable with shadows underneath.
+      const drawBottom = s.floats
+        ? Math.round(horizonY + spriteH / 2)
+        : Math.round(groundAnchorY);
+      const drawTop = drawBottom - spriteH;
       const drawLeft = Math.floor(screenCenterX - spriteW / 2);
       const drawRight = drawLeft + spriteW;
       // Ground shadow: a flat horizontal ellipse projected onto
@@ -1622,7 +1723,6 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         s.texCategory && s.texId
           ? getFpsOverrideTexture(s.texCategory, s.texId)
           : null;
-      const texW = tex ? tex.width || 1 : 0;
 
       // Per-column z-test. Iterate at the column step so we match the wall
       // pass; for each visible stripe, paint either a textured quad or
@@ -1641,15 +1741,95 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         shadowGfx = new Graphics();
         spritesContainer.addChild(shadowGfx);
       }
+      const drawBottomY = drawTop + spriteH;
+      // Sweep stripes left → right, batching contiguous columns
+      // that share the same clip-bottom into a single Mesh quad.
+      // Most surface props are fully visible (single run), so this
+      // collapses ~50 per-stripe Meshes into 1. Mesh / MeshGeometry
+      // allocation was the dominant per-frame cost.
+      let runStart = -1;
+      let runBottomY = 0;
+      const flushRun = (runEndX: number) => {
+        if (runStart < 0) return;
+        const x0 = runStart;
+        const x1 = runEndX;
+        const y0 = drawTop;
+        const y1 = runBottomY;
+        if (tex && spriteW > 0 && spriteH > 0) {
+          // UV.x spans the run proportionally; UV.y is clipped at
+          // the run's bottom (texture's lower portion is hidden
+          // behind the obstacle in this column run).
+          const uvX0 = Math.max(0, Math.min(0.999, (x0 - drawLeft) / spriteW));
+          const uvX1 = Math.max(0, Math.min(1, (x1 - drawLeft) / spriteW));
+          const uvY1 = Math.max(0, Math.min(1, (y1 - drawTop) / spriteH));
+          const positions = new Float32Array([
+            x0, y0,
+            x1, y0,
+            x1, y1,
+            x0, y1,
+          ]);
+          const uvs = new Float32Array([
+            uvX0, 0,
+            uvX1, 0,
+            uvX1, uvY1,
+            uvX0, uvY1,
+          ]);
+          const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+          const geom = new MeshGeometry({ positions, uvs, indices });
+          spritesContainer.addChild(new Mesh({ geometry: geom, texture: tex }));
+        } else {
+          if (!flatGfx) {
+            flatGfx = new Graphics();
+            spritesContainer.addChild(flatGfx);
+          }
+          flatGfx
+            .rect(x0, y0, x1 - x0, y1 - y0)
+            .fill({ color: fogged });
+        }
+        runStart = -1;
+      };
       for (let stripe = startStripe; stripe < endStripe; stripe += COLUMN_STEP_PX) {
         const colIdx = Math.floor(stripe / COLUMN_STEP_PX);
-        if (colIdx < 0 || colIdx >= zBuffer.length) continue;
-        if (transformY >= zBuffer[colIdx]) continue;
-        if (shadowGfx) {
-          // Ellipse equation per column: ((x-cx)/halfW)² + ((y-cy)/halfH)² = 1
-          // Solve for the column's height extent and draw a thin
-          // rect at the floor line. Skip columns past the ellipse
-          // bounds.
+        let stripeBottomY: number;
+        if (colIdx < 0 || colIdx >= zBuffer.length) {
+          stripeBottomY = -1;
+        } else if (transformY < zBuffer[colIdx]) {
+          // Sprite in front of obstacle → render full height.
+          stripeBottomY = drawBottomY;
+        } else {
+          // Sprite behind obstacle → clip to its top y. The part
+          // of the sprite ABOVE the obstacle (smaller screen y)
+          // stays visible; the part below is hidden.
+          const clipY = wallTopBuf[colIdx];
+          const visibleBottom = Math.min(drawBottomY, clipY);
+          stripeBottomY = visibleBottom > drawTop ? visibleBottom : -1;
+        }
+        if (stripeBottomY < 0) {
+          flushRun(stripe);
+          continue;
+        }
+        // Round to integer so contiguous columns coalesce into a
+        // single run instead of micro-quads from sub-pixel drift.
+        const intBottom = Math.round(stripeBottomY);
+        if (runStart < 0) {
+          runStart = stripe;
+          runBottomY = intBottom;
+        } else if (intBottom !== runBottomY) {
+          flushRun(stripe);
+          runStart = stripe;
+          runBottomY = intBottom;
+        }
+        // Shadow gates on the same z-test as the sprite body. The
+        // shadow lives on the floor AT the sprite's distance, so
+        // anything closer in the column (workstation, wall, etc.)
+        // also occludes the shadow — drawing it through a closer
+        // cube reads as the shadow floating in mid-air.
+        if (
+          shadowGfx &&
+          colIdx >= 0 &&
+          colIdx < zBuffer.length &&
+          transformY < zBuffer[colIdx]
+        ) {
           const colMid = stripe + COLUMN_STEP_PX / 2;
           const dxn = (colMid - screenCenterX) / shadowHalfW;
           const t = 1 - dxn * dxn;
@@ -1665,36 +1845,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
               .fill({ color: 0x000000, alpha: 0.45 });
           }
         }
-        if (tex) {
-          // u runs 0..1 across the sprite's screen footprint.
-          const u = (stripe - drawLeft) / Math.max(1, spriteW);
-          const uvX = Math.max(0, Math.min(0.999, u));
-          const uvX2 = Math.min(1, uvX + 1 / texW);
-          const positions = new Float32Array([
-            stripe, drawTop,
-            stripe + COLUMN_STEP_PX, drawTop,
-            stripe + COLUMN_STEP_PX, drawTop + spriteH,
-            stripe, drawTop + spriteH,
-          ]);
-          const uvs = new Float32Array([
-            uvX, 0,
-            uvX2, 0,
-            uvX2, 1,
-            uvX, 1,
-          ]);
-          const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
-          const geom = new MeshGeometry({ positions, uvs, indices });
-          spritesContainer.addChild(new Mesh({ geometry: geom, texture: tex }));
-        } else {
-          if (!flatGfx) {
-            flatGfx = new Graphics();
-            spritesContainer.addChild(flatGfx);
-          }
-          flatGfx
-            .rect(stripe, drawTop, COLUMN_STEP_PX, spriteH)
-            .fill({ color: fogged });
-        }
       }
+      flushRun(Math.min(W, drawRight));
     }
 
     function pushSprite(
@@ -1702,7 +1854,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       y: number,
       color: number,
       height: number,
-      texCategory?: 'enemy' | 'building' | 'prop',
+      texCategory?: 'enemy' | 'building' | 'prop' | 'player',
       texId?: string,
       floats: boolean = false,
       groundOffset: number = 0,
@@ -2150,6 +2302,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   function applySceneState(state: SceneState) {
     layout = state.layout;
     layoutTiles = decodeLayoutTiles(layout);
+    // Fog state — fresh seen[] for each scene. Without a tileGrid
+    // we leave it null and the minimap falls back to no-fog.
+    if (layout?.tileGrid) {
+      const w = layout.tileGrid.width;
+      const h = layout.tileGrid.height;
+      seenTiles = new Uint8Array(w * h);
+    } else {
+      seenTiles = null;
+    }
     players.clear();
     enemies.clear();
     loot.clear();
@@ -2354,6 +2515,9 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         selfId: init.self.characterId,
         tileSize: layout?.tileSize ?? 32,
         walkables: layout?.walkables ?? [],
+        tileGrid: layout?.tileGrid,
+        tiles: layoutTiles ?? undefined,
+        seen: seenTiles ?? undefined,
         rooms: layout?.rooms,
         roomCategories: layout?.roomCategories,
         buildings: buildingsToMinimapList(

@@ -1,0 +1,72 @@
+{
+  "id": "biome_mox8bles",
+  "label": "Overworld",
+  "kind": "overworld",
+  "dominantHazard": "heat",
+  "palette": {
+    "floor": "#1f242c",
+    "wall": "#52525b",
+    "accent": "#fde68a"
+  },
+  "generation": {
+    "roomCountMin": 6,
+    "roomCountMax": 12,
+    "roomSizeMin": 4,
+    "roomSizeMax": 9,
+    "corridorWidth": 2,
+    "branching": 0.3,
+    "propDensity": 0.05,
+    "enemyDensity": 0.04,
+    "lootDensity": 0.5,
+    "hazardIntensity": 0.5,
+    "safeRoomChance": 0.2,
+    "extremeRoomChance": 0.05
+  },
+  "enemyRoster": [],
+  "propPalette": [
+    {
+      "id": "prop_mouixmbe",
+      "weight": 0.5
+    },
+    {
+      "id": "rock",
+      "weight": 0.5
+    },
+    {
+      "id": "prop_tree",
+      "weight": 1
+    },
+    {
+      "id": "prop_tree2",
+      "weight": 1
+    },
+    {
+      "id": "prop_mox9mxbs",
+      "weight": 0.5
+    }
+  ],
+  "lootBias": [],
+  "tileSet": {
+    "tiles": [
+      {
+        "id": 1,
+        "label": "default_floor",
+        "role": "floor",
+        "walkable": true,
+        "blocksLOS": false,
+        "blocksProjectiles": false
+      },
+      {
+        "id": 2,
+        "label": "default_wall",
+        "role": "wall",
+        "walkable": false,
+        "blocksLOS": true,
+        "blocksProjectiles": true
+      }
+    ]
+  },
+  "overworld": {
+    "propDensity": 5
+  }
+}
