@@ -1,0 +1,136 @@
+{
+  "id": "room_mouian1s",
+  "label": "large_cave_1",
+  "biomeAffinity": [
+    "default",
+    "frozen"
+  ],
+  "width": 16,
+  "height": 16,
+  "tilesB64": "AgICAAACAAAAAAAAAAAAAAIBAQEBAgICAgICAAAAAAACAQEBAQEBAQEBAgIAAAAAAgEBAQEBAQEBAQECAgAAAAIBAQEBAQEBAQEBAQICAAAAAQEBAQEBAQEBAQEBAgAAAAEBAQEBAQEBAQEBAQICAAIBAQEBAQEBAQEBAQEBAgICAQEBAQEBAQEBAQEBAQEAAgEBAQEBAQEBAQEBAQECAgICAgEBAQEBAQEBAQICAgAAAAIBAQEBAQEBAQICAAAAAAACAgEBAQEBAQICAAAAAAAAAAICAQEBAQIAAAAAAAAAAAAAAgIBAQICAAAAAAAAAAAAAAACAAACAAAAAAAAAA==",
+  "entrySides": [
+    "N",
+    "W",
+    "S",
+    "E"
+  ],
+  "anchors": [
+    {
+      "kind": "enemy",
+      "tx": 9,
+      "ty": 9
+    },
+    {
+      "kind": "enemy",
+      "tx": 5,
+      "ty": 9
+    },
+    {
+      "kind": "enemy",
+      "tx": 5,
+      "ty": 6
+    },
+    {
+      "kind": "loot",
+      "tx": 2,
+      "ty": 3
+    },
+    {
+      "kind": "loot",
+      "tx": 8,
+      "ty": 8
+    },
+    {
+      "kind": "loot",
+      "tx": 6,
+      "ty": 7
+    },
+    {
+      "kind": "enemy",
+      "tx": 8,
+      "ty": 6
+    },
+    {
+      "kind": "loot",
+      "tx": 12,
+      "ty": 6
+    },
+    {
+      "kind": "loot",
+      "tx": 11,
+      "ty": 4
+    },
+    {
+      "kind": "loot",
+      "tx": 9,
+      "ty": 3
+    },
+    {
+      "kind": "prop",
+      "tx": 7,
+      "ty": 2
+    },
+    {
+      "kind": "prop",
+      "tx": 5,
+      "ty": 2
+    },
+    {
+      "kind": "prop",
+      "tx": 3,
+      "ty": 10
+    },
+    {
+      "kind": "prop",
+      "tx": 4,
+      "ty": 12
+    },
+    {
+      "kind": "prop",
+      "tx": 9,
+      "ty": 12
+    },
+    {
+      "kind": "prop",
+      "tx": 10,
+      "ty": 11
+    },
+    {
+      "kind": "entry",
+      "tx": 4,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 6
+    },
+    {
+      "kind": "entry",
+      "tx": 7,
+      "ty": 15
+    },
+    {
+      "kind": "entry",
+      "tx": 15,
+      "ty": 8
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 5
+    },
+    {
+      "kind": "entry",
+      "tx": 3,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 6,
+      "ty": 15
+    }
+  ],
+  "role": "normal",
+  "weight": 1
+}

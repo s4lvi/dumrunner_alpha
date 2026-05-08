@@ -92,30 +92,36 @@ export function biomeForFloor(
 
 // Snapshot for the welcome message. Per-id palette + the hazard
 // fields the client needs to drive the HUD indicator and compute
-// a local-DPS estimate. The rest of BiomeDef (generation params,
-// rosters) is server-only.
-export function getBiomesForWire(): Record<
-  string,
-  {
-    floor: string;
-    wall: string;
-    accent: string;
-    dominantHazard: BiomeDef['dominantHazard'];
-    hazardIntensity: number;
-    hazardZoneIntensities?: BiomeDef['generation']['hazardZoneIntensities'];
+// a local-DPS estimate. Also carries flattened wall / floor variant
+// id lists derived from the biome's tileSet — renderers hash a
+// per-cell variant index into these arrays. Empty arrays preserve
+// the single-texture fallback. The rest of BiomeDef (generation
+// params, rosters) is server-only.
+export type BiomeWireEntry = {
+  floor: string;
+  wall: string;
+  accent: string;
+  dominantHazard: BiomeDef['dominantHazard'];
+  hazardIntensity: number;
+  hazardZoneIntensities?: BiomeDef['generation']['hazardZoneIntensities'];
+  wallTextureIds: string[];
+  floorTextureIds: string[];
+};
+
+function tileVariantsForRole(
+  def: BiomeDef,
+  role: 'wall' | 'floor',
+): string[] {
+  const set = def.tileSet;
+  if (!set) return [];
+  for (const tile of set.tiles) {
+    if (tile.role === role) return tile.textureIds ? [...tile.textureIds] : [];
   }
-> {
-  const out: Record<
-    string,
-    {
-      floor: string;
-      wall: string;
-      accent: string;
-      dominantHazard: BiomeDef['dominantHazard'];
-      hazardIntensity: number;
-      hazardZoneIntensities?: BiomeDef['generation']['hazardZoneIntensities'];
-    }
-  > = {};
+  return [];
+}
+
+export function getBiomesForWire(): Record<string, BiomeWireEntry> {
+  const out: Record<string, BiomeWireEntry> = {};
   for (const id of Object.keys(BIOMES)) {
     const def = BIOMES[id];
     out[id] = {
@@ -123,6 +129,8 @@ export function getBiomesForWire(): Record<
       dominantHazard: def.dominantHazard,
       hazardIntensity: def.generation.hazardIntensity,
       hazardZoneIntensities: def.generation.hazardZoneIntensities,
+      wallTextureIds: tileVariantsForRole(def, 'wall'),
+      floorTextureIds: tileVariantsForRole(def, 'floor'),
     };
   }
   return out;

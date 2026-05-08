@@ -19,12 +19,16 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import {
   BiomeDefSchema,
+  CorridorTemplateSchema,
   EnemyDefSchema,
   PropDefSchema,
+  RoomTemplateSchema,
   WorldDefSchema,
   type BiomeDef,
+  type CorridorTemplate,
   type EnemyDef,
   type PropDef,
+  type RoomTemplate,
   type WorldDef,
 } from './types';
 
@@ -32,6 +36,22 @@ import {
 // then /content puts us at packages/shared/content.
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CONTENT_ROOT = join(HERE, '..', '..', 'content');
+
+// Canonical list of editor-managed content areas. Single source
+// of truth — every consumer (API route, client API, deleteEntity,
+// content tree) imports this instead of redeclaring the union.
+export const EDITOR_AREAS = [
+  'biomes',
+  'enemies',
+  'props',
+  'rooms',
+  'corridors',
+] as const;
+export type EditorArea = (typeof EDITOR_AREAS)[number];
+
+export function isEditorArea(s: string): s is EditorArea {
+  return (EDITOR_AREAS as readonly string[]).includes(s);
+}
 
 export function contentDir(area: string): string {
   return join(CONTENT_ROOT, area);
@@ -89,6 +109,10 @@ export const loadEnemies = (): Promise<EnemyDef[]> =>
   loadArea('enemies', EnemyDefSchema);
 export const loadProps = (): Promise<PropDef[]> =>
   loadArea('props', PropDefSchema);
+export const loadRooms = (): Promise<RoomTemplate[]> =>
+  loadArea('rooms', RoomTemplateSchema);
+export const loadCorridors = (): Promise<CorridorTemplate[]> =>
+  loadArea('corridors', CorridorTemplateSchema);
 
 // Single-entity helpers. The editor's API route writes one file
 // at a time; the GET endpoint may want to fetch one without
@@ -128,6 +152,10 @@ export const loadEnemy = (id: string) =>
   loadEntity('enemies', id, EnemyDefSchema);
 export const loadProp = (id: string) =>
   loadEntity('props', id, PropDefSchema);
+export const loadRoom = (id: string) =>
+  loadEntity('rooms', id, RoomTemplateSchema);
+export const loadCorridor = (id: string) =>
+  loadEntity('corridors', id, CorridorTemplateSchema);
 
 // Save validates BEFORE writing — a malformed payload from the
 // editor's POST handler can never make it onto disk. The schema
@@ -157,6 +185,10 @@ export const saveEnemy = (data: unknown) =>
   saveEntity('enemies', data, EnemyDefSchema);
 export const saveProp = (data: unknown) =>
   saveEntity('props', data, PropDefSchema);
+export const saveRoom = (data: unknown) =>
+  saveEntity('rooms', data, RoomTemplateSchema);
+export const saveCorridor = (data: unknown) =>
+  saveEntity('corridors', data, CorridorTemplateSchema);
 
 // World config — single file, not file-per-entity. Read at
 // boot; absent / malformed = empty config (no overrides).
@@ -198,7 +230,7 @@ export async function saveWorld(data: unknown): Promise<WorldDef> {
 }
 
 export async function deleteEntity(
-  area: 'biomes' | 'enemies' | 'props',
+  area: EditorArea,
   id: string,
 ): Promise<void> {
   // Slug guard: the API route also validates, but defending here

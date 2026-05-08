@@ -21,10 +21,12 @@ Post-apocalyptic cyberpunk future. The colony sits on the surface of a hostile a
 
 The game ships with two interchangeable render modes; players toggle freely with **V**.
 
-- **Top-down 2D twin-stick** *(default)* — Pixi-rendered overhead view. WASD movement, mouse aim, click to fire. The right tool for build mode and tactical map awareness.
-- **2.5D first-person** *(toggle with V)* — Wolfenstein/Doom-style raycaster running on the same Pixi canvas. WASD becomes yaw-relative (forward / strafe), pointer-lock mouse-look (yaw + pseudo-pitch via horizon shift), click to fire. Feels like a boomer-shooter; build mode uses a floor-reticle ray pick to target the tile under the camera. The renderer is a drop-in replacement that reads the same `SceneState` — server is unchanged.
+- **Isometric** *(default)* — Pixi-rendered iso projection. WASD movement, mouse aim, click to fire. Tactical clarity for build mode and combat readability; entities render as billboarded sprites that depth-sort with terrain.
+- **2.5D first-person** *(toggle with V)* — Wolfenstein/Doom-style raycaster on the same Pixi canvas. WASD becomes yaw-relative (forward / strafe), pointer-lock mouse-look (yaw + pseudo-pitch via horizon shift), click to fire. Feels like a boomer-shooter; build mode uses a floor-reticle ray pick to target the tile under the camera. The renderer is a drop-in replacement that reads the same `SceneState` — server is unchanged.
 
-Both modes share the same React HUD chrome (status bars, hotbar, controls hint, crosshair). Target platform is desktop browser first; touch + mobile come later via Capacitor.
+Both modes share the same React HUD chrome (status bars, hotbar, controls hint, crosshair) and the same texture-override / asset pipeline — sprites uploaded once render in both views. Target platform is desktop browser first; touch + mobile come later via Capacitor.
+
+> **Top-down (Pixi) renderer is deprecated.** Earlier builds shipped a third overhead 2D view alongside iso + FPS. Maintaining three render paths against the same scene state was costing more than the third perspective added — and iso + FPS share an asset pipeline (billboard sprites) that the overhead view didn't. The `pixi.ts` runner stays in the codebase for now (no UI path reaches it; the V-cycle skips it) so we can revive or salvage code if needed, but no further work goes into it. Future renderer work concentrates on iso + FPS.
 
 ## Combat
 
@@ -1011,7 +1013,8 @@ unless explicitly noted.
 #### Phase 1.x — pre-Phase-2 cleanup (next session)
 
 Audit-driven fixes that close real bugs and orphan UX before the
-Phase 2 system pass touches the same surfaces. Total ~1–2 hours.
+Phase 2 system pass touches the same surfaces. Total ~1–2 hours
+of mechanical fixes plus a few that need a closer look.
 
 - **Fix corpse-pickup data loss.** `Scene.handleCorpsePickups`
   switch is missing `attachment` and `consumable` kinds — both
@@ -1039,6 +1042,46 @@ Phase 2 system pass touches the same surfaces. Total ~1–2 hours.
 - **Forge buildable status.** Until Phase 2's alloy recipes
   land, either remove the Forge from the buildable list or wire
   a stub recipe so the modal isn't empty.
+- **Drop gear into player corpse, not stay equipped.** On death,
+  carried + equipped items should transfer to the body's
+  inventory. Today equipped pieces stay on the character through
+  respawn — corpse-loot loop only catches the bag.
+- **Pause perihelion timer when server is empty.** Cycle clock
+  advances even with zero connected players, so a server idling
+  overnight burns multiple cycles without anyone playing. Tick
+  the clock only while at least one player is connected (or use
+  a wall-clock-aware "last-active" delta on join).
+- **Perihelion warning text overlap.** In-dungeon
+  `PerihelionAlert` text sits on top of the power-capacity
+  indicator at the top of the HUD. Reposition or stack the
+  warning below the power readout.
+- **Hide undamaged HP bars.** Buildings / props / enemies render
+  HP bars at full health by default — only show on first damage.
+  Cuts visual noise during peaceful moments and makes "what hit
+  me" reads cleaner during combat.
+- **Friendly-fire on owned structures.** Players' own walls /
+  turrets / Power Link should not take damage from their own
+  (or party-mate?) projectiles. Add owner-aware damage check in
+  the projectile→building hit path.
+- **FPS bullets sliding along the floor.** Projectile billboards
+  in the FPS view stick to floor Y-projection; should sit at
+  player chest height like the muzzle origin. Likely a
+  vertical-projection bug in `fps.ts`'s billboard placement.
+- **Re-spawn position drift on rejoin.** After server restart or
+  game refresh — whether the player was in the dungeon or
+  surface — they land far from the surface portal in the
+  overworld. Should rehydrate at last-known position (or at
+  least at the portal). Suspect overworld respawn helper
+  defaults to a far-spawn rect.
+- **Melee enemies clip into player.** Chasers walk to body
+  contact before swinging; should hold at 0.5–1 tile of stand-off
+  and attack from there. Fix the AI's "approach" target distance
+  in `combat.ts` / per-template config.
+- **Turrets render as billboard sprites.** Currently turrets are
+  drawn as building cubes in iso/fps; convert to billboards (per-
+  variant sprite, oriented toward camera) so they read as turrets
+  rather than crates. The asset_gen pipeline already covers
+  turret labels.
 
 #### ~~Phase 2~~ — Forge + bench tiers + tier-mismatch (shipped)
 
@@ -1194,20 +1237,95 @@ rectangular rooms with the biome data from E3.1.
   resist gap. Folds the "depth gating via life-support tier"
   loop the GDD describes.
 
-**E3.4. WFC procgen + per-tile sprite support.** The big
-graphics + algorithmic rewrite, deferred to last because it's
-the highest-risk change and benefits from the rest landing
-first.
+**E3.4. Room templates + multi-texture biomes.** The dungeon
+overhaul. Authoring-first, not algorithmic — modeled on what
+shipping roguelikes (Spelunky, Dead Cells, Hades, Diablo,
+Returnal) actually do, not on the academic WFC track that the
+original E3.4 framing took. Full implementation plan at
+`docs/e3.4-implementation-plan.md`.
 
-- WFC procgen replacing the rectangular-rooms-and-corridors
-  layout (`procgen.ts` rewrite, ~600 LOC). Adjacency rules per
-  tile, propagation, backtracking.
-- Renderer per-tile sprite support — biome `tileTextures`
-  feed iso/top-down/FPS; the texture editor learns a per-biome
-  tile category.
-- Existing rectangular generator stays as a fallback flag for
-  biomes that haven't been WFC-tuned yet, so a half-authored
-  biome doesn't break the dungeon.
+- **Phase 1 (shipped).** Per-cell `TileGrid` on `SceneLayout`,
+  base64-encoded over the wire. `TileDef` + `BiomeDef.tileSet`
+  schemas. FPS + iso renderers do per-cell tile lookup, paint
+  dungeon walls from `('biome_wall', biomeId)` overrides. Biome
+  editor exposes wall texture upload alongside floor / ceiling /
+  skybox.
+- **Phase 2. Multi-texture biomes.** `TileDef.textureIds` becomes
+  an array; per-cell stable hash picks one variant. Author uploads
+  N wall (and floor) textures per biome; renderer distributes
+  them across cells. Visible win independent of templates.
+- **Phase 3. Room template engine.** Each biome owns a pool of
+  hand-authored room templates (JSON: tile grid + anchors for
+  enemy / prop / loot / extract / stairs / door spawn points).
+  Procgen picks templates from the pool by size + connectivity +
+  role (normal / safe / extreme / boss / vault) and stamps them
+  into the floor's tile grid. Existing rect generator stays as a
+  fallback for biomes with empty pools, so each biome migrates
+  independently.
+- **Phase 4. Room editor.** Browser-based template authoring —
+  paint the tile grid, drop anchors, save to JSON via the same
+  content-API pattern as biomes / enemies / props.
+
+WFC was rejected. Survey of shipped roguelikes turned up
+essentially zero AAA / well-funded indie titles using textbook
+WFC for level generation; the dominant pattern is hand-authored
+rooms + procedural placement. Templates trade adjacency-table
+authoring for room-layout authoring, and the room layouts double
+as combat scenes with intentional sightlines + cover.
+
+**E4. Buildable variety.** Today's buildable set is walls +
+turrets + workstations + Power Link + chests. Expand:
+
+- **Doors** as a player-placed buildable. Single-cell door entity
+  with open/close state, hostile-AI pathing aware. Hand-craftable
+  at the Workbench. Cheaper than a wall and lets players gate
+  rooms during the horde without sealing themselves in.
+- **Wall tiers.** Today's wall is a single HP / cost. Add tiered
+  walls (Mk2 / Mk3) via Forge upgrade items, mirroring the
+  bench-tier system. Tiered walls have proportionally more HP
+  and slightly higher horde priority.
+- **Decoration buildables.** Light fixtures, banners, signs,
+  rugs — purely cosmetic, hand-craftable cheap, give players a
+  way to personalise their base. Not horde-prioritised.
+
+**E5. Container & lootable props.** Add openable containers as a
+prop subclass — barrels (already explosive), crates, lockers,
+terminals — that hold a loot table and require an interaction
+(E to open) rather than auto-pickup. Crates roll the same scatter
+loot table the rooms use today; lockers in dungeons can hold
+guaranteed-tier gear; terminals can drop blueprints. Containers
+don't damage on melee (they're interacted with, not destroyed)
+unlike today's destructible barrels.
+
+**E6. Enemy corpse persistence.** When an enemy dies, leave a
+visible corpse billboard at the death position. Persists for the
+floor's lifetime (until perihelion / re-descent). Pure visual —
+no loot, no collision, no LOS block — but reads as combat
+history. Player corpses already work this way.
+
+**E7. Hand-authored "tier" rooms.** Layered on top of the room
+template engine (E3.4 Phase 3). Each biome ships hand-crafted
+"tier" templates that only roll on deeper floors — increasingly
+complex layouts, denser hostile placements, and harder hazard
+zones. The procgen role-pool already supports `boss` / `vault` /
+`extreme`; this is the content track that fills them. Future:
+AI-generated room layouts feeding the same template format,
+authored at runtime per-cycle so players don't memorise.
+
+**E8. Editor sprite catalogue + procedural weapon visuals.**
+
+- Add per-class texture rows in the editor for player / weapon /
+  consumable / building sprites. Missing today; only enemies and
+  props have a TextureRow path.
+- **Base + overlay sprite composition for weapons + carried
+  parts.** Each weapon's visual = a base sprite (frame) + N
+  overlay sprites (barrel / grip / magazine / stock) keyed by
+  the attached `AttachmentInstance` ids. Same trick for procedural
+  carried-part drops — base armour sprite + overlays for affix
+  type. Lets the asset_gen pipeline generate components rather
+  than `O(weapons × mod combos)` complete sprites. The composition
+  logic lives client-side; the catalogue lives in the texture
+  editor.
 
 #### Deferred past alpha
 
@@ -1267,6 +1385,31 @@ scheduled. Listed so the next agent doesn't re-discover them.
   `assetGenClient.ENEMY_LABELS`. Falls back to auto-generated
   labels today — works, but produces less-specific prompts.
 
+#### v2 — engine refresh
+
+Reserved for a clean break after the current alpha closes. The
+tile-grid engine carries us through the alpha scope, but a few
+visual + design goals can't land cheaply on top of it. v2 plans
+a deliberate replacement (likely Three.js / WebGPU or a
+sector-based renderer in the same vein as Doom / Build engines)
+so the items below can ship together rather than each fighting
+the tile substrate.
+
+- **Vector / sector-based geometry.** Non-orthogonal walls,
+  arbitrary room shapes, polygon-based collision. Tile grids
+  guarantee right angles; some setpiece rooms (cathedrals,
+  alien geometry, naturally-curved caves) need angles.
+- **Multi-height floors + ceilings.** Pits, raised platforms,
+  stairs as actual height transitions, low ceilings, varying
+  ceiling heights for atmosphere. Tile-z-offset hacks could fake
+  *fixed* deltas on top of the current engine, but real
+  per-sector heights need a sector model to be readable + cheap.
+- **Lighting.** Coloured point lights, directional ambient, LOS
+  shadowing. Today's renderers have a flat ambient with fog-fade.
+  Easier to retrofit on a 3D engine than add to the raycaster.
+- **Iso renderer no longer in scope** — dropped during the alpha
+  close. v2 ships first-person + topdown only.
+
 ### Architectural notes for the next agent
 
 - **Sprint A–D + Phase 1 all shipped together.** The previous
@@ -1301,3 +1444,123 @@ scheduled. Listed so the next agent doesn't re-discover them.
   pushes that touch `packages/server`, `packages/shared`,
   `packages/asset_gen`, workspace manifests, or `fly.toml`.
   Vercel handles client deploys automatically.
+
+## Codebase Review Notes (2026-05-06)
+
+Findings from a deep pass on auth, persistence, RLS, and protocol
+boundaries. Each item was verified against the actual code at the
+cited path. Ordered by severity.
+
+### Security / correctness
+
+1. **Unvalidated cast of persisted character JSON (low-risk —
+   RLS-protected).** `packages/server/src/index.ts:493-495,500`
+   casts `obj.slots as Inventory` and `obj.equipment as Equipment`
+   from `characters.inventory` JSONB straight onto the live
+   player without a Zod parse. Only safe because migration
+   `0001_initial.sql:87-90` declares no insert/update RLS policy
+   on `characters` — clients can't write the column; only the
+   service-role-bypassed game server can. If a future migration
+   ever adds `characters_update_own`, this becomes a trivial
+   path to forged inventory state. Gate with a Zod parse anyway.
+
+2. **CSRF state uses `Math.random()`.**
+   `packages/client/lib/discord/auth.ts:180-185` —
+   `makeOauthState()` builds OAuth state from `Date.now() +
+   Math.random() + process.pid`, hashed and truncated. Not
+   cryptographically random. Replace with
+   `crypto.randomBytes(16).toString('hex')`. One-line fix.
+
+3. **Discord lookup paginates only the first 200 users.**
+   `packages/client/lib/discord/auth.ts:144-149` —
+   `listUsers({ perPage: 200 })` then filters by email. Once
+   the user count grows past 200, anyone whose row falls off
+   page 1 can't sign in via the recovery branch. Capture the
+   id elsewhere or paginate.
+
+4. **Single secret reused for two auth flows.**
+   `JOIN_TOKEN_SECRET` is the HMAC key for join tokens
+   (`shared/src/token.ts:41`) AND the password seed for every
+   Discord user (`discord/auth.ts:33-40`). Rotating it
+   silently invalidates every Discord user's password (the
+   provision path self-heals on next sign-in, so it's only a
+   smell, not a break). Add `DISCORD_USER_SECRET` if/when
+   independent rotation matters.
+
+5. **No WebSocket-level rate limit.** `index.ts:175-299` —
+   only `handleChat` (`world.ts:2521`, ~1.6 msg/s) is rate
+   limited. `fire`, `build_request`, `craft_request`,
+   `inventory_swap` rely on per-handler gating. A malicious
+   client can saturate the 256 MB Fly machine with valid
+   `inventory_swap` calls. Add a token bucket per connection
+   in `index.ts` before dispatch.
+
+6. **Tile coordinates unbounded in protocol.**
+   `shared/src/protocol.ts:390-391` — `tileX/tileY:
+   z.number().int()` with no min/max. Build-handler safety
+   relies on player-distance check at `scene.ts:652-659`:
+   huge values overflow `(tileX + 0.5) * tileSize` to
+   Infinity, distance fails, early return. Works, but it's
+   load-bearing IEEE-754 behavior. Add `.min(-100000).max(100000)`
+   for defense in depth. Same applies to dir/move vectors
+   (currently `finiteNumber` only — finite but unbounded magnitude).
+
+### Correctness / maintainability
+
+7. **Persistence table is `world_states`, snapshot constant
+   says `WORLD_SNAPSHOT_SCHEMA`.** Actual table is
+   `world_states` (`world.ts:354,439`; migration `0001:54`).
+   Constant at `world.ts:136` says `WORLD_SNAPSHOT_SCHEMA`.
+   Both code reviews and the explore agent mis-named the
+   table. Rename the constant to `WORLD_STATE_SCHEMA` to stop
+   the drift.
+
+8. **`heartbeatTimer` shadows itself.**
+   `packages/server/src/index.ts:131` is the WS-ping sweep
+   timer; line 158 is an inner-scope `touchLastSeen` timer
+   with the same name. Different jobs, same identifier.
+   Rename the inner to `lastSeenTimer`.
+
+9. **Legacy attachment migration drops overflow silently.**
+   `index.ts:435-446` — `migrateLegacyAttachmentSlots` queues
+   overflow attachments and only places them into empty
+   slots; `if (!placed) break;` quietly discards the rest.
+   Pre-Sprint-C saves only, so blast radius is small. At
+   minimum log the discard count so you'd notice if it ever
+   fires unexpectedly.
+
+10. **Per-character DB write every 30s.** `index.ts:276-279` —
+    each connected character writes `last_seen_at` on a
+    30s interval. Trivial at the 5–10 player cap; if the cap
+    rises, batch into a single `update ... in (...)` per world
+    tick.
+
+### What looks right (worth calling out)
+
+- **Join token verification** (`shared/src/token.ts:53-78`):
+  version prefix, length-checked digest, `timingSafeEqual`,
+  `exp` check. Correct.
+- **Pre-auth gate** (`index.ts:167-173,195-215`): 5s auth
+  timeout, drops non-`auth` first message, validates
+  `protocolVersion`, returns specific 4001-4005 close codes.
+- **Hazard tick** (`scene.ts:984-1025`): biome lookup +
+  depth-scaled DPS + suit resist + accumulator-snap on long
+  pauses. Comment at 988-991 ("snap instead of carry
+  remainder so a long pause doesn't fire a burst of catch-up
+  ticks") earns its keep.
+- **RLS deny-by-default for `world_states`** (migration
+  `0001:92-93`): no client policies created.
+- **Heartbeat WS pattern** (`index.ts:131-146`): standard
+  `isAlive` flip-on-pong, terminate stale, clear timer on
+  `wss.close`.
+
+### Highest-leverage next moves
+
+1. Wrap `parseInventoryJson` with a Zod parse against the
+   inventory + equipment schemas. Pre-empts #1 if RLS ever
+   loosens.
+2. Replace `Math.random()` in `makeOauthState`. One-line crypto fix.
+3. Add bounds to `tileX/tileY` + dir/move magnitudes in
+   `protocol.ts`.
+4. Per-connection token bucket in `index.ts` before dispatch.
+5. Rename `WORLD_SNAPSHOT_SCHEMA` → `WORLD_STATE_SCHEMA`.

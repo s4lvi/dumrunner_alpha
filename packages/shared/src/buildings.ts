@@ -151,6 +151,20 @@ export const BUILDING_REGISTRY: Record<BuildingKind, BuildingDef> = {
     isStation: false,
     isWorkstation: false,
   },
+  // Player-built openable door for surface bases. Distinct from
+  // the dungeon `door` (which is a key-gated locked-room fixture
+  // and gets *destroyed* when opened). wall_door persists across
+  // open/close cycles, blocks movement + projectiles only when
+  // closed, and shares the wall's horde priority so enemies will
+  // chew through it once they reach it. Lower HP than wall so
+  // it's a real defensive trade-off vs a solid wall.
+  wall_door: {
+    label: 'Door',
+    maxHp: 100,
+    hordePriority: 12,
+    isStation: false,
+    isWorkstation: false,
+  },
   // Persistent shared inventory bucket. Contents survive perihelion
   // and process restarts via the world snapshot. UX-side it opens a
   // modal (counts as a station for hover/interact purposes) but

@@ -24,6 +24,10 @@ import { registry } from './registry.js';
 import { initTemplates } from './ai/templates.js';
 import { initBiomes } from './biomes.js';
 import { initProps } from './props.js';
+import { initRooms } from './rooms.js';
+import { initCorridors } from './corridors.js';
+import { SandboxWorld } from './sandbox.js';
+import { startContentWatch } from './contentWatch.js';
 import type { World } from './world.js';
 
 // Hydrate JSON-backed content registries before accepting
@@ -33,14 +37,40 @@ import type { World } from './world.js';
 await initTemplates();
 await initBiomes();
 await initProps();
+await initRooms();
+await initCorridors();
+
+// Hot-reload content registries on file changes so editor saves
+// land in the running sandbox without a server restart. Reload is
+// per-area; an enemy save triggers initTemplates (which also
+// refreshes shared enemy visuals) but doesn't touch biomes.
+startContentWatch({
+  biomes: initBiomes,
+  enemies: initTemplates,
+  props: initProps,
+  rooms: initRooms,
+  corridors: initCorridors,
+});
 
 // Typed dispatch map for inbound client messages. Each key is a
 // ClientMessage['type']; each value handles ONLY that type (TS narrows
 // `m` via the Extract<> in the value signature). Adding a new message
 // type is one entry here plus the protocol schema entry. Keeps the
 // route handler at the bottom of the file three lines long.
+//
+// 'auth' is the pre-auth handshake; sandbox_* messages are routed
+// to SandboxWorld (separate code path). Everything else lands here.
+type LiveGameMessageType = Exclude<
+  ClientMessage['type'],
+  | 'auth'
+  | 'sandbox_spawn_enemy'
+  | 'sandbox_clear'
+  | 'sandbox_set_loadout'
+  | 'sandbox_regen_floor'
+  | 'sandbox_stamp_room'
+>;
 type ClientMessageHandlers = {
-  [K in Exclude<ClientMessage['type'], 'auth'>]: (
+  [K in LiveGameMessageType]: (
     world: World,
     characterId: string,
     msg: Extract<ClientMessage, { type: K }>
@@ -156,6 +186,10 @@ wss.on('connection', (ws: WebSocket) => {
   let player: Player | null = null;
   let serverId: string | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  // Editor-sandbox connections live in a parallel world (see
+  // SandboxWorld). When a sandbox token authenticates, this is
+  // populated and the regular live-game path is skipped.
+  let sandbox: SandboxWorld | null = null;
   // Heartbeat liveness flag — flipped to false on each scheduler tick;
   // the client's pong response flips it back. See top-level
   // heartbeatTimer for the sweep.
@@ -216,6 +250,36 @@ wss.on('connection', (ws: WebSocket) => {
 
       const { accountId, characterId, displayName, serverId: tokenServerId } =
         verified.payload;
+
+      // Sandbox connections never touch the live game registry.
+      // The token's `sandbox` flag is the only thing that switches
+      // the path; signing key + exp are verified the same way.
+      if (verified.payload.sandbox) {
+        clearTimeout(authTimer);
+        // Reuse the auth player object so the close handler can
+        // detect "we have a connected user." The fields are mostly
+        // placeholders — sandbox uses its own SceneConnection.
+        player = {
+          characterId,
+          accountId,
+          displayName,
+          x: 0,
+          y: 0,
+          hp: 100,
+          maxHp: 100,
+          stamina: 100,
+          maxStamina: 100,
+          shield: 0,
+          maxShield: 0,
+          alive: true,
+        };
+        sandbox = new SandboxWorld(ws, characterId, displayName);
+        sandbox.start();
+        console.log(
+          `[ws] ${displayName} (${characterId}) connected to editor sandbox`,
+        );
+        return;
+      }
 
       // Load the persisted character so re-joins resume where they were.
       const { data: characterRow, error } = await supabase
@@ -290,6 +354,21 @@ wss.on('connection', (ws: WebSocket) => {
       sendError(ws, 'already_authed');
       return;
     }
+    if (sandbox) {
+      sandbox.handleMessage(msg);
+      return;
+    }
+    // Sandbox-only messages on a live-game connection are silently
+    // ignored — they have no meaning here.
+    if (
+      msg.type === 'sandbox_spawn_enemy' ||
+      msg.type === 'sandbox_clear' ||
+      msg.type === 'sandbox_set_loadout' ||
+      msg.type === 'sandbox_regen_floor' ||
+      msg.type === 'sandbox_stamp_room'
+    ) {
+      return;
+    }
     const world = serverId ? registry.get(serverId) : undefined;
     if (!world) return;
     const handler = MESSAGE_HANDLERS[msg.type] as
@@ -301,6 +380,16 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('close', () => {
     clearTimeout(authTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (sandbox) {
+      sandbox.destroy();
+      sandbox = null;
+      if (player) {
+        console.log(
+          `[ws] ${player.displayName} (${player.characterId}) sandbox closed`,
+        );
+      }
+      return;
+    }
     if (player && serverId) {
       const world = registry.get(serverId);
       world?.remove(player.characterId, ws);

@@ -19,11 +19,11 @@ import type {
 } from '@dumrunner/shared';
 import { setEnemyVisuals } from '@dumrunner/shared';
 import type { GameInit } from '@/lib/game/pixi';
-import {
-  listEntities,
-  saveEntity,
-  deleteEntity,
-} from '@/lib/editorContentClient';
+import { listEntities } from '@/lib/editorContentClient';
+import { useEntityEditor } from '../_components/useEntityEditor';
+import { EntityList } from '../_components/EntityList';
+import { EnemyPreview as SandboxEnemyPreview } from '../_components/EnemyPreview';
+import { ReferencesPanel } from '../_components/ReferencesPanel';
 import {
   Button,
   ColorField,
@@ -106,91 +106,34 @@ function makeBlank(id = 'new_enemy'): EnemyDef {
 }
 
 export default function EnemyEditorPage() {
-  const [entries, setEntries] = useState<EnemyDef[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<EnemyDef | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  async function refresh() {
-    try {
-      const r = await listEntities('enemies');
-      setEntries(r);
-      if (selectedId && !r.some((b) => b.id === selectedId)) {
-        setSelectedId(null);
-        setDraft(null);
-      }
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-  useEffect(() => {
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useEffect(() => {
-    if (selectedId === null) {
-      setDraft(null);
-      return;
-    }
-    const found = entries.find((b) => b.id === selectedId);
-    if (found) setDraft(structuredClone(found));
-  }, [selectedId, entries]);
-
-  async function onSave() {
-    if (!draft) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await saveEntity('enemies', draft);
-      await refresh();
-      setSelectedId(draft.id);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-  async function onDelete() {
-    if (!selectedId) return;
-    if (!confirm(`Delete enemy "${selectedId}"?`)) return;
-    try {
-      await deleteEntity('enemies', selectedId);
-      await refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-  function onNew() {
-    const id = `enemy_${Date.now().toString(36)}`;
-    const blank = makeBlank(id);
-    setEntries((cur) => [...cur, blank]);
-    setSelectedId(id);
-  }
+  const {
+    entries,
+    selectedId,
+    setSelectedId,
+    draft,
+    setDraft,
+    save,
+    remove,
+    createNew,
+    error,
+    saving,
+  } = useEntityEditor<EnemyDef>('enemies', { makeBlank, newIdPrefix: 'enemy' });
+  const [tab, setTab] = useState<'edit' | 'preview'>('edit');
+  const onSave = save;
+  const onDelete = remove;
+  const onNew = createNew;
 
   return (
     <div className="flex h-full w-full">
-      <aside className="w-60 shrink-0 border-r border-zinc-800 overflow-y-auto p-3 space-y-2">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="text-xs uppercase text-zinc-500">Enemies</h2>
-          <Button onClick={onNew}>+ new</Button>
-        </div>
-        {entries.length === 0 && (
-          <p className="text-[11px] text-zinc-500">
-            No enemies yet. Click <span className="text-zinc-300">+ new</span>.
-          </p>
-        )}
-        {entries.map((e) => (
-          <button
-            key={e.id}
-            type="button"
-            onClick={() => setSelectedId(e.id)}
-            className={`w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 ${
-              selectedId === e.id
-                ? 'bg-zinc-800 text-zinc-100'
-                : 'text-zinc-400 hover:bg-zinc-800/40'
-            }`}
-          >
+      <EntityList<EnemyDef>
+        title="Enemies"
+        entries={entries}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        onNew={onNew}
+        emptyHint="No enemies yet. Click + new."
+        renderItem={(e) => (
+          <div className="flex items-center gap-2">
             <span
               className="w-3 h-3 rounded-full border border-zinc-700"
               style={{ background: e.visual.color }}
@@ -199,10 +142,44 @@ export default function EnemyEditorPage() {
             <span className="text-[9px] text-zinc-600 font-mono">
               {e.movement.kind}
             </span>
-          </button>
-        ))}
-      </aside>
+          </div>
+        )}
+      />
 
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex items-center gap-1 px-3 py-1 border-b border-zinc-800 bg-zinc-900/40 shrink-0">
+          <button
+            type="button"
+            onClick={() => setTab('edit')}
+            className={`text-xs px-2 py-1 rounded ${
+              tab === 'edit'
+                ? 'bg-zinc-800 text-zinc-100'
+                : 'text-zinc-400 hover:bg-zinc-800/50'
+            }`}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('preview')}
+            disabled={!draft}
+            className={`text-xs px-2 py-1 rounded ${
+              tab === 'preview'
+                ? 'bg-zinc-800 text-zinc-100'
+                : 'text-zinc-400 hover:bg-zinc-800/50'
+            } ${!draft ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            Preview
+          </button>
+        </div>
+
+        {tab === 'preview' && draft && (
+          <div className="flex-1 min-h-0">
+            <SandboxEnemyPreview enemyId={draft.id} />
+          </div>
+        )}
+
+        {tab === 'edit' && (
       <main className="flex-1 overflow-y-auto p-4 min-w-0">
         {!draft && (
           <div className="text-zinc-500 text-sm pt-12 text-center">
@@ -410,6 +387,8 @@ export default function EnemyEditorPage() {
           </div>
         )}
       </main>
+        )}
+      </div>
 
       <aside className="w-80 shrink-0 border-l border-zinc-800 p-3 overflow-y-auto flex flex-col gap-2">
         <h2 className="text-xs uppercase text-zinc-500">Preview</h2>
@@ -430,9 +409,11 @@ export default function EnemyEditorPage() {
             <p className="text-[10px] text-zinc-600 leading-snug">
               Iso preview shows the procedural billboard at this
               enemy&apos;s shape / colour / size. Live AI sandbox
-              (let it chase a dummy) lands once E3.1 wires biome
-              roster spawning into the running scene.
+              is in the Preview tab above.
             </p>
+            <div className="border-t border-zinc-800 mt-2 pt-2">
+              <ReferencesPanel area="enemies" id={draft.id} />
+            </div>
           </>
         ) : (
           <p className="text-[11px] text-zinc-500">

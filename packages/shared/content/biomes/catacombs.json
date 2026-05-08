@@ -2,15 +2,21 @@
   "id": "catacombs",
   "label": "Irradiated Catacombs",
   "dominantHazard": "radiation",
-  "palette": { "floor": "#2c2530", "wall": "#5b3a4a", "accent": "#a855f7" },
+  "palette": {
+    "floor": "#2c2530",
+    "wall": "#5b3a4a",
+    "accent": "#a855f7"
+  },
   "generation": {
     "roomCountMin": 10,
-    "roomCountMax": 18,
+    "roomCountMax": 32,
     "roomSizeMin": 4,
     "roomSizeMax": 9,
     "corridorWidth": 2,
     "branching": 0.5,
-    "propDensity": 0.08,
+    "roomTemplateChance": 0.45,
+    "tunnelerCount": 1,
+    "propDensity": 0.065,
     "enemyDensity": 0.06,
     "lootDensity": 0.5,
     "hazardIntensity": 0.6,
@@ -18,17 +24,61 @@
     "extremeRoomChance": 0.05
   },
   "enemyRoster": [
-    { "id": "chaser_melee", "weight": 1.0 },
-    { "id": "swarmer",      "weight": 1.5 },
-    { "id": "chem_bloater", "weight": 0.4 }
+    {
+      "id": "chaser_melee",
+      "weight": 1
+    },
+    {
+      "id": "swarmer",
+      "weight": 1.5
+    },
+    {
+      "id": "chem_bloater",
+      "weight": 0.4
+    }
   ],
   "propPalette": [
-    { "id": "barrel", "weight": 1.0 },
-    { "id": "crate", "weight": 0.8 },
-    { "id": "explosive_barrel", "weight": 0.4 }
+    {
+      "id": "barrel",
+      "weight": 1
+    },
+    {
+      "id": "crate",
+      "weight": 0.8
+    },
+    {
+      "id": "explosive_barrel",
+      "weight": 0.4
+    }
   ],
   "lootBias": [
-    { "materialId": "biotic", "multiplier": 1.6 },
-    { "materialId": "wire",   "multiplier": 1.2 }
-  ]
+    {
+      "materialId": "biotic",
+      "multiplier": 1.6
+    },
+    {
+      "materialId": "wire",
+      "multiplier": 1.2
+    }
+  ],
+  "tileSet": {
+    "tiles": [
+      {
+        "id": 1,
+        "label": "default_floor",
+        "role": "floor",
+        "walkable": true,
+        "blocksLOS": false,
+        "blocksProjectiles": false
+      },
+      {
+        "id": 2,
+        "label": "default_wall",
+        "role": "wall",
+        "walkable": false,
+        "blocksLOS": true,
+        "blocksProjectiles": true
+      }
+    ]
+  }
 }

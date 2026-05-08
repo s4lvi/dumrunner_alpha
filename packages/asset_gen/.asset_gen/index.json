@@ -3473,6 +3473,174 @@
         "reasons": []
       },
       "createdAt": "2026-05-05T21:48:11.385Z"
+    },
+    {
+      "assetId": "asset_68deff3ec9f2432eb663fe5233219d75",
+      "cacheKey": "bcbb5b575973bbf350ee6d46065485d3323340ef6179a56fd9b44255edae37fc",
+      "request": {
+        "requestId": "enemy:dummy_target:neutral",
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "dummy_target",
+          "label": "scrap target dummy",
+          "faction": "neutral",
+          "biome": null
+        },
+        "visualBrief": {
+          "subject": "scrap target dummy",
+          "materials": [
+            "wasteland mutation",
+            "scrap armor"
+          ],
+          "colors": [
+            "#ef4444",
+            "#111827",
+            "#22c55e"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "stationary movement personality",
+            "melee combat cue"
+          ],
+          "mustAvoid": [
+            "friendly character",
+            "multiple creatures",
+            "floor tile"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_68deff3ec9f2432eb663fe5233219d75.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.82
+        },
+        "opaqueBounds": {
+          "x": 10,
+          "y": 8,
+          "w": 46,
+          "h": 48
+        },
+        "averageColors": [
+          "#493931"
+        ]
+      },
+      "family": {
+        "familyId": "family_38d3ffb5221b69ddb348",
+        "variantType": "base",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated enemy asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-06T02:46:44.396Z"
+    },
+    {
+      "assetId": "asset_e4e227923b784c1db366e4e0b2fdbe11",
+      "cacheKey": "d4951a1e178bed5b8af41b666e8cc8792384470170731ce5d7fc064a0aeb7ba8",
+      "request": {
+        "requestId": "enemy:chem_bloater:catacombs",
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chem_bloater",
+          "label": "chem bloater",
+          "faction": "catacombs",
+          "biome": null
+        },
+        "visualBrief": {
+          "subject": "chem bloater",
+          "materials": [
+            "wasteland mutation",
+            "scrap armor"
+          ],
+          "colors": [
+            "#84cc16",
+            "#111827",
+            "#22c55e"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "chase movement personality",
+            "melee combat cue",
+            "aoe_cone combat cue",
+            "aoe_cone combat cue"
+          ],
+          "mustAvoid": [
+            "friendly character",
+            "multiple creatures",
+            "floor tile"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "urls": {
+        "png": "http://localhost:8787/assets/asset_e4e227923b784c1db366e4e0b2fdbe11.png"
+      },
+      "metadata": {
+        "width": 64,
+        "height": 64,
+        "transparent": true,
+        "anchor": {
+          "x": 0.5,
+          "y": 0.82
+        },
+        "opaqueBounds": {
+          "x": 8,
+          "y": 7,
+          "w": 49,
+          "h": 49
+        },
+        "averageColors": [
+          "#545636"
+        ]
+      },
+      "family": {
+        "familyId": "family_07ce4bafe2b01d2569d5",
+        "variantType": "base",
+        "sourceModel": "gpt-image-1.5"
+      },
+      "verification": {
+        "score": 0.82,
+        "verdict": "pass",
+        "summary": "Generated enemy asset passed baseline mechanical checks.",
+        "reasons": []
+      },
+      "createdAt": "2026-05-07T20:20:35.499Z"
     }
   ],
   "jobs": [
@@ -5673,6 +5841,118 @@
       "error": null,
       "createdAt": "2026-05-05T21:47:58.720Z",
       "updatedAt": "2026-05-05T21:48:11.387Z"
+    },
+    {
+      "jobId": "job_7cf32f5ddb6540fb8e9bae692a58e873",
+      "status": "approved",
+      "cacheKey": "bcbb5b575973bbf350ee6d46065485d3323340ef6179a56fd9b44255edae37fc",
+      "request": {
+        "requestId": "enemy:dummy_target:neutral",
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "dummy_target",
+          "label": "scrap target dummy",
+          "faction": "neutral",
+          "biome": null
+        },
+        "visualBrief": {
+          "subject": "scrap target dummy",
+          "materials": [
+            "wasteland mutation",
+            "scrap armor"
+          ],
+          "colors": [
+            "#ef4444",
+            "#111827",
+            "#22c55e"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "stationary movement personality",
+            "melee combat cue"
+          ],
+          "mustAvoid": [
+            "friendly character",
+            "multiple creatures",
+            "floor tile"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_68deff3ec9f2432eb663fe5233219d75",
+      "error": null,
+      "createdAt": "2026-05-06T02:46:31.039Z",
+      "updatedAt": "2026-05-06T02:46:44.397Z"
+    },
+    {
+      "jobId": "job_5cfe064f684a4c53911117fcbc9e151e",
+      "status": "approved",
+      "cacheKey": "d4951a1e178bed5b8af41b666e8cc8792384470170731ce5d7fc064a0aeb7ba8",
+      "request": {
+        "requestId": "enemy:chem_bloater:catacombs",
+        "assetKind": "enemy",
+        "renderTarget": "world_sprite",
+        "size": 64,
+        "style": {
+          "camera": "top_down",
+          "renderStyle": "painted_sprite",
+          "outline": true,
+          "transparentBackground": true
+        },
+        "gameObject": {
+          "id": "chem_bloater",
+          "label": "chem bloater",
+          "faction": "catacombs",
+          "biome": null
+        },
+        "visualBrief": {
+          "subject": "chem bloater",
+          "materials": [
+            "wasteland mutation",
+            "scrap armor"
+          ],
+          "colors": [
+            "#84cc16",
+            "#111827",
+            "#22c55e"
+          ],
+          "mustInclude": [
+            "readable top-down silhouette",
+            "chase movement personality",
+            "melee combat cue",
+            "aoe_cone combat cue",
+            "aoe_cone combat cue"
+          ],
+          "mustAvoid": [
+            "friendly character",
+            "multiple creatures",
+            "floor tile"
+          ]
+        },
+        "constraints": {
+          "safeMarginPx": 4,
+          "anchor": "center_bottom",
+          "maxOpaqueBoundsRatio": 0.86,
+          "minReadableAtPx": 32
+        }
+      },
+      "assetId": "asset_e4e227923b784c1db366e4e0b2fdbe11",
+      "error": null,
+      "createdAt": "2026-05-07T20:20:23.655Z",
+      "updatedAt": "2026-05-07T20:20:35.499Z"
     }
   ]
 }

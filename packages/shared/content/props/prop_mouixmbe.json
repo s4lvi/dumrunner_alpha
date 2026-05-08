@@ -1,0 +1,11 @@
+{
+  "id": "prop_mouixmbe",
+  "label": "Tree",
+  "biomeAffinity": [
+    "sun_bleached"
+  ],
+  "hp": 40,
+  "solid": true,
+  "onDestroy": "nothing",
+  "visual": {}
+}

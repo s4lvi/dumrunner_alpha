@@ -12,7 +12,6 @@ import {
   computeSuitStats,
   ATTACHMENT_DEFS,
   attachmentDisplayName,
-  blueprintDisplayName,
   BUILDING_REGISTRY,
   CONSUMABLES,
   effectiveWeaponStats,
@@ -24,7 +23,8 @@ import {
   weaponDisplayName,
   type WeaponItem,
   KEY_ARTIFACT_COST,
-  listBlueprints,
+  BLUEPRINT_CATALOG,
+  type BlueprintCatalogEntry,
   listRecipes,
   MATERIALS,
   TIER_PIECE_SLOTS,
@@ -44,6 +44,7 @@ import {
   resistFor,
   setBiomePalettes,
   setEnemyVisuals,
+  setPropVisuals,
   SUIT_ATTACHMENT_SLOTS,
   SUIT_SLOT_KINDS,
   type BuildingKind,
@@ -60,16 +61,20 @@ import {
 } from '@dumrunner/shared';
 import { runGame, type GameHandle } from '@/lib/game/pixi';
 import { runFpsGame } from '@/lib/game/fps';
-import { runIsoGame } from '@/lib/game/iso';
 import { paintMinimap } from '@/lib/game/minimap';
 import { getOverride } from '@/lib/textureOverrides';
 
-type RendererMode = 'topdown' | 'iso' | 'fps';
+// FPS is the only renderer in play. The V hotkey cycle is kept
+// as a single-element array so the existing toggle UI stays
+// functional. 'topdown' is retained as a type variant only
+// because pixi.ts (runGame) is still imported for its
+// GameHandle / SceneState types — no UI path reaches it.
+type RendererMode = 'topdown' | 'fps';
 
-const RENDERER_CYCLE: RendererMode[] = ['topdown', 'iso', 'fps'];
+const RENDERER_CYCLE: RendererMode[] = ['fps'];
 
 function runnerFor(mode: RendererMode): typeof runGame {
-  return mode === 'fps' ? runFpsGame : mode === 'iso' ? runIsoGame : runGame;
+  return mode === 'fps' ? runFpsGame : runGame;
 }
 import { audio } from '@/lib/audio';
 import { loadAssetIndex, type AssetIndex } from '@/lib/assetGen';
@@ -220,6 +225,13 @@ export function Game({ serverId }: { serverId: string }) {
   // and the E action when no other interactable / station wins.
   const [nearestDoorId, setNearestDoorId] = useState<string | null>(null);
   const nearestDoorIdRef = useRef<string | null>(null);
+  // Kind of the nearest door — drives prompt copy ("costs 1 key" for
+  // dungeon `door`, "Open"/"Close" for player-built `wall_door`).
+  const [nearestDoorKind, setNearestDoorKind] = useState<
+    'door' | 'wall_door' | null
+  >(null);
+  // Wall_door only: whether the nearest door is currently open.
+  const [nearestDoorOpen, setNearestDoorOpen] = useState(false);
   // Storage chest in range, or null. Stored as id (not just kind) so
   // we can identify which specific chest the player wants to open
   // when multiple are placed near each other.
@@ -295,15 +307,8 @@ export function Game({ serverId }: { serverId: string }) {
   // for. Reset on cycle bump (horde_ended) so the next perihelion
   // fires its alert again. -1 means we haven't alerted this run.
   const perihelionAlertCycleRef = useRef<number>(-1);
-  // Renderer pick. Initialised from URL params `?fps=1` / `?iso=1` for
-  // backwards-compat; the V hotkey cycles topdown → iso → fps at runtime.
-  const [rendererMode, setRendererMode] = useState<RendererMode>(() => {
-    if (typeof window === 'undefined') return 'topdown';
-    const sp = new URLSearchParams(window.location.search);
-    if (sp.get('fps') === '1') return 'fps';
-    if (sp.get('iso') === '1') return 'iso';
-    return 'topdown';
-  });
+  // Renderer pick. FPS is the only mode in play.
+  const [rendererMode, setRendererMode] = useState<RendererMode>('fps');
   // Captured WS-callback bundle so the toggle handler can re-instantiate
   // the renderer without losing access to session.ws.
   const rendererCallbacksRef = useRef<{
@@ -318,6 +323,8 @@ export function Game({ serverId }: { serverId: string }) {
       all: BuildingKind[];
       nearest: BuildingKind | null;
       nearestDoorId: string | null;
+      nearestDoorKind: 'door' | 'wall_door' | null;
+      nearestDoorOpen: boolean;
       nearestChestId: string | null;
       weaponBenchTier: number;
       weaponBenches: { id: string; tier: number }[];
@@ -504,6 +511,8 @@ export function Game({ serverId }: { serverId: string }) {
         // change time. Newly authored biomes light up without a
         // code change.
         setBiomePalettes(msg.biomes);
+        // Per-prop sprite size + ground offset live here.
+        setPropVisuals(msg.propVisuals);
         setInventory(msg.inventory);
         setEquipment(msg.equipment);
         setHotbarSelection(msg.hotbarSelection);
@@ -560,6 +569,8 @@ export function Game({ serverId }: { serverId: string }) {
             all,
             nearest,
             nearestDoorId,
+            nearestDoorKind,
+            nearestDoorOpen,
             nearestChestId,
             weaponBenchTier,
             weaponBenches,
@@ -571,6 +582,8 @@ export function Game({ serverId }: { serverId: string }) {
             setNearestStation(nearest);
             nearestDoorIdRef.current = nearestDoorId;
             setNearestDoorId(nearestDoorId);
+            setNearestDoorKind(nearestDoorKind);
+            setNearestDoorOpen(nearestDoorOpen);
             nearestChestIdRef.current = nearestChestId;
             setNearestChestId(nearestChestId);
             setWeaponBenchTier(weaponBenchTier);
@@ -741,6 +754,21 @@ export function Game({ serverId }: { serverId: string }) {
         setCurrentLayout(msg.layout);
         setEquipment(msg.equipment);
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
+        // Server uses scene_changed (not player_respawned) when a
+        // dungeon death sends the player back to the surface — the
+        // self payload reflects the post-respawn alive/hp state.
+        // Sync React state from it so the "YOU ARE DOWN" banner
+        // and HP bar match the server's truth across transitions.
+        setSelfAlive(msg.self.alive);
+        setSelfStats((s) => ({
+          ...s,
+          hp: msg.self.hp,
+          maxHp: msg.self.maxHp,
+          shield: msg.self.shield,
+          maxShield: msg.self.maxShield,
+          stamina: msg.self.stamina,
+          maxStamina: msg.self.maxStamina,
+        }));
         gameRef.current?.swapScene({
           self: msg.self,
           players: msg.players.filter(
@@ -896,6 +924,10 @@ export function Game({ serverId }: { serverId: string }) {
           secondsToPerihelion: Math.ceil(msg.durationMs / 1000),
           hordeActive: true,
         });
+        // Alarm stinger so the moment reads as a hostile shift —
+        // the HUD-only red pulse on its own undersold the horde
+        // start. robot-detect is the closest existing alert SFX.
+        audio.playSfx('robot-detect');
         break;
       case 'horde_ended':
         setWorldClock((prev) =>
@@ -998,6 +1030,12 @@ export function Game({ serverId }: { serverId: string }) {
   // gated so the alert only sounds once per perihelion (not every
   // tick under 30s). Resets after the horde ends so the next cycle
   // can alert again.
+  // Push the horde flag into the active renderer so the FPS
+  // skybox can swap to its perihelion variant.
+  useEffect(() => {
+    gameRef.current?.setHordeActive(!!worldClock?.hordeActive);
+  }, [worldClock?.hordeActive]);
+
   useEffect(() => {
     if (!worldClock) return;
     if (worldClock.hordeActive) {
@@ -1285,9 +1323,8 @@ export function Game({ serverId }: { serverId: string }) {
         setShowMinimap((v) => !v);
         return;
       }
-      // V cycles renderers: top-down → iso → FPS → top-down. Swap is
-      // hot — we snapshot scene state from the old renderer and seed
-      // the new one.
+      // V toggles renderers: iso ↔ FPS. Swap is hot — we snapshot
+      // scene state from the old renderer and seed the new one.
       if (e.key === 'v' || e.key === 'V') {
         e.preventDefault();
         setRendererMode((m) => {
@@ -1420,9 +1457,13 @@ export function Game({ serverId }: { serverId: string }) {
         {!nearInteractable && nearestStation === null && nearestDoorId && (
           <InteractPrompt
             label={
-              countMaterial(inventory, 'key') > 0
-                ? 'Open Door — costs 1 key'
-                : 'Locked — need a key'
+              nearestDoorKind === 'wall_door'
+                ? nearestDoorOpen
+                  ? 'Close Door'
+                  : 'Open Door'
+                : countMaterial(inventory, 'key') > 0
+                  ? 'Open Door — costs 1 key'
+                  : 'Locked — need a key'
             }
           />
         )}
@@ -1746,14 +1787,14 @@ function Overlay({ children }: { children: React.ReactNode }) {
 
 function ControlsHint({ mode }: { mode: RendererMode }) {
   // Show what V will switch to next so the player knows what's coming.
+  // 'topdown' is deprecated and not reachable via the V cycle; if a
+  // ?topdown= URL hits, the next label still resolves cleanly.
+  const idx = RENDERER_CYCLE.indexOf(mode);
   const nextMode =
-    RENDERER_CYCLE[(RENDERER_CYCLE.indexOf(mode) + 1) % RENDERER_CYCLE.length];
-  const nextLabel =
-    nextMode === 'fps'
-      ? 'first-person'
-      : nextMode === 'iso'
-        ? 'isometric'
-        : 'top-down';
+    idx < 0
+      ? RENDERER_CYCLE[0]
+      : RENDERER_CYCLE[(idx + 1) % RENDERER_CYCLE.length];
+  const nextLabel = nextMode === 'fps' ? 'first-person' : 'isometric';
   return (
     <div className="absolute bottom-3 right-3 text-xs text-zinc-500 select-none pointer-events-none flex flex-col items-end gap-1">
       <div>
@@ -2508,7 +2549,9 @@ function PerihelionWarning({
     ? 'bg-red-950/90 border-red-500 text-red-100 animate-pulse shadow-[0_0_24px_rgba(239,68,68,0.6)]'
     : 'bg-amber-950/85 border-amber-500/70 text-amber-100';
   return (
-    <div className="absolute top-14 left-1/2 -translate-x-1/2 pointer-events-none select-none">
+    // PowerHud sits at top-12 — push the perihelion banner below it
+    // so the two don't visually clip.
+    <div className="absolute top-24 left-1/2 -translate-x-1/2 pointer-events-none select-none">
       <div
         className={`px-4 py-2 rounded-md border-2 text-sm font-semibold flex flex-col items-center gap-0.5 ${wrap}`}
       >
@@ -3084,6 +3127,37 @@ function TradeModal({
   );
 }
 
+// Tier 0 = roots (no prereqs); each subsequent tier = one step
+// further from a root. Topological pass — assumes no cycles
+// (the BLUEPRINT_CATALOG DAG is hand-authored).
+function computeBlueprintTiers(): Map<string, number> {
+  const tiers = new Map<string, number>();
+  function tierOf(id: string): number {
+    const cached = tiers.get(id);
+    if (cached !== undefined) return cached;
+    const bp = BLUEPRINT_CATALOG[id];
+    if (!bp || !bp.prerequisites || bp.prerequisites.length === 0) {
+      tiers.set(id, 0);
+      return 0;
+    }
+    let max = 0;
+    for (const pre of bp.prerequisites) {
+      const t = tierOf(pre);
+      if (t + 1 > max) max = t + 1;
+    }
+    tiers.set(id, max);
+    return max;
+  }
+  for (const id of Object.keys(BLUEPRINT_CATALOG)) tierOf(id);
+  return tiers;
+}
+
+const NODE_W = 150;
+const NODE_H = 56;
+const TIER_PITCH_X = 200;
+const COLUMN_PITCH_Y = 76;
+const TREE_PADDING = 24;
+
 function TradeBlueprintsList({
   knownBlueprints,
   artifacts,
@@ -3095,43 +3169,244 @@ function TradeBlueprintsList({
   nearUplink: boolean;
   onPurchase: (blueprintId: string) => void;
 }) {
-  const blueprints = listBlueprints();
+  // E1 progression tree — drag-pannable PoE-style DAG view.
+  // Nodes laid out by tier (X) × column (Y); SVG edges drawn
+  // between each node and its prerequisites. Per-node colour
+  // reflects player state: owned (green), purchasable (amber),
+  // locked (grey + dashed).
+  const layout = useMemo(() => {
+    const tiers = computeBlueprintTiers();
+    // Skip hidden blueprints entirely.
+    const visible = Object.values(BLUEPRINT_CATALOG).filter((b) => !b.hidden);
+    // Group by tier, sort within tier by cost then name for a
+    // stable layout.
+    const byTier = new Map<number, BlueprintCatalogEntry[]>();
+    for (const bp of visible) {
+      const t = tiers.get(bp.id) ?? 0;
+      const list = byTier.get(t) ?? [];
+      list.push(bp);
+      byTier.set(t, list);
+    }
+    for (const list of byTier.values()) {
+      list.sort((a, b) => a.cost - b.cost || a.displayName.localeCompare(b.displayName));
+    }
+    const positions = new Map<string, { x: number; y: number }>();
+    let maxTier = 0;
+    let maxCol = 0;
+    for (const [tier, list] of byTier) {
+      if (tier > maxTier) maxTier = tier;
+      list.forEach((bp, i) => {
+        positions.set(bp.id, {
+          x: TREE_PADDING + tier * TIER_PITCH_X,
+          y: TREE_PADDING + i * COLUMN_PITCH_Y,
+        });
+        if (i > maxCol) maxCol = i;
+      });
+    }
+    const width = TREE_PADDING * 2 + (maxTier + 1) * TIER_PITCH_X;
+    const height = TREE_PADDING * 2 + (maxCol + 1) * COLUMN_PITCH_Y;
+    return { positions, visible, width, height };
+  }, []);
+
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    panX: number;
+    panY: number;
+  } | null>(null);
+
+  function onMouseDown(e: React.MouseEvent): void {
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      panX: pan.x,
+      panY: pan.y,
+    };
+  }
+  function onMouseMove(e: React.MouseEvent): void {
+    const d = dragRef.current;
+    if (!d) return;
+    setPan({
+      x: d.panX + (e.clientX - d.startX),
+      y: d.panY + (e.clientY - d.startY),
+    });
+  }
+  function onMouseUp(): void {
+    dragRef.current = null;
+  }
+
   return (
-    <ul className="divide-y divide-[color:var(--panel-border)] overflow-y-auto max-h-[60vh]">
-      {blueprints.map((bp) => {
-        const owned = knownBlueprints.has(bp.id);
-        const canAfford = artifacts >= bp.cost;
-        const enabled = nearUplink && !owned && canAfford;
-        let reason = '';
-        if (owned) reason = 'Owned';
-        else if (!nearUplink) reason = 'Out of range';
-        else if (!canAfford) reason = `Need ${bp.cost - artifacts} more`;
-        return (
-          <li key={bp.id} className="px-4 py-3 flex items-center gap-4">
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-zinc-200">
-                {blueprintDisplayName(bp)}
-              </div>
-              <div className="text-[11px] text-zinc-500">{bp.description}</div>
-              <div className="text-[10px] uppercase tracking-wider text-zinc-600 mt-0.5">
-                {bp.tier}
-              </div>
-            </div>
-            <div className="text-right text-xs text-pink-400 tabular-nums whitespace-nowrap">
-              {bp.cost} artifact{bp.cost === 1 ? '' : 's'}
-            </div>
-            <button
-              onClick={() => onPurchase(bp.id)}
-              disabled={!enabled}
-              title={enabled ? '' : reason}
-              className="px-3 py-1.5 rounded text-xs border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {owned ? 'Owned' : 'Buy'}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="px-4 pb-3 pt-1">
+      <div className="text-[10px] text-zinc-500 mb-1">
+        drag to pan · double-click to recenter
+      </div>
+      <div
+        className="relative bg-[color:var(--bg)] rounded border border-[color:var(--panel-border)] overflow-hidden h-[60vh] cursor-grab active:cursor-grabbing select-none"
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        onMouseLeave={onMouseUp}
+        onDoubleClick={() => setPan({ x: 0, y: 0 })}
+      >
+        <svg
+          width={layout.width}
+          height={layout.height}
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px)`,
+            display: 'block',
+          }}
+        >
+          {/* Edges first so nodes paint on top. */}
+          {layout.visible.map((bp) => {
+            const to = layout.positions.get(bp.id);
+            if (!to) return null;
+            return (bp.prerequisites ?? []).map((preId) => {
+              const from = layout.positions.get(preId);
+              if (!from) return null;
+              const x1 = from.x + NODE_W;
+              const y1 = from.y + NODE_H / 2;
+              const x2 = to.x;
+              const y2 = to.y + NODE_H / 2;
+              const midX = (x1 + x2) / 2;
+              const path = `M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`;
+              const preMet = knownBlueprints.has(preId);
+              return (
+                <path
+                  key={`${preId}->${bp.id}`}
+                  d={path}
+                  stroke={preMet ? '#22c55e' : '#3f3f46'}
+                  strokeWidth={1.5}
+                  fill="none"
+                  opacity={preMet ? 0.7 : 0.35}
+                />
+              );
+            });
+          })}
+          {/* Nodes. */}
+          {layout.visible.map((bp) => {
+            const pos = layout.positions.get(bp.id);
+            if (!pos) return null;
+            const owned = knownBlueprints.has(bp.id);
+            const allMet = (bp.prerequisites ?? []).every((id) =>
+              knownBlueprints.has(id),
+            );
+            const canAfford = artifacts >= bp.cost;
+            const purchasable =
+              !owned && allMet && nearUplink && canAfford;
+            const fill = owned
+              ? '#14532d'
+              : allMet
+                ? '#1e3a5f'
+                : '#1f1f23';
+            const stroke = owned
+              ? '#22c55e'
+              : purchasable
+                ? '#fbbf24'
+                : allMet
+                  ? '#3b82f6'
+                  : '#52525b';
+            const dash = allMet ? undefined : '4 3';
+            const titleParts: string[] = [bp.description];
+            if (!owned) titleParts.push(`${bp.cost} artifact${bp.cost === 1 ? '' : 's'}`);
+            if (!allMet) {
+              const missing = (bp.prerequisites ?? [])
+                .filter((id) => !knownBlueprints.has(id))
+                .map((id) => BLUEPRINT_CATALOG[id]?.displayName ?? id)
+                .join(', ');
+              titleParts.push(`Locked · needs ${missing}`);
+            } else if (!owned && !nearUplink) {
+              titleParts.push('Move closer to the uplink');
+            } else if (!owned && !canAfford) {
+              titleParts.push(`Need ${bp.cost - artifacts} more artifacts`);
+            }
+            return (
+              <g
+                key={bp.id}
+                transform={`translate(${pos.x}, ${pos.y})`}
+                style={{
+                  cursor: purchasable ? 'pointer' : 'default',
+                }}
+                onClick={(e) => {
+                  // Suppress the click that triggered the
+                  // drag-end (mouseUp fires before click; if the
+                  // mouse moved appreciably, treat it as a drag).
+                  e.stopPropagation();
+                  if (purchasable) onPurchase(bp.id);
+                }}
+              >
+                <title>{titleParts.join(' — ')}</title>
+                <rect
+                  width={NODE_W}
+                  height={NODE_H}
+                  rx={6}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={2}
+                  strokeDasharray={dash}
+                />
+                <text
+                  x={NODE_W / 2}
+                  y={22}
+                  textAnchor="middle"
+                  fill="#e4e4e7"
+                  fontSize={12}
+                  fontWeight={600}
+                  pointerEvents="none"
+                >
+                  {bp.displayName.length > 20
+                    ? bp.displayName.slice(0, 19) + '…'
+                    : bp.displayName}
+                </text>
+                <text
+                  x={NODE_W / 2}
+                  y={40}
+                  textAnchor="middle"
+                  fill={
+                    owned
+                      ? '#86efac'
+                      : purchasable
+                        ? '#fcd34d'
+                        : '#a1a1aa'
+                  }
+                  fontSize={10}
+                  pointerEvents="none"
+                >
+                  {owned
+                    ? 'Owned'
+                    : !allMet
+                      ? 'Locked'
+                      : `${bp.cost} artifact${bp.cost === 1 ? '' : 's'}`}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="flex items-center gap-3 mt-2 text-[10px] text-zinc-500">
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-900 border border-emerald-500" />
+          owned
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-blue-950 border border-amber-500" />
+          purchasable
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-blue-950 border border-blue-500" />
+          available
+        </span>
+        <span className="flex items-center gap-1">
+          <span
+            className="inline-block w-2.5 h-2.5 rounded-sm bg-zinc-900"
+            style={{
+              border: '1.5px dashed #71717a',
+            }}
+          />
+          locked
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -3913,7 +4188,6 @@ function WeaponAssemblyPanel({
                     );
                   }
                   return list.map((inst) => {
-                    const def = ATTACHMENT_DEFS[inst.defId];
                     return (
                       <button
                         key={inst.id}
@@ -3922,7 +4196,6 @@ function WeaponAssemblyPanel({
                             ? stagePieceAttach(chooser.piece, inst)
                             : stageModAttach(inst)
                         }
-                        title={def?.description}
                         className={
                           'px-2 py-1 rounded text-[10px] border ' +
                           (chooser.kind === 'piece'
@@ -4377,12 +4650,10 @@ function SuitAssemblyPanel({
                   </span>
                 ) : (
                   candidates.map((inst) => {
-                    const def = ATTACHMENT_DEFS[inst.defId];
                     return (
                       <button
                         key={inst.id}
                         onClick={() => stageAttach(inst)}
-                        title={def?.description}
                         className="px-2 py-1 rounded text-[10px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950"
                       >
                         + {attachmentDisplayName(inst)}{' '}
@@ -4776,7 +5047,6 @@ function ChestSlotGrid({
                   ? 'bg-[color:var(--bg)] border-[color:var(--panel-border)] cursor-default'
                   : 'bg-[color:var(--bg)] border-[color:var(--panel-border)] hover:border-[color:var(--accent)]')
               }
-              title={empty ? 'Empty' : outputSlotLabel(slot)}
             >
               <SlotIcon slot={slot} />
             </button>
@@ -5352,13 +5622,10 @@ function ArmorSlot({
   // Slot label sits under the box and always shows the slot kind
   // (Chassis / Plating / etc.) so the player can see which slot
   // is which at a glance. When a part is equipped, an inline tier
-  // badge at the start of the label colour-codes the tier.
-  // Right-click to unequip — the title carries the full part name
-  // so hover-inspecting still works for tooltips.
+  // badge at the start of the label colour-codes the tier. Click
+  // the inventory item to inspect — no native title tooltip on
+  // these cells (slow + ugly inside the Discord iframe).
   const slotLabel = SUIT_LABELS[kind];
-  const titleText = part
-    ? `${partDisplayName(part)} — ${slotLabel}`
-    : slotLabel;
   return (
     <div className="flex flex-col items-center gap-0.5">
       <div
@@ -5367,7 +5634,6 @@ function ArmorSlot({
             ? 'border-[color:var(--accent)]'
             : 'border-[color:var(--panel-border)]'
         } bg-[color:var(--bg)] flex items-center justify-center`}
-        title={titleText}
         draggable={draggable}
         onDragStart={
           draggable
@@ -6086,6 +6352,20 @@ function ItemIcon({
         <line x1="12" y1="13" x2="12" y2="16" stroke="#cbd5e1" strokeWidth="1.5" />
         <line x1="7" y1="11" x2="9" y2="11" stroke="#cbd5e1" strokeWidth="1.5" />
         <line x1="15" y1="11" x2="17" y2="11" stroke="#cbd5e1" strokeWidth="1.5" />
+      </svg>
+    );
+  }
+  if (kind === 'placeable' && subkind === 'wall_door') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        {/* Door frame */}
+        <rect x="3" y="2" width="18" height="20" fill="#3f3f46" stroke="#0b0d10" strokeWidth={stroke} />
+        {/* Door panel */}
+        <rect x="6" y="4" width="12" height="18" fill="#a16207" stroke="#0b0d10" strokeWidth={stroke} />
+        <rect x="8" y="7" width="8" height="4" fill="#78350f" />
+        <rect x="8" y="13" width="8" height="6" fill="#78350f" />
+        {/* Handle */}
+        <circle cx="15" cy="14" r="1.2" fill="#fbbf24" stroke="#0b0d10" strokeWidth="0.6" />
       </svg>
     );
   }

@@ -308,6 +308,18 @@ function applyMovement(
   const speed = enemy.template.moveSpeed * currentEnemySpeedMult(enemy) * dt;
 
   if (m.kind === 'chase') {
+    // Hold a small standoff at melee range so chasers don't walk
+    // into body contact before swinging — reads as "attacking
+    // from a step away" rather than clipping into the player.
+    // 0.75 tiles of pad inside the declared melee range.
+    let stop = 0;
+    for (const atk of enemy.template.attacks) {
+      if (atk.kind === 'melee') {
+        stop = Math.max(0, atk.range - 24);
+        break;
+      }
+    }
+    if (stop > 0 && dist <= stop) return;
     moveWithCollision(enemy, enemy.x + ux * speed, enemy.y + uy * speed, env);
     return;
   }

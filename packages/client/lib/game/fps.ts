@@ -49,10 +49,16 @@ import type {
 } from '@dumrunner/shared';
 import {
   BUILDING_REGISTRY,
+  biomeTileVariantsFor,
+  decodeTileGrid,
   enemyVisualFor,
+  propVisualFor,
   isInsideAny,
+  isWalkableTileId,
   materialTint,
+  pickCellVariant,
   TIER_COLORS_NUM,
+  tileIdAtCell,
 } from '@dumrunner/shared';
 import type { GameHandle, GameInit, SceneState } from './pixi';
 import { buildingsToMinimapList, type MinimapSnapshot } from './minimap';
@@ -70,7 +76,9 @@ const VERTICAL_FOV = (Math.PI / 180) * 60;
 const FOV = VERTICAL_FOV;
 const COLUMN_STEP_PX = 1; // 1 ray per pixel — sharpest possible.
 const RAY_MAX_DIST = 1500;
-const WALL_HEIGHT_WORLD = 64; // arbitrary world units. Tunes apparent wall scale.
+// One tile high — walls are cubes (TILE_SIZE = 32 in shared/geometry).
+// At 64 they read as 2:1 pillars; at 32 they're square in projection.
+const WALL_HEIGHT_WORLD = 32;
 const POINTER_SENSITIVITY = 0.0025; // rad per mouse pixel
 
 // Wall faces: NS (north/south) shaded slightly darker than EW for depth cue.
@@ -140,6 +148,14 @@ const CORPSE_COLOR = 0x4a1d1d;
 const CORPSE_SIZE = 14;
 const PROJECTILE_DEFAULT_COLOR = 0xfde047;
 
+// Decode the layout's tile grid once on layout swap so wall
+// classification doesn't pay the base64 cost per ray. Returns null
+// when the layout has no tile grid (legacy / surface scene).
+function decodeLayoutTiles(layout: SceneLayout | null): Uint8Array | null {
+  if (!layout?.tileGrid) return null;
+  return decodeTileGrid(layout.tileGrid);
+}
+
 export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const app = new Application();
   let ready = false;
@@ -169,14 +185,37 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   }
 
   let layout: SceneLayout | null = init.layout;
+  // Decoded tile array for the active layout's tileGrid. Refreshed
+  // whenever the layout swaps. Renderers consult it for wall
+  // classification (walkability convention: id 1 = floor, else
+  // wall). Falls back to walkables[] when no tileGrid is present.
+  let layoutTiles: Uint8Array | null = decodeLayoutTiles(init.layout);
   let selfX = init.self.x;
   let selfY = init.self.y;
+  // Server-authoritative target. movePlayer (driven by 20 Hz
+  // server ticks) sets the target; the per-frame tick lerps the
+  // rendered (selfX, selfY) toward it. Without this the camera
+  // jolts ~7 px every server tick, which reads as choppy in FPS.
+  let targetSelfX = init.self.x;
+  let targetSelfY = init.self.y;
+  // Snap (no smoothing) when the server position diverges by more
+  // than this from our current rendered position. Catches
+  // teleports / scene transitions / respawn snapbacks.
+  const SELF_SNAP_PX = 96;
+  // Time constant for camera position smoothing (ms). Roughly
+  // matches one server tick interval — the camera converges on
+  // the server's position over ~3 frames at 60 fps.
+  const SELF_SMOOTH_TAU_MS = 50;
+  let lastSelfTickAt = 0;
   let yaw = 0;
   // Active scene's ambient fog floor (0 = no near-camera darkening,
   // 0.45 = dungeon-dark even up close). Updated each render() from
   // the scene palette; read by applyFog and the floor/ceiling fog
   // overlay so all surfaces share the same darkness baseline.
   let activeAmbient = 0;
+  // Horde-active flag, mirrored from world_clock. The surface
+  // skybox lookup picks the perihelion variant when this is true.
+  let hordeActive = false;
   // Pseudo-pitch (radians). Doom-style: doesn't rotate the actual rays —
   // just slides the horizon line up/down so you can aim at floor or
   // ceiling. Positive = looking down, negative = looking up. Clamped to
@@ -230,12 +269,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // on top of any front-face transparency.
   const wallTopLayer = new Container();
   const wallCapLayer = new Graphics();
-  const spriteLayer = new Graphics();
-  // Textured sprite columns (enemies). Same per-column z-test as
-  // the flat-color sprite pass; rendered as one Mesh per visible
-  // stripe so the texture's vertical column lines up with the
-  // billboard's screen column.
-  const spriteTexLayer = new Container();
+  // Single sprite container. Each visible sprite gets a fresh
+  // child (Graphics for flat-colour bullets / loot / corpses,
+  // Mesh-per-stripe for textured enemies / props / players).
+  // Children are appended in painter's-algorithm order (farthest
+  // first, closest last) so closer sprites overpaint farther ones
+  // regardless of texture-vs-flat. Splitting flat + textured
+  // across two Pixi layers used to leave non-textured bullets
+  // permanently behind every textured billboard.
+  const spritesContainer = new Container();
+  // Build-mode ghost outline. Drawn during the wall-cast pass so
+  // it sits at the right depth; kept in its own Graphics so it
+  // doesn't share state with the per-sprite container.
+  const buildGhostLayer = new Graphics();
   const hudLayer = new Graphics();
 
   // Texture cache for the FPS wall pass. Mirrors the iso renderer's
@@ -263,17 +309,31 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           // sprites) clamp to [0,1] so this is a no-op for them.
           try {
             // Pixi v8 source style — wrap U and V independently for
-            // robustness. The cast keeps this resilient across the
-            // small API churn between v8 minors.
+            // robustness, and force nearest-neighbour sampling so
+            // hand-authored / pixel-art wall and floor textures stay
+            // crisp at low resolutions instead of blurring under the
+            // default linear filter.
             const style = (tex.source as unknown as {
-              style?: { addressMode?: string; update?: () => void };
+              style?: {
+                addressMode?: string;
+                scaleMode?: string;
+                magFilter?: string;
+                minFilter?: string;
+                update?: () => void;
+              };
             }).style;
             if (style) {
               style.addressMode = 'repeat';
+              style.scaleMode = 'nearest';
+              style.magFilter = 'nearest';
+              style.minFilter = 'nearest';
               style.update?.();
             }
+            // Some Pixi v8 minors expose scaleMode on the source itself.
+            const src = tex.source as unknown as { scaleMode?: string };
+            if ('scaleMode' in src) src.scaleMode = 'nearest';
           } catch {
-            /* address-mode set is best-effort; texture still works clamped */
+            /* style set is best-effort; texture still works under defaults */
           }
           fpsTexCache.set(url, tex);
         } catch {
@@ -340,8 +400,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   root.addChild(wallTexLayer);
   root.addChild(wallTopLayer);
   root.addChild(wallCapLayer);
-  root.addChild(spriteLayer);
-  root.addChild(spriteTexLayer);
+  root.addChild(spritesContainer);
+  root.addChild(buildGhostLayer);
   root.addChild(hudLayer);
   root.addChild(hpText);
   root.addChild(staminaText);
@@ -352,6 +412,13 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // in front of an enemy occludes the enemy.
   let zBuffer: Float32Array = new Float32Array(0);
 
+  // Pixi v8's `app.canvas` is a getter that throws when accessed
+  // before `app.init()` resolves (the renderer hasn't been built
+  // yet). Cache the canvas element here once init completes so
+  // detach / destroy paths can read it without crashing if they
+  // run while init is still pending.
+  let canvasEl: HTMLCanvasElement | null = null;
+
   const initPromise = app
     .init({
       background: 0x000000,
@@ -360,9 +427,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       resizeTo: host,
     })
     .then(() => {
-      host.appendChild(app.canvas);
+      canvasEl = app.canvas;
+      host.appendChild(canvasEl);
       app.stage.addChild(root);
-      app.canvas.style.cursor = 'crosshair';
+      canvasEl.style.cursor = 'crosshair';
       app.ticker.add(tick);
       attachInputListeners();
       ready = true;
@@ -370,27 +438,34 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
   // ---------- input wiring ----------
   function attachInputListeners() {
-    app.canvas.addEventListener('mousedown', onMouseDown);
+    if (!canvasEl) return;
+    canvasEl.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
     document.addEventListener('pointerlockchange', onPointerLockChange);
     document.addEventListener('mousemove', onMouseMove);
-    app.canvas.addEventListener('contextmenu', onContextMenu);
+    canvasEl.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
   }
   function detachInputListeners() {
-    app.canvas.removeEventListener('mousedown', onMouseDown);
-    window.removeEventListener('mouseup', onMouseUp);
-    document.removeEventListener('pointerlockchange', onPointerLockChange);
-    document.removeEventListener('mousemove', onMouseMove);
-    app.canvas.removeEventListener('contextmenu', onContextMenu);
-    window.removeEventListener('keydown', onKeyDown);
-    window.removeEventListener('keyup', onKeyUp);
+    // destroy() can run before Pixi's async init resolves (the
+    // editor's textures page mounts + unmounts the renderer when
+    // toggling FPS mode). canvasEl is null until init completes;
+    // window/document listeners were also gated on init.
+    if (canvasEl) {
+      canvasEl.removeEventListener('mousedown', onMouseDown);
+      canvasEl.removeEventListener('contextmenu', onContextMenu);
+      window.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('pointerlockchange', onPointerLockChange);
+      document.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    }
   }
 
   function onMouseDown(e: MouseEvent) {
     if (!pointerLocked) {
-      app.canvas.requestPointerLock?.();
+      canvasEl?.requestPointerLock?.();
       // Don't fire on the very click that's just acquiring the lock —
       // matches the FPS-genre "click to engage, click to shoot" feel.
       return;
@@ -416,7 +491,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     e.preventDefault();
   }
   function onPointerLockChange() {
-    pointerLocked = document.pointerLockElement === app.canvas;
+    pointerLocked = !!canvasEl && document.pointerLockElement === canvasEl;
   }
   function onMouseMove(e: MouseEvent) {
     if (!pointerLocked) return;
@@ -476,9 +551,29 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   function tick() {
     if (!ready) return;
     tickInput();
+    tickSelfSmoothing();
     updateNearInteractable();
     updateNearStations();
     render();
+  }
+
+  function tickSelfSmoothing() {
+    const now = performance.now();
+    const dt = lastSelfTickAt === 0 ? 16 : now - lastSelfTickAt;
+    lastSelfTickAt = now;
+    const dx = targetSelfX - selfX;
+    const dy = targetSelfY - selfY;
+    if (dx === 0 && dy === 0) return;
+    // Exponential smoothing: t = 1 - exp(-dt/tau). At tau=50ms,
+    // a 16ms frame catches up ~28% of the remaining delta. Over
+    // ~3 frames the camera reaches the target without overshoot.
+    const t = Math.min(1, 1 - Math.exp(-dt / SELF_SMOOTH_TAU_MS));
+    selfX += dx * t;
+    selfY += dy * t;
+    // Cull sub-pixel residuals so we settle exactly on the
+    // target rather than asymptote forever.
+    if (Math.abs(targetSelfX - selfX) < 0.05) selfX = targetSelfX;
+    if (Math.abs(targetSelfY - selfY) < 0.05) selfY = targetSelfY;
   }
 
   // ---------- proximity callbacks (parity with the top-down renderer) ----------
@@ -530,6 +625,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           all: [],
           nearest: null,
           nearestDoorId: null,
+          nearestDoorKind: null,
+          nearestDoorOpen: false,
           nearestChestId: null,
           weaponBenchTier: 0,
           weaponBenches: [],
@@ -543,6 +640,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     let nearestKind: import('@dumrunner/shared').BuildingKind | null = null;
     let nearestDsq = Infinity;
     let nearestDoorId: string | null = null;
+    let nearestDoorKind: 'door' | 'wall_door' | null = null;
+    let nearestDoorOpen = false;
     let nearestDoorDsq = Infinity;
     let nearestChestId: string | null = null;
     let nearestChestDsq = Infinity;
@@ -556,10 +655,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
       const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
       const dsq = dx * dx + dy * dy;
-      if (b.kind === 'door') {
+      if (b.kind === 'door' || b.kind === 'wall_door') {
         if (dsq <= r2 && dsq < nearestDoorDsq) {
           nearestDoorDsq = dsq;
           nearestDoorId = b.id;
+          nearestDoorKind = b.kind;
+          nearestDoorOpen = b.kind === 'wall_door' ? b.open === true : false;
         }
         continue;
       }
@@ -599,6 +700,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       '|' +
       (nearestDoorId ?? '') +
       '|' +
+      (nearestDoorKind ?? '') +
+      '|' +
+      (nearestDoorOpen ? '1' : '0') +
+      '|' +
       (nearestChestId ?? '') +
       '|' +
       String(weaponBenchTier) +
@@ -610,6 +715,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         all: [...found],
         nearest: nearestKind,
         nearestDoorId,
+        nearestDoorKind,
+        nearestDoorOpen,
         nearestChestId,
         weaponBenchTier,
         weaponBenches,
@@ -627,9 +734,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const horizonY = Math.max(0, Math.min(H, H / 2 + pitchPixels));
 
     wallLayer.clear();
-    spriteLayer.clear();
-    // Drop last frame's textured meshes. Cheap — typical counts
-    // are sub-500 quads across walls + sprites.
+    buildGhostLayer.clear();
+    // Drop last frame's textured meshes + per-sprite Graphics.
     // Mesh-per-column wall + sprite passes allocate fresh
     // MeshGeometry every frame. removeChildren() only detaches —
     // it doesn't release the GPU buffers — so we explicitly
@@ -637,7 +743,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // sessions.
     disposeChildren(wallTexLayer);
     disposeChildren(wallTopLayer);
-    disposeChildren(spriteTexLayer);
+    disposeChildren(spritesContainer);
     disposeChildren(floorLayer);
     disposeChildren(ceilingLayer);
     disposeChildren(skyboxLayer);
@@ -656,7 +762,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // from any dungeon biome.
     const isSurface = !layout || layout.walkables.length === 0;
     const biomeId = isSurface ? 'surface' : (layout?.biome ?? 'default');
-    const skyTex = getFpsOverrideTexture('biome_skybox', biomeId);
+    // Surface gets a perihelion-variant skybox when the horde is
+    // active. Falls back to the normal surface skybox if no
+    // perihelion texture is uploaded.
+    const skyboxId =
+      isSurface && hordeActive ? 'surface_perihelion' : biomeId;
+    const skyTex =
+      getFpsOverrideTexture('biome_skybox', skyboxId) ??
+      getFpsOverrideTexture('biome_skybox', biomeId);
     const floorTex = getFpsOverrideTexture('biome_floor', biomeId);
     const ceilTex = getFpsOverrideTexture('biome_ceiling', biomeId);
     // Skip the gradient when a biome texture covers that region.
@@ -690,23 +803,48 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       );
     }
 
-    // Skybox: a horizontal-panning TilingSprite covering the sky
-    // region. Pans with yaw so turning rotates the world. Only
-    // renders when a biome_skybox texture exists; otherwise the
-    // sky gradient stays visible.
-    if (skyTex && horizonY > 0) {
+    // Skybox: panoramic TilingSprite covering the full canvas.
+    // The texture is a 2:1 panorama (360° horizontal × 180°
+    // vertical). Yaw pans horizontally; pitch pans vertically
+    // (only the sky portion is visible because floor/walls draw
+    // on top after this pass).
+    //
+    // Horizontal: a full 2π yaw rotation corresponds to one
+    // texture width of pan. Texture is scaled so that the
+    // current HFOV worth of yaw fills exactly W screen pixels
+    // — without this scale the texture tiled at native size
+    // across the canvas.
+    //
+    // Vertical: fixed pixels-per-radian based on the vertical
+    // FOV. Pitch shifts the texture so the horizon-row of the
+    // texture always lands at the screen's horizon line — so
+    // the sky stops squashing as the player looks up/down.
+    if (skyTex) {
+      const texW = skyTex.width || W;
+      const texH = skyTex.height || H;
+      const aspect = H > 0 ? W / H : 1;
+      const halfPlaneSky = Math.tan(VERTICAL_FOV / 2) * aspect;
+      const horizFovRad = 2 * Math.atan(halfPlaneSky);
       const spr = new TilingSprite({
         texture: skyTex,
         width: W,
-        height: horizonY,
+        height: H,
       });
-      // 360° (yaw 0 → 2π) corresponds to one full texture width
-      // of horizontal pan. tilePosition wraps automatically.
-      const texW = skyTex.width || W;
-      spr.tilePosition.x = -(yaw / (Math.PI * 2)) * texW;
-      // Stretch vertically so the texture height fits the sky
-      // region; horizontal stays at native scale for tiling.
-      spr.tileScale.y = horizonY / (skyTex.height || horizonY);
+      const tileScaleX = (W * 2 * Math.PI) / (horizFovRad * texW);
+      const tileScaleY = (H * Math.PI) / (VERTICAL_FOV * texH);
+      spr.tileScale.x = tileScaleX;
+      spr.tileScale.y = tileScaleY;
+      // tilePosition is in screen-space pixels (post-scale) in Pixi
+      // v8's TilingSprite. Yaw of HFOV worth of radians should pan
+      // exactly W screen pixels — i.e. screenPxPerRad = W / HFOV —
+      // so a full 2π yaw rotation slides one full virtual 360°
+      // panorama past, which is W * (2π / HFOV) screen pixels =
+      // texW * tileScaleX.
+      spr.tilePosition.x = -(yaw / (Math.PI * 2)) * texW * tileScaleX;
+      // Pitch: align the texture's mid-row (the panorama's
+      // horizon) with the screen's horizon line. Both terms here
+      // are already in screen pixels.
+      spr.tilePosition.y = horizonY - (texH / 2) * tileScaleY;
       skyboxLayer.addChild(spr);
     }
     const camHeight = WALL_HEIGHT_WORLD / 2;
@@ -814,8 +952,35 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         const groundY = horizonY + fullWallH / 2;
         const top = groundY - lineH;
 
-        const texKind = hit.isBuilding ? hit.buildingKind ?? 'wall' : 'wall';
-        const tex = getFpsOverrideTexture('building', texKind);
+        // Building hits use the per-kind override (`building/<kind>`).
+        // Dungeon walls (non-building) prefer a per-biome wall texture
+        // so each biome reads visually distinct. When the biome
+        // authored multiple variants, pick one by stable hash of the
+        // cell coords + variantSeed so the same cell always shows the
+        // same variant. Falls back through:
+        //   1. ('biome_wall', <variant id>)  — picked variant
+        //   2. ('biome_wall', biomeId)       — single-texture upload
+        //   3. ('building', 'wall')          — legacy default
+        let tex: Texture | null;
+        if (hit.isBuilding) {
+          tex = getFpsOverrideTexture('building', hit.buildingKind ?? 'wall');
+        } else {
+          const variants = biomeTileVariantsFor(biomeId, 'wall');
+          let variantTex: Texture | null = null;
+          if (variants.length > 0 && layout?.variantSeed !== undefined) {
+            const idx = pickCellVariant(
+              layout.variantSeed,
+              hit.cellX,
+              hit.cellY,
+              variants.length,
+            );
+            variantTex = getFpsOverrideTexture('biome_wall', variants[idx]);
+          }
+          tex =
+            variantTex ??
+            getFpsOverrideTexture('biome_wall', biomeId) ??
+            getFpsOverrideTexture('building', 'wall');
+        }
 
         // Solid-fill column ONLY when no texture exists. A
         // solid underlay shining through a texture's transparent
@@ -1087,7 +1252,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const lineH = (WALL_HEIGHT_WORLD * H) / perp;
       const top = horizonY - lineH / 2;
       const fogged = applyFog(baseColor, perp, fogColor);
-      spriteLayer
+      buildGhostLayer
         .rect(screenX, top, COLUMN_STEP_PX, lineH)
         .fill({ color: fogged, alpha: 0.45 });
     }
@@ -1245,8 +1410,18 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // the sprite renders as a textured billboard (per-column UV
     // strip with z-test); otherwise falls back to the flat-color
     // column path.
-    texCategory?: 'enemy' | 'building';
+    texCategory?: 'enemy' | 'building' | 'prop';
     texId?: string;
+    // When true, anchor the sprite's CENTRE at eye level (the
+    // horizon line) rather than its bottom at the floor. Used for
+    // projectiles so bullets fly through the air at the muzzle's
+    // height instead of skimming the floor.
+    floats?: boolean;
+    // 0..1 — lifts the sprite's bottom from the floor (0) toward
+    // the ceiling (1). Used by props so banners / lamps can hang
+    // off the ceiling. Ignored when `floats` is true (chest-anchor
+    // overrides ground anchor).
+    groundOffset?: number;
   };
   const spritesScratch: Sprite[] = [];
 
@@ -1306,7 +1481,33 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // hp=0 races: also defended in setPropHp, but safe-guard
       // here in case a snapshot brings a dead one in.
       if (p.hp <= 0) continue;
-      pushSprite(p.x, p.y, 0x71717a, 22);
+      // Author-tunable per prop. spriteSize is in wall-heights
+      // (1.0 = matches a tile); spriteGroundOffset 0..1 lifts the
+      // anchor from the floor (0) toward the ceiling (1).
+      const visual = propVisualFor(p.kind);
+      const propH =
+        WALL_HEIGHT_WORLD * (visual.spriteSize ?? 22 / WALL_HEIGHT_WORLD);
+      pushSprite(
+        p.x,
+        p.y,
+        0x71717a,
+        propH,
+        'prop',
+        p.kind,
+        false,
+        visual.spriteGroundOffset ?? 0,
+      );
+    }
+    // Turrets — billboard sprites, not raycaster cubes. Position
+    // at the building footprint's centre.
+    if (layout) {
+      const tile = layout.tileSize;
+      for (const b of buildings.values()) {
+        if (!b.kind.startsWith('turret')) continue;
+        const cx = (b.tileX + b.width / 2) * tile;
+        const cy = (b.tileY + b.height / 2) * tile;
+        pushSprite(cx, cy, 0xa78bfa, 24, 'building', b.kind);
+      }
     }
     for (const l of loot.values()) {
       let color: number;
@@ -1329,7 +1530,17 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const elapsed = (now - spawnedAt) / 1000;
       const px = pr.x + pr.vx * elapsed;
       const py = pr.y + pr.vy * elapsed;
-      pushSprite(px, py, pr.color ?? PROJECTILE_DEFAULT_COLOR, 8);
+      // Bullets fly at the shooter's chest height — anchor centre at
+      // the horizon (camera/eye level) rather than bottom-on-floor.
+      pushSprite(
+        px,
+        py,
+        pr.color ?? PROJECTILE_DEFAULT_COLOR,
+        8,
+        undefined,
+        undefined,
+        true,
+      );
     }
     // Interactables — stairs, extract pad. Rendered as tall, distinctive
     // billboards so the player can spot them from across a room. Color by
@@ -1372,16 +1583,33 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // Square-aspect billboard for now; Phase 7 may stretch by entity kind.
       const spriteW = spriteH;
 
-      // Anchor the sprite's BOTTOM at the floor line at this distance.
-      // The camera sits at half wall-height, so the floor at depth d
-      // projects to halfH + (WALL_HEIGHT_WORLD/2 * H) / d — same as the
-      // bottom edge of a wall at that distance. Without this, sprites
-      // float at eye level instead of standing on the ground.
+      // Anchor the sprite. Default: BOTTOM at the floor line at this
+      // distance (camera sits at half wall-height, so the floor at
+      // depth d projects to horizonY + (WALL_HEIGHT_WORLD/2 * H) / d).
+      // Floating sprites (projectiles) anchor their CENTRE at the
+      // horizon (eye level) so bullets fly through the air rather
+      // than skim the floor.
+      // groundOffset (0..1) lifts the sprite's bottom from the floor
+      // toward the ceiling — so a hanging banner / lamp sits with
+      // groundOffset=1 and reads as "from the ceiling."
       const floorY =
         horizonY + (WALL_HEIGHT_WORLD * 0.5 * H) / transformY;
-      const drawTop = Math.floor(floorY - spriteH);
+      const ceilY =
+        horizonY - (WALL_HEIGHT_WORLD * 0.5 * H) / transformY;
+      const off = s.groundOffset ?? 0;
+      const groundAnchorY = floorY + (ceilY - floorY) * off;
+      const drawTop = s.floats
+        ? Math.floor(horizonY - spriteH / 2)
+        : Math.floor(groundAnchorY - spriteH);
       const drawLeft = Math.floor(screenCenterX - spriteW / 2);
       const drawRight = drawLeft + spriteW;
+      // Ground shadow: a flat horizontal ellipse projected onto
+      // the floor, centred under the sprite's footprint and scaled
+      // to the sprite's screen-space width. Skipped for floating
+      // sprites (projectiles aren't standing on anything).
+      const drawShadow = !s.floats && spriteW > 1;
+      const shadowHalfW = spriteW * 0.4;
+      const shadowHalfH = Math.max(1, spriteH * 0.06);
 
       // Distance fog: blend toward the horizon colour so distant sprites
       // recede instead of popping at full saturation.
@@ -1398,13 +1626,45 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
       // Per-column z-test. Iterate at the column step so we match the wall
       // pass; for each visible stripe, paint either a textured quad or
-      // a flat-color rect.
+      // a flat-color rect. For non-textured sprites we accumulate all
+      // visible stripes into a single per-sprite Graphics so the entire
+      // sprite is one z-ordered child of spritesContainer.
       const startStripe = Math.max(0, drawLeft);
       const endStripe = Math.min(W, drawRight);
+      let flatGfx: Graphics | null = null;
+      // Per-sprite shadow Graphics. Added FIRST so the sprite
+      // body draws over its own shadow edges; column-by-column
+      // so wall occlusion (the same z-test the sprite uses)
+      // hides the shadow where the wall blocks line of sight.
+      let shadowGfx: Graphics | null = null;
+      if (drawShadow) {
+        shadowGfx = new Graphics();
+        spritesContainer.addChild(shadowGfx);
+      }
       for (let stripe = startStripe; stripe < endStripe; stripe += COLUMN_STEP_PX) {
         const colIdx = Math.floor(stripe / COLUMN_STEP_PX);
         if (colIdx < 0 || colIdx >= zBuffer.length) continue;
         if (transformY >= zBuffer[colIdx]) continue;
+        if (shadowGfx) {
+          // Ellipse equation per column: ((x-cx)/halfW)² + ((y-cy)/halfH)² = 1
+          // Solve for the column's height extent and draw a thin
+          // rect at the floor line. Skip columns past the ellipse
+          // bounds.
+          const colMid = stripe + COLUMN_STEP_PX / 2;
+          const dxn = (colMid - screenCenterX) / shadowHalfW;
+          const t = 1 - dxn * dxn;
+          if (t > 0) {
+            const colShadowH = 2 * shadowHalfH * Math.sqrt(t);
+            shadowGfx
+              .rect(
+                stripe,
+                floorY - colShadowH / 2,
+                COLUMN_STEP_PX,
+                colShadowH,
+              )
+              .fill({ color: 0x000000, alpha: 0.45 });
+          }
+        }
         if (tex) {
           // u runs 0..1 across the sprite's screen footprint.
           const u = (stripe - drawLeft) / Math.max(1, spriteW);
@@ -1424,9 +1684,13 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           ]);
           const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
           const geom = new MeshGeometry({ positions, uvs, indices });
-          spriteTexLayer.addChild(new Mesh({ geometry: geom, texture: tex }));
+          spritesContainer.addChild(new Mesh({ geometry: geom, texture: tex }));
         } else {
-          spriteLayer
+          if (!flatGfx) {
+            flatGfx = new Graphics();
+            spritesContainer.addChild(flatGfx);
+          }
+          flatGfx
             .rect(stripe, drawTop, COLUMN_STEP_PX, spriteH)
             .fill({ color: fogged });
         }
@@ -1438,8 +1702,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       y: number,
       color: number,
       height: number,
-      texCategory?: 'enemy' | 'building',
+      texCategory?: 'enemy' | 'building' | 'prop',
       texId?: string,
+      floats: boolean = false,
+      groundOffset: number = 0,
     ) {
       const dx = x - selfX;
       const dy = y - selfY;
@@ -1451,6 +1717,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         distSq: dx * dx + dy * dy,
         texCategory,
         texId,
+        floats,
+        groundOffset,
       });
     }
   }
@@ -1718,6 +1986,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     isBuilding: boolean;
     wallU: number;
     buildingKind: import('@dumrunner/shared').BuildingKind | null;
+    // Tile-space coords of the hit cell. Used by the wall pass
+    // to hash a per-cell texture variant from the biome's
+    // wallTextureIds list.
+    cellX: number;
+    cellY: number;
   };
 
   // Proper grid DDA. Walks the ray tile-by-tile and stops at the first
@@ -1790,9 +2063,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       if (dist > RAY_MAX_DIST) return out;
 
       // Wall classification at the tile we just stepped into.
-      const cx = (mx + 0.5) * tileSize;
-      const cy = (my + 0.5) * tileSize;
-      const insideWalkable = !hasWalkables || isInsideAny(layout.walkables, cx, cy);
+      // Tile grid is the source of truth when present (carries
+      // template-stamped walls, doors, decorations); fall back to
+      // walkables[] for legacy / surface layouts. A cell is a wall
+      // when its tile id isn't walkable OR a building occupies it.
+      let insideWalkable: boolean;
+      if (layout.tileGrid && layoutTiles) {
+        const id = tileIdAtCell(layout.tileGrid, layoutTiles, mx, my);
+        insideWalkable = isWalkableTileId(id);
+      } else {
+        const cx = (mx + 0.5) * tileSize;
+        const cy = (my + 0.5) * tileSize;
+        insideWalkable = !hasWalkables || isInsideAny(layout.walkables, cx, cy);
+      }
       const buildingKind = buildingKindAt(mx, my);
       const isBuilding = buildingKind !== null;
       if (!insideWalkable || isBuilding) {
@@ -1822,6 +2105,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           isBuilding,
           wallU,
           buildingKind,
+          cellX: mx,
+          cellY: my,
         };
         out.push(hit);
         // Stop only when we hit a full-height obstruction. Short
@@ -1846,6 +2131,13 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         my >= b.tileY &&
         my < b.tileY + b.height
       ) {
+        // Turrets render as billboards (drawSprites loop), not as
+        // raycaster walls — return null so the ray passes through
+        // their cell instead of hitting a cube.
+        if (b.kind.startsWith('turret')) return null;
+        // Open player-built doors render as empty space — collision
+        // (server) and raycast both treat them as a clear cell.
+        if (b.kind === 'wall_door' && b.open === true) return null;
         return b.kind;
       }
     }
@@ -1857,6 +2149,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
 
   function applySceneState(state: SceneState) {
     layout = state.layout;
+    layoutTiles = decodeLayoutTiles(layout);
     players.clear();
     enemies.clear();
     loot.clear();
@@ -1875,8 +2168,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       projectiles.set(p.id, p);
       projectileSpawnedAt.set(p.id, performance.now());
     }
+    // Scene swap = teleport. Snap both rendered + target so the
+    // smoothing tick doesn't lerp across half the world.
     selfX = state.self.x;
     selfY = state.self.y;
+    targetSelfX = state.self.x;
+    targetSelfY = state.self.y;
   }
 
   return {
@@ -1892,8 +2189,17 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     movePlayer(characterId, x, y) {
       if (characterId === init.self.characterId) {
-        selfX = x;
-        selfY = y;
+        // Set target; per-frame tick lerps selfX/selfY toward it
+        // for smooth between-tick camera motion. Snap on large
+        // divergence (teleport / scene transition).
+        const dx = x - selfX;
+        const dy = y - selfY;
+        if (dx * dx + dy * dy > SELF_SNAP_PX * SELF_SNAP_PX) {
+          selfX = x;
+          selfY = y;
+        }
+        targetSelfX = x;
+        targetSelfY = y;
       }
       const p = players.get(characterId);
       if (p) {
@@ -2035,6 +2341,9 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // Releasing the weapon mid-hold should stop firing.
       if (weaponId === null) mouseDown = false;
     },
+    setHordeActive(active: boolean) {
+      hordeActive = active;
+    },
     swapScene(state) {
       applySceneState(state);
     },
@@ -2113,12 +2422,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     destroy() {
       unsubFpsOverrides();
       detachInputListeners();
-      if (document.pointerLockElement === app.canvas) {
+      if (canvasEl && document.pointerLockElement === canvasEl) {
         document.exitPointerLock?.();
       }
-      app.ticker.remove(tick);
+      // Ticker is added inside the init.then; if init's still
+      // pending, there's nothing to remove yet.
+      if (canvasEl) app.ticker.remove(tick);
       void initPromise.then(() => {
-        if (app.canvas.parentElement === host) host.removeChild(app.canvas);
+        if (canvasEl && canvasEl.parentElement === host) {
+          host.removeChild(canvasEl);
+        }
         app.destroy(true, { children: true });
       });
     },

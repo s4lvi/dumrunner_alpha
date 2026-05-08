@@ -13,40 +13,51 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import {
   deleteEntity,
+  isEditorArea,
   loadBiome,
   loadBiomes,
+  loadCorridor,
+  loadCorridors,
   loadEnemies,
   loadEnemy,
   loadProp,
   loadProps,
+  loadRoom,
+  loadRooms,
   saveBiome,
+  saveCorridor,
   saveEnemy,
   saveProp,
+  saveRoom,
+  type EditorArea,
 } from '@dumrunner/shared/content/loader';
 
-type Area = 'biomes' | 'enemies' | 'props';
-
-const ALLOWED_AREAS = new Set<Area>(['biomes', 'enemies', 'props']);
 const SAFE_ID = /^[a-z0-9_-]+$/;
 
-function asArea(area: string): Area | null {
-  return (ALLOWED_AREAS as Set<string>).has(area) ? (area as Area) : null;
+function asArea(area: string): EditorArea | null {
+  return isEditorArea(area) ? area : null;
 }
 
-const LIST: Record<Area, () => Promise<unknown[]>> = {
+const LIST: Record<EditorArea, () => Promise<unknown[]>> = {
   biomes: loadBiomes,
   enemies: loadEnemies,
   props: loadProps,
+  rooms: loadRooms,
+  corridors: loadCorridors,
 };
-const ONE: Record<Area, (id: string) => Promise<unknown | null>> = {
+const ONE: Record<EditorArea, (id: string) => Promise<unknown | null>> = {
   biomes: loadBiome,
   enemies: loadEnemy,
   props: loadProp,
+  rooms: loadRoom,
+  corridors: loadCorridor,
 };
-const SAVE: Record<Area, (data: unknown) => Promise<unknown>> = {
+const SAVE: Record<EditorArea, (data: unknown) => Promise<unknown>> = {
   biomes: saveBiome,
   enemies: saveEnemy,
   props: saveProp,
+  rooms: saveRoom,
+  corridors: saveCorridor,
 };
 
 export async function GET(

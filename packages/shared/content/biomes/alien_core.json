@@ -2,8 +2,13 @@
   "id": "alien_core",
   "label": "Alien Core",
   "dominantHazard": "toxic",
-  "palette": { "floor": "#1f3536", "wall": "#0e7490", "accent": "#22d3ee" },
+  "palette": {
+    "floor": "#1f3536",
+    "wall": "#0e7490",
+    "accent": "#22d3ee"
+  },
   "generation": {
+    "generator": "walker",
     "roomCountMin": 6,
     "roomCountMax": 11,
     "roomSizeMin": 6,
@@ -22,12 +27,47 @@
   },
   "enemyRoster": [],
   "propPalette": [
-    { "id": "barrel", "weight": 0.8 },
-    { "id": "crate", "weight": 1.0 },
-    { "id": "explosive_barrel", "weight": 0.5 }
+    {
+      "id": "barrel",
+      "weight": 0.8
+    },
+    {
+      "id": "crate",
+      "weight": 1
+    },
+    {
+      "id": "explosive_barrel",
+      "weight": 0.5
+    }
   ],
   "lootBias": [
-    { "materialId": "crystal",  "multiplier": 1.6 },
-    { "materialId": "artifact", "multiplier": 1.4 }
-  ]
+    {
+      "materialId": "crystal",
+      "multiplier": 1.6
+    },
+    {
+      "materialId": "artifact",
+      "multiplier": 1.4
+    }
+  ],
+  "tileSet": {
+    "tiles": [
+      {
+        "id": 1,
+        "label": "default_floor",
+        "role": "floor",
+        "walkable": true,
+        "blocksLOS": false,
+        "blocksProjectiles": false
+      },
+      {
+        "id": 2,
+        "label": "default_wall",
+        "role": "wall",
+        "walkable": false,
+        "blocksLOS": true,
+        "blocksProjectiles": true
+      }
+    ]
+  }
 }

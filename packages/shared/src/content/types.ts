@@ -122,16 +122,89 @@ const biomePaletteSchema = z
   })
   .strict();
 
+// Floor generator selector. 'tunneling' = the legacy rect-rooms +
+// MST/loop corridor pipeline (Catacombs / Frozen / Sun-Bleached);
+// 'walker' = drunkard's-walk carve producing one organic blob with
+// implicit chambers (Alien Core). Walker output skips room
+// templates and locked rooms in this slice — those are
+// rect-coupled and don't fit the carved-region model. New biomes
+// without an explicit value default to 'tunneling'.
+export const BiomeGeneratorKindSchema = z.enum(['tunneling', 'walker']);
+export type BiomeGeneratorKind = z.infer<typeof BiomeGeneratorKindSchema>;
+
 const biomeGenerationSchema = z
   .object({
-    roomCountMin: z.number().int().positive(),
-    roomCountMax: z.number().int().positive(),
+    generator: BiomeGeneratorKindSchema.optional(),
+    // ---- tunneling params (rect rooms + MST/loop corridors) ----
+    // All optional with built-in defaults so walker biomes don't
+    // need to author them. Tunneling biomes that don't set these
+    // get the legacy hardcoded values: 10 rooms of 5..64 tiles,
+    // 2-tile corridors, 0.25 loop chance.
+    roomCountMin: z.number().int().positive().optional(),
+    roomCountMax: z.number().int().positive().optional(),
     // Tiles per dim — 4 means a min 4×4 room.
-    roomSizeMin: z.number().int().positive(),
-    roomSizeMax: z.number().int().positive(),
-    corridorWidth: z.number().int().positive(),
-    // 0..1 — corridor branching probability.
-    branching: z.number().min(0).max(1),
+    roomSizeMin: z.number().int().positive().optional(),
+    roomSizeMax: z.number().int().positive().optional(),
+    // Initial tunneler width in tiles. Tunnelers can step their
+    // width up / down via widthChangeChance, but most corridors
+    // settle around this value. 1 = thin Cogmind-style corridors,
+    // 3 = wide industrial halls.
+    corridorWidth: z.number().int().positive().optional(),
+    // When true, every tunneler (parents + babies) keeps the
+    // initial corridorWidth — no jitter on spawn, no width-change
+    // rolls per step. Useful when a biome wants strictly uniform
+    // corridors (e.g. a vault layout where every door fits).
+    lockCorridorWidth: z.boolean().optional(),
+    // 0..1 — chance per step a tunneler spawns a child tunneler
+    // (a new agent at the same position with a perpendicular
+    // direction). Higher = denser, more-junction maps.
+    branching: z.number().min(0).max(1).optional(),
+    // 0..1 — chance an eligible authored room template is used
+    // for a room slot. 1 = always try template first (legacy);
+    // 0 = ignore templates entirely and keep every room as a
+    // procedural rect sized by roomSizeMin / roomSizeMax. Lower
+    // values mix designed rooms with random rects so a biome
+    // doesn't feel hand-crafted at every step.
+    roomTemplateChance: z.number().min(0).max(1).optional(),
+    // ---- tunneler-only knobs ----
+    // Number of agents seeded at origin at the start of generation.
+    // 2 produces a Cogmind-style "two-arm" map; 4 fills the floor
+    // faster from all directions.
+    tunnelerCount: z.number().int().positive().optional(),
+    // Cap on total agent steps across the whole generation. The
+    // run stops early if all agents die first; this is just a
+    // fail-safe + density knob.
+    tunnelerStepBudget: z.number().int().positive().optional(),
+    // 0..1 per step: chance an agent rotates 90° (left or right
+    // with equal probability). 0 = straight tunnels forever; 0.2
+    // = jagged, lots of corners.
+    turnChance: z.number().min(0).max(1).optional(),
+    // 0..1 per step: chance an agent spawns a room next to its
+    // current position (perpendicular to its direction). Stops
+    // once roomCountMax is reached.
+    roomChance: z.number().min(0).max(1).optional(),
+    // 0..1 per step: chance an agent's width steps by ±1 (clamped
+    // to 1..corridorWidth+2). Low values = uniform corridors;
+    // high values = corridors that pinch and bulge.
+    widthChangeChance: z.number().min(0).max(1).optional(),
+    // 0..1 per step: chance an agent dies. The run also forces
+    // agents to live until at least roomCountMin rooms exist.
+    quitChance: z.number().min(0).max(1).optional(),
+    // ---- walker params (drunkard's walk carve + chambers) ----
+    // Cells the walker tries to carve. Higher = bigger floors.
+    // 600 reads as a typical multi-room cave; 1200 is sprawling.
+    walkerCellTarget: z.number().int().positive().optional(),
+    // Chamber count = "rooms" the walker bulges into the carve.
+    // Each chamber is a small rect placed on a carved cell, used
+    // by prop / enemy density passes (corridors stay quiet).
+    walkerChamberCount: z.number().int().positive().optional(),
+    // Half-extent of each chamber rect in tiles. 2 = 5×5 chamber.
+    walkerChamberRadius: z.number().int().positive().optional(),
+    // 0..1 — chance the walker keeps its last direction this step
+    // instead of rolling a fresh random one. 0 = pure random
+    // (jittery, blob-shaped); 0.7 = mostly straight (long
+    // corridor-like passages with the occasional turn).
+    walkerMomentum: z.number().min(0).max(1).optional(),
     // Densities are "fraction of walkable tiles that get one";
     // generators clamp to per-room caps.
     propDensity: z.number().min(0).max(1),
@@ -165,14 +238,26 @@ const biomeGenerationSchema = z
       .optional(),
   })
   .strict()
-  .refine((g) => g.roomCountMax >= g.roomCountMin, {
-    message: 'roomCountMax must be ≥ roomCountMin',
-    path: ['roomCountMax'],
-  })
-  .refine((g) => g.roomSizeMax >= g.roomSizeMin, {
-    message: 'roomSizeMax must be ≥ roomSizeMin',
-    path: ['roomSizeMax'],
-  });
+  .refine(
+    (g) =>
+      g.roomCountMin === undefined ||
+      g.roomCountMax === undefined ||
+      g.roomCountMax >= g.roomCountMin,
+    {
+      message: 'roomCountMax must be ≥ roomCountMin',
+      path: ['roomCountMax'],
+    },
+  )
+  .refine(
+    (g) =>
+      g.roomSizeMin === undefined ||
+      g.roomSizeMax === undefined ||
+      g.roomSizeMax >= g.roomSizeMin,
+    {
+      message: 'roomSizeMax must be ≥ roomSizeMin',
+      path: ['roomSizeMax'],
+    },
+  );
 
 const biomeRosterEntrySchema = z
   .object({
@@ -215,6 +300,76 @@ const biomeTileTexturesSchema = z
   })
   .strict();
 
+// Per-biome tile registry. Each tile carries an id (1..255 within
+// the biome; 0 reserved for void), a role that determines how
+// procgen treats it (floor/wall stamp pass), and the collision
+// flags renderers and future server-side collision read.
+//
+// `textureIds` is a list of variant ids. Renderers pick one per
+// cell via a stable hash so the same world+floor+cell always
+// resolves to the same variant. Empty array (Phase 1 default)
+// falls back through:
+//   1. ('biome_wall' / 'biome_floor', `${biomeId}__${variantIdx}`)
+//   2. ('biome_wall' / 'biome_floor', biomeId)         (single-texture upload)
+//   3. ('building', 'wall')                             (legacy default)
+//
+// Reserved tile ids that procgen + renderers rely on. Each biome's
+// tileSet is expected to author at least these two; if absent (or
+// no tileSet at all), procgen still emits a grid using these
+// constants and renderers fall through to the legacy palette-only
+// path.
+export const VOID_TILE_ID = 0;
+export const DEFAULT_FLOOR_TILE_ID = 1;
+export const DEFAULT_WALL_TILE_ID = 2;
+
+export const TileDefSchema = z
+  .object({
+    id: z.number().int().min(1).max(255),
+    label: z.string().min(1),
+    role: z.enum(['floor', 'wall', 'door_frame', 'pillar', 'decoration']),
+    walkable: z.boolean(),
+    blocksLOS: z.boolean(),
+    blocksProjectiles: z.boolean(),
+    textureIds: z.array(idSchema).optional(),
+    // Reserved for room-template tag filtering.
+    tags: z.array(z.string()).optional(),
+    // Reserved for weighted variant picks (skews the hash output).
+    weight: z.number().nonnegative().optional(),
+  })
+  .strict();
+export type TileDef = z.infer<typeof TileDefSchema>;
+
+const biomeTileSetSchema = z
+  .object({
+    tiles: z.array(TileDefSchema),
+    // Reserved for Phase 3 — symmetrical adjacency authored by
+    // tag-pair, not tile-pair (per Decision 4 in the plan).
+    adjacency: z
+      .array(
+        z
+          .object({
+            a: z.string().min(1),
+            b: z.string().min(1),
+            allowed: z.boolean(),
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (s) => {
+      // Tile ids unique within the set.
+      const ids = new Set<number>();
+      for (const t of s.tiles) {
+        if (ids.has(t.id)) return false;
+        ids.add(t.id);
+      }
+      return true;
+    },
+    { message: 'tile ids must be unique within a biome', path: ['tiles'] },
+  );
+
 export const BiomeDefSchema = z
   .object({
     id: idSchema,
@@ -226,6 +381,9 @@ export const BiomeDefSchema = z
     propPalette: z.array(biomePropPaletteEntrySchema),
     lootBias: z.array(biomeLootBiasEntrySchema),
     tileTextures: biomeTileTexturesSchema.optional(),
+    // E3.4 Phase 1: per-tile registry. Optional — biomes without a
+    // tileSet keep the legacy palette-only render path.
+    tileSet: biomeTileSetSchema.optional(),
   })
   .strict();
 export type BiomeDef = z.infer<typeof BiomeDefSchema>;
@@ -387,6 +545,16 @@ const propVisualSchema = z
     textureId: idSchema.optional(),
     // Tint applied to procedural fallback when no texture override.
     tint: hexColorSchema.optional(),
+    // FPS billboard sprite size in world units (1.0 = matches one
+    // tile / wall height; 0.5 = half a wall; 2.0 = double-tall).
+    // Author-tunable per prop so a barrel and a pillar can read at
+    // their natural scale. Optional; the FPS renderer falls back
+    // to its built-in default when omitted.
+    spriteSize: z.number().positive().max(8).optional(),
+    // Vertical anchor 0..1: 0 = sprite sits flush on the floor
+    // (default), 1 = sprite hangs from the ceiling. Useful for
+    // floating debris, hanging banners, ceiling-mounted lamps.
+    spriteGroundOffset: z.number().min(0).max(1).optional(),
   })
   .strict();
 
@@ -396,6 +564,152 @@ const propExplodeSchema = z
     damage: z.number().positive(),
   })
   .strict();
+
+// ---------- RoomTemplate ----------
+//
+// A hand-authored room layout. Procgen picks templates from each
+// biome's pool and stamps them into the floor's tile grid. Each
+// template carries:
+//   - a tile grid (row-major byte array of tile ids matching the
+//     biome's TileDef.id values; base64-encoded so JSON files stay
+//     compact for larger templates)
+//   - entrySides flags marking which edges have at least one
+//     corridor-connectable floor cell, so procgen can match a
+//     template against a slot's connectivity needs
+//   - anchors marking spawn points for enemies / props / loot /
+//     interactables (extract pad, stairs, doors). Anchors are tile
+//     coords relative to the template's top-left.
+//   - role for pool filtering. 'normal' = main pool; 'safe' /
+//     'extreme' / 'boss' / 'vault' restrict to specific slots
+//     (entrance always picks 'safe'; deepest picks 'normal' or
+//     'boss'; locked rooms pick 'vault').
+//   - weight = relative selection probability among matches.
+
+export const AnchorKindSchema = z.enum([
+  'spawn',
+  'extract',
+  'stairs_down',
+  'enemy',
+  'prop',
+  'loot',
+  'door',
+  // Entry: marks a cell where a corridor connects into the room.
+  // Procgen reads these to determine which sides a template can
+  // serve (template-local position relative to a perimeter →
+  // entry side). Future work: route corridors to specific entry
+  // tiles instead of just sides.
+  'entry',
+]);
+export type AnchorKind = z.infer<typeof AnchorKindSchema>;
+
+export const RoomEdgeSchema = z.enum(['N', 'S', 'E', 'W']);
+export type RoomEdge = z.infer<typeof RoomEdgeSchema>;
+
+export const RoomAnchorSchema = z
+  .object({
+    kind: AnchorKindSchema,
+    // Tile coords relative to template origin (0,0 = top-left).
+    tx: z.number().int().nonnegative(),
+    ty: z.number().int().nonnegative(),
+    // Optional override id (e.g. force a specific enemy template
+    // or prop kind). Empty = roll from biome roster / palette.
+    overrideId: idSchema.optional(),
+  })
+  .strict();
+export type RoomAnchor = z.infer<typeof RoomAnchorSchema>;
+
+export const RoomRoleSchema = z.enum([
+  'normal',
+  'safe',
+  'extreme',
+  'boss',
+  'vault',
+]);
+export type RoomRole = z.infer<typeof RoomRoleSchema>;
+
+// ---------- CorridorTemplate ----------
+//
+// Authored connector that procgen stamps between two rooms.
+// Today's procgen uses hardcoded 2-tile-wide rect strips for
+// every corridor; corridor templates let each biome ship its own
+// width + (eventually) decorative tile patterns so spaceship
+// corridors look pressurized + ribbed while cave tunnels look
+// organic.
+//
+// Phase 1 — width-only (this slice). The procgen reads `width`
+// to size the corridor strip per biome. `tilesB64` is reserved
+// for a future pattern-stamping pass: a small grid that tiles
+// along the corridor's length axis and lays decorative cells
+// (support beams, conduit panels) on top of the strip.
+export const CorridorStyleSchema = z.enum([
+  'door',
+  'open',
+  'tunnel',
+  'organic',
+]);
+export type CorridorStyle = z.infer<typeof CorridorStyleSchema>;
+
+export const CorridorTemplateSchema = z
+  .object({
+    id: idSchema,
+    label: z.string().min(1),
+    biomeAffinity: z.array(idSchema),
+    // Width perpendicular to the corridor's length axis. 1-6
+    // tiles covers everything from a creep-tube to a 3-lane
+    // industrial walkway.
+    width: z.number().int().min(1).max(6),
+    // Selection weight when picking among biome-affinity matches.
+    weight: z.number().positive(),
+    // Style hint for future per-edge matching (e.g. doors only at
+    // room boundaries, organic only in walker biomes). Procgen
+    // ignores this in the first slice; reserved.
+    style: CorridorStyleSchema,
+    // Optional length-axis tile pattern that repeats along the
+    // corridor strip. Same encoding as room templates'
+    // `tilesB64` (row-major byte array, base64). Pattern dim is
+    // `width × patternLength`, where `patternLength` is derived
+    // from `tilesB64.length / width` after decode. Absent =
+    // plain floor strip with biome's default tiles.
+    tilesB64: z.string().optional(),
+    // Optional explicit pattern length when `tilesB64` is set —
+    // saves clients from having to decode just to know the
+    // length. Required when `tilesB64` is set.
+    patternLength: z.number().int().positive().max(32).optional(),
+  })
+  .strict()
+  .refine(
+    (d) => !d.tilesB64 || d.patternLength !== undefined,
+    {
+      message: 'patternLength required when tilesB64 is set',
+      path: ['patternLength'],
+    },
+  );
+export type CorridorTemplate = z.infer<typeof CorridorTemplateSchema>;
+
+export const RoomTemplateSchema = z
+  .object({
+    id: idSchema,
+    label: z.string().min(1),
+    biomeAffinity: z.array(idSchema),
+    // Tile grid dimensions. 64-tile cap supports large arena
+    // rooms; the editor canvas scales cell size down to keep
+    // bigger templates manageable.
+    width: z.number().int().min(3).max(64),
+    height: z.number().int().min(3).max(64),
+    // Row-major byte array (length = width * height) of tile ids
+    // matching the biome's TileDef.id values. Encoded as base64 so
+    // larger templates stay compact in JSON.
+    tilesB64: z.string(),
+    // Edges with at least one corridor-connectable floor cell.
+    // Empty = leaf template (boss/vault), can only attach via one
+    // explicit corridor entry.
+    entrySides: z.array(RoomEdgeSchema),
+    anchors: z.array(RoomAnchorSchema),
+    role: RoomRoleSchema,
+    weight: z.number().positive(),
+  })
+  .strict();
+export type RoomTemplate = z.infer<typeof RoomTemplateSchema>;
 
 export const PropDefSchema = z
   .object({

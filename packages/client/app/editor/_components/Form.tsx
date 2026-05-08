@@ -122,6 +122,7 @@ export function SliderField({
   min = 0,
   max = 1,
   step = 0.05,
+  decimals,
 }: {
   label: string;
   value: number;
@@ -130,7 +131,14 @@ export function SliderField({
   min?: number;
   max?: number;
   step?: number;
+  // Display precision. Defaults to enough digits to render the
+  // step cleanly (step 0.001 → 3, 0.01 → 2, 0.1 → 1). Override
+  // when a slider's step is finer than its meaningful display.
+  decimals?: number;
 }) {
+  const dp =
+    decimals ??
+    (step >= 0.1 ? 1 : step >= 0.01 ? 2 : step >= 0.001 ? 3 : 4);
   return (
     <FieldRow label={label} hint={hint}>
       <div className="flex items-center gap-2">
@@ -143,8 +151,8 @@ export function SliderField({
           onChange={(e) => onChange(Number(e.target.value))}
           className="flex-1"
         />
-        <span className="font-mono text-[10px] text-zinc-400 w-10 text-right">
-          {value.toFixed(2)}
+        <span className="font-mono text-[10px] text-zinc-400 w-12 text-right">
+          {value.toFixed(dp)}
         </span>
       </div>
     </FieldRow>

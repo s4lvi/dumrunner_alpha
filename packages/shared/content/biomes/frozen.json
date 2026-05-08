@@ -31,5 +31,11 @@
   "lootBias": [
     { "materialId": "circuit", "multiplier": 1.3 },
     { "materialId": "wire",    "multiplier": 1.2 }
-  ]
+  ],
+  "tileSet": {
+    "tiles": [
+      { "id": 1, "label": "default_floor", "role": "floor", "walkable": true,  "blocksLOS": false, "blocksProjectiles": false },
+      { "id": 2, "label": "default_wall",  "role": "wall",  "walkable": false, "blocksLOS": true,  "blocksProjectiles": true  }
+    ]
+  }
 }

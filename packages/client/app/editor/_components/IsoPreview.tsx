@@ -1,14 +1,17 @@
-// Headless iso-renderer wrapper for editor preview panes.
-// Mounts runIsoGame against a hand-built scene and tears down
-// on unmount / when the init prop changes. Per-domain editors
+// Headless top-down preview wrapper for editor panes. Mounts
+// runTopdownGame against a hand-built scene and tears down on
+// unmount / when the init prop changes. Per-domain editors
 // (biome, enemy, decorator) describe their own scene via the
 // `buildInit` callback so the preview reflects whatever the
 // form is editing in real time.
+//
+// Name retained for back-compat — was previously the iso renderer
+// before the iso renderer was retired.
 
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { runIsoGame } from '@/lib/game/iso';
+import { runTopdownGame } from '@/lib/game/topdown';
 import type { GameHandle, GameInit } from '@/lib/game/pixi';
 
 export function IsoPreview({
@@ -28,7 +31,7 @@ export function IsoPreview({
     if (!host) return;
     let game: GameHandle | null = null;
     try {
-      game = runIsoGame(host, buildInit());
+      game = runTopdownGame(host, buildInit());
     } catch (e) {
       // Bad init (e.g. missing layout) shouldn't crash the page.
       // eslint-disable-next-line no-console
@@ -38,7 +41,7 @@ export function IsoPreview({
       try {
         game?.destroy();
       } catch {
-        /* swallow — destroy ordering races are tracked in iso.ts */
+        /* swallow — destroy ordering races */
       }
     };
     // signature drives the remount; buildInit is intentionally

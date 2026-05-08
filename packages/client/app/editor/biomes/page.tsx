@@ -11,16 +11,9 @@ import type {
   BiomeDef,
   HazardKind,
   MaterialKind,
-  Player,
-  SceneLayout,
 } from '@dumrunner/shared';
 import { MATERIALS } from '@dumrunner/shared';
-import type { GameInit } from '@/lib/game/pixi';
-import {
-  listEntities,
-  saveEntity,
-  deleteEntity,
-} from '@/lib/editorContentClient';
+import { listEntities } from '@/lib/editorContentClient';
 import {
   Button,
   CheckboxField,
@@ -32,8 +25,11 @@ import {
   SliderField,
   TextField,
 } from '../_components/Form';
-import { IsoPreview } from '../_components/IsoPreview';
 import { TextureRow } from '../_components/TextureRow';
+import { useEntityEditor } from '../_components/useEntityEditor';
+import { EntityList } from '../_components/EntityList';
+import { BiomePreview as SandboxBiomePreview } from '../_components/BiomePreview';
+import { ReferencesPanel } from '../_components/ReferencesPanel';
 
 const HAZARDS: readonly HazardKind[] = [
   'none',
@@ -66,13 +62,45 @@ function makeBlank(id = 'new_biome'): BiomeDef {
     enemyRoster: [],
     propPalette: [],
     lootBias: [],
+    tileSet: {
+      tiles: [
+        {
+          id: 1,
+          label: 'default_floor',
+          role: 'floor',
+          walkable: true,
+          blocksLOS: false,
+          blocksProjectiles: false,
+        },
+        {
+          id: 2,
+          label: 'default_wall',
+          role: 'wall',
+          walkable: false,
+          blocksLOS: true,
+          blocksProjectiles: true,
+        },
+      ],
+    },
   };
 }
 
 export default function BiomeEditorPage() {
-  const [entries, setEntries] = useState<BiomeDef[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<BiomeDef | null>(null);
+  const {
+    entries,
+    selectedId,
+    setSelectedId,
+    draft,
+    setDraft,
+    save,
+    remove,
+    createNew,
+    error,
+    saving,
+  } = useEntityEditor<BiomeDef>('biomes', {
+    makeBlank,
+    newIdPrefix: 'biome',
+  });
   // Tab toggle: 'edit' shows the form, 'preview' shows the
   // full-pane iso scene rendered with this biome's settings.
   // Sidebar stays mounted in both so biome switches are quick.
@@ -99,95 +127,21 @@ export default function BiomeEditorPage() {
       }
     })();
   }, []);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  // Initial load + after-save refresh.
-  async function refresh() {
-    try {
-      const r = await listEntities('biomes');
-      setEntries(r);
-      // Keep selection if still in list; otherwise drop draft.
-      if (selectedId && !r.some((b) => b.id === selectedId)) {
-        setSelectedId(null);
-        setDraft(null);
-      }
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-  useEffect(() => {
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // When the selection changes, snapshot that biome into the draft.
-  useEffect(() => {
-    if (selectedId === null) {
-      setDraft(null);
-      return;
-    }
-    const found = entries.find((b) => b.id === selectedId);
-    if (found) setDraft(structuredClone(found));
-  }, [selectedId, entries]);
-
-  async function onSave() {
-    if (!draft) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await saveEntity('biomes', draft);
-      await refresh();
-      setSelectedId(draft.id); // in case the id was renamed
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function onDelete() {
-    if (!selectedId) return;
-    if (!confirm(`Delete biome "${selectedId}"?`)) return;
-    try {
-      await deleteEntity('biomes', selectedId);
-      await refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  function onNew() {
-    const id = `biome_${Date.now().toString(36)}`;
-    const blank = makeBlank(id);
-    setEntries((cur) => [...cur, blank]);
-    setSelectedId(id);
-  }
+  const onSave = save;
+  const onDelete = remove;
+  const onNew = createNew;
 
   return (
     <div className="flex h-full w-full">
-      {/* Sidebar */}
-      <aside className="w-60 shrink-0 border-r border-zinc-800 overflow-y-auto p-3 space-y-2">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="text-xs uppercase text-zinc-500">Biomes</h2>
-          <Button onClick={onNew}>+ new</Button>
-        </div>
-        {entries.length === 0 && (
-          <p className="text-[11px] text-zinc-500">
-            No biomes yet. Click <span className="text-zinc-300">+ new</span> to start one.
-          </p>
-        )}
-        {entries.map((b) => (
-          <button
-            key={b.id}
-            type="button"
-            onClick={() => setSelectedId(b.id)}
-            className={`w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 ${
-              selectedId === b.id
-                ? 'bg-zinc-800 text-zinc-100'
-                : 'text-zinc-400 hover:bg-zinc-800/40'
-            }`}
-          >
+      <EntityList<BiomeDef>
+        title="Biomes"
+        entries={entries}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        onNew={onNew}
+        emptyHint="No biomes yet. Click + new to start one."
+        renderItem={(b) => (
+          <div className="flex items-center gap-2">
             <span
               className="w-3 h-3 rounded border border-zinc-700"
               style={{ background: b.palette.floor }}
@@ -196,9 +150,9 @@ export default function BiomeEditorPage() {
             <span className="text-[9px] text-zinc-600 font-mono">
               {b.dominantHazard}
             </span>
-          </button>
-        ))}
-      </aside>
+          </div>
+        )}
+      />
 
       {/* Main column: tab strip + active tab content */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -314,11 +268,13 @@ export default function BiomeEditorPage() {
             <FormSection title="Textures">
               <p className="text-[10px] text-zinc-500">
                 Optional. Floor + ceiling textures tile across walkable
-                tiles in FPS view. Skybox replaces the sky gradient
+                tiles in FPS view. Wall texture paints every dungeon
+                wall in this biome. Skybox replaces the sky gradient
                 above the horizon (no tiling needed; pans with yaw).
                 Saved under{' '}
                 <code className="text-zinc-300">biome_floor</code> /{' '}
                 <code className="text-zinc-300">biome_ceiling</code> /{' '}
+                <code className="text-zinc-300">biome_wall</code> /{' '}
                 <code className="text-zinc-300">biome_skybox</code>,
                 id <code className="text-zinc-300">{draft.id}</code>.
               </p>
@@ -332,6 +288,20 @@ export default function BiomeEditorPage() {
                   hideLabel
                 />
               </div>
+              <div>
+                <div className="text-[10px] text-zinc-500 px-2 mb-1">
+                  Wall
+                </div>
+                <TextureRow
+                  category="biome_wall"
+                  id={draft.id}
+                  hideLabel
+                />
+              </div>
+              <WallVariantList
+                draft={draft}
+                onChange={setDraft}
+              />
               <div>
                 <div className="text-[10px] text-zinc-500 px-2 mb-1">
                   Ceiling
@@ -355,97 +325,287 @@ export default function BiomeEditorPage() {
             </FormSection>
 
             <FormSection title="Generation">
-              <div className="grid grid-cols-2 gap-2">
-                <NumberField
-                  label="rooms (min)"
-                  value={draft.generation.roomCountMin}
-                  min={1}
-                  onChange={(v) =>
-                    setDraft({
-                      ...draft,
-                      generation: { ...draft.generation, roomCountMin: v },
-                    })
-                  }
-                />
-                <NumberField
-                  label="rooms (max)"
-                  value={draft.generation.roomCountMax}
-                  min={1}
-                  onChange={(v) =>
-                    setDraft({
-                      ...draft,
-                      generation: { ...draft.generation, roomCountMax: v },
-                    })
-                  }
-                />
-                <NumberField
-                  label="room size (min)"
-                  value={draft.generation.roomSizeMin}
-                  min={1}
-                  onChange={(v) =>
-                    setDraft({
-                      ...draft,
-                      generation: { ...draft.generation, roomSizeMin: v },
-                    })
-                  }
-                />
-                <NumberField
-                  label="room size (max)"
-                  value={draft.generation.roomSizeMax}
-                  min={1}
-                  onChange={(v) =>
-                    setDraft({
-                      ...draft,
-                      generation: { ...draft.generation, roomSizeMax: v },
-                    })
-                  }
-                />
-                <NumberField
-                  label="corridor width"
-                  value={draft.generation.corridorWidth}
-                  min={1}
-                  max={4}
-                  onChange={(v) =>
-                    setDraft({
-                      ...draft,
-                      generation: { ...draft.generation, corridorWidth: v },
-                    })
-                  }
-                />
-              </div>
-              <SliderField
-                label="branching"
-                value={draft.generation.branching}
+              <EnumField<'tunneling' | 'walker'>
+                label="generator"
+                value={draft.generation.generator ?? 'tunneling'}
+                options={['tunneling', 'walker'] as const}
                 onChange={(v) =>
                   setDraft({
                     ...draft,
-                    generation: { ...draft.generation, branching: v },
+                    generation: { ...draft.generation, generator: v },
                   })
                 }
+                hint="tunneling = rect rooms + MST/loop corridors. walker = drunkard's-walk organic carve (rooms / corridor params below are ignored)."
               />
+              {(draft.generation.generator ?? 'tunneling') === 'tunneling' && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberField
+                      label="rooms (min)"
+                      value={draft.generation.roomCountMin ?? 25}
+                      min={1}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: { ...draft.generation, roomCountMin: v },
+                        })
+                      }
+                      hint="agents only quit after this many rooms exist."
+                    />
+                    <NumberField
+                      label="rooms (max)"
+                      value={draft.generation.roomCountMax ?? 60}
+                      min={1}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: { ...draft.generation, roomCountMax: v },
+                        })
+                      }
+                      hint="hard cap. once reached, no more rooms get spawned."
+                    />
+                    <NumberField
+                      label="room size (min)"
+                      value={draft.generation.roomSizeMin ?? 4}
+                      min={1}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: { ...draft.generation, roomSizeMin: v },
+                        })
+                      }
+                    />
+                    <NumberField
+                      label="room size (max)"
+                      value={draft.generation.roomSizeMax ?? 9}
+                      min={1}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: { ...draft.generation, roomSizeMax: v },
+                        })
+                      }
+                    />
+                    <NumberField
+                      label="initial corridor width"
+                      value={draft.generation.corridorWidth ?? 1}
+                      min={1}
+                      max={6}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: { ...draft.generation, corridorWidth: v },
+                        })
+                      }
+                      hint="agents start at this width; can drift ±2 over time unless locked below."
+                    />
+                    <CheckboxField
+                      label="lock corridor width"
+                      value={draft.generation.lockCorridorWidth ?? false}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: {
+                            ...draft.generation,
+                            lockCorridorWidth: v,
+                          },
+                        })
+                      }
+                      hint="when on, every corridor (parents + babies) keeps the initial width. no drift."
+                    />
+                    <NumberField
+                      label="initial agents"
+                      value={draft.generation.tunnelerCount ?? 2}
+                      min={1}
+                      max={6}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: { ...draft.generation, tunnelerCount: v },
+                        })
+                      }
+                      hint="agents seeded at origin. higher = floor fills from more directions."
+                    />
+                    <NumberField
+                      label="step budget"
+                      value={draft.generation.tunnelerStepBudget ?? 3000}
+                      min={100}
+                      step={250}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: {
+                            ...draft.generation,
+                            tunnelerStepBudget: v,
+                          },
+                        })
+                      }
+                      hint="hard cap on total agent steps. fail-safe + density knob."
+                    />
+                  </div>
+                  <SliderField
+                    label="turn chance"
+                    value={draft.generation.turnChance ?? 0.25}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    onChange={(v) =>
+                      setDraft({
+                        ...draft,
+                        generation: { ...draft.generation, turnChance: v },
+                      })
+                    }
+                    hint="per step, chance an agent rotates 90°. 0 = straight tunnels; 1 = jagged maze."
+                  />
+                  <SliderField
+                    label="room chance"
+                    value={draft.generation.roomChance ?? 0.4}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    onChange={(v) =>
+                      setDraft({
+                        ...draft,
+                        generation: { ...draft.generation, roomChance: v },
+                      })
+                    }
+                    hint="per step, chance an agent spawns a room next to its path (rolled twice — left and right)."
+                  />
+                  <SliderField
+                    label="branch chance"
+                    value={draft.generation.branching ?? 0.2}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    onChange={(v) =>
+                      setDraft({
+                        ...draft,
+                        generation: { ...draft.generation, branching: v },
+                      })
+                    }
+                    hint="on a turn, chance an agent spawns a child agent. higher = denser, more-junction maps."
+                  />
+                  <SliderField
+                    label="designed-room chance"
+                    value={draft.generation.roomTemplateChance ?? 1}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    onChange={(v) =>
+                      setDraft({
+                        ...draft,
+                        generation: {
+                          ...draft.generation,
+                          roomTemplateChance: v,
+                        },
+                      })
+                    }
+                    hint="per-room roll. 1 = always use an authored template when one fits; 0 = ignore templates and keep procedural rects; mix in between."
+                  />
+                </>
+              )}
+              {draft.generation.generator === 'walker' && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberField
+                      label="cells (target)"
+                      value={draft.generation.walkerCellTarget ?? 600}
+                      min={50}
+                      step={50}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: {
+                            ...draft.generation,
+                            walkerCellTarget: v,
+                          },
+                        })
+                      }
+                      hint="cells the walker tries to carve. 600 ≈ medium cave, 1200 ≈ sprawling."
+                    />
+                    <NumberField
+                      label="chambers"
+                      value={draft.generation.walkerChamberCount ?? 2}
+                      min={1}
+                      max={12}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: {
+                            ...draft.generation,
+                            walkerChamberCount: v,
+                          },
+                        })
+                      }
+                      hint="enemy / prop scatter pockets along the carve."
+                    />
+                    <NumberField
+                      label="chamber radius (tiles)"
+                      value={draft.generation.walkerChamberRadius ?? 2}
+                      min={1}
+                      max={6}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          generation: {
+                            ...draft.generation,
+                            walkerChamberRadius: v,
+                          },
+                        })
+                      }
+                      hint="2 = 5×5 chamber rect, 3 = 7×7."
+                    />
+                  </div>
+                  <SliderField
+                    label="momentum"
+                    value={draft.generation.walkerMomentum ?? 0}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    onChange={(v) =>
+                      setDraft({
+                        ...draft,
+                        generation: { ...draft.generation, walkerMomentum: v },
+                      })
+                    }
+                    hint="0 = pure random walk (round blob). 0.7 = mostly straight (long corridor passages)."
+                  />
+                </>
+              )}
               <SliderField
                 label="prop density"
                 value={draft.generation.propDensity}
+                min={0}
+                max={1}
+                step={0.01}
                 onChange={(v) =>
                   setDraft({
                     ...draft,
                     generation: { ...draft.generation, propDensity: v },
                   })
                 }
+                hint="fraction of walkable tiles that get a prop. typical 0.04..0.08; up to 1.0 for clutter biomes."
               />
               <SliderField
                 label="enemy density"
                 value={draft.generation.enemyDensity}
+                min={0}
+                max={1}
+                step={0.01}
                 onChange={(v) =>
                   setDraft({
                     ...draft,
                     generation: { ...draft.generation, enemyDensity: v },
                   })
                 }
+                hint="fraction of walkable tiles that roll an enemy. typical 0.03..0.06; up to 1.0 for swarm biomes."
               />
               <SliderField
                 label="loot density"
                 value={draft.generation.lootDensity}
+                min={0}
+                max={1}
+                step={0.01}
                 onChange={(v) =>
                   setDraft({
                     ...draft,
@@ -456,6 +616,9 @@ export default function BiomeEditorPage() {
               <SliderField
                 label="hazard intensity"
                 value={draft.generation.hazardIntensity}
+                min={0}
+                max={1}
+                step={0.01}
                 onChange={(v) =>
                   setDraft({
                     ...draft,
@@ -466,6 +629,9 @@ export default function BiomeEditorPage() {
               <SliderField
                 label="safe-room chance"
                 value={draft.generation.safeRoomChance ?? 0}
+                min={0}
+                max={1}
+                step={0.01}
                 onChange={(v) =>
                   setDraft({
                     ...draft,
@@ -476,6 +642,9 @@ export default function BiomeEditorPage() {
               <SliderField
                 label="extreme-room chance"
                 value={draft.generation.extremeRoomChance ?? 0}
+                min={0}
+                max={1}
+                step={0.01}
                 onChange={(v) =>
                   setDraft({
                     ...draft,
@@ -586,16 +755,21 @@ export default function BiomeEditorPage() {
                 </div>
               )}
             />
+
+            <FormSection title="References">
+              <ReferencesPanel area="biomes" id={draft.id} />
+            </FormSection>
               </div>
             )}
           </main>
         )}
 
-        {/* Preview tab — full-pane iso scene + summary footer */}
+        {/* Preview tab — full-pane sandbox arena rendering this
+            biome's procgen output */}
         {tab === 'preview' && draft && (
           <div className="flex-1 flex flex-col min-h-0 p-3 gap-2">
             <div className="flex-1 min-h-0">
-              <BiomePreview draft={draft} />
+              <SandboxBiomePreview biomeId={draft.id} />
             </div>
             <div className="flex items-center gap-2 shrink-0 text-[11px] text-zinc-400 font-mono">
               <div className="flex gap-0.5">
@@ -632,6 +806,81 @@ export default function BiomeEditorPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Wall texture variants. Each entry is an id; the renderer hashes
+// per-cell to pick which one to use. Single id behaves like the
+// Phase 1 single-texture upload. Adds default ids derived from
+// biome id so the author can upload images right away.
+function WallVariantList({
+  draft,
+  onChange,
+}: {
+  draft: BiomeDef;
+  onChange: (next: BiomeDef) => void;
+}) {
+  const wallIdx = draft.tileSet?.tiles.findIndex((t) => t.role === 'wall') ?? -1;
+  if (!draft.tileSet || wallIdx < 0) return null;
+  const variants = draft.tileSet.tiles[wallIdx].textureIds ?? [];
+
+  function setVariants(next: string[]): void {
+    if (!draft.tileSet) return;
+    const tiles = draft.tileSet.tiles.slice();
+    tiles[wallIdx] = { ...tiles[wallIdx], textureIds: next };
+    onChange({ ...draft, tileSet: { ...draft.tileSet, tiles } });
+  }
+
+  function nextDefaultId(): string {
+    const base = `${draft.id}_wall`;
+    let n = variants.length + 1;
+    while (variants.includes(`${base}_${n}`)) n++;
+    return `${base}_${n}`;
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] text-zinc-500 px-2">
+        Wall variants — extra textures distributed across cells.
+        Single texture above is the fallback.
+      </div>
+      {variants.map((variantId, i) => (
+        <div key={i} className="flex items-start gap-2">
+          <div className="flex-1 space-y-1">
+            <input
+              type="text"
+              value={variantId}
+              onChange={(e) => {
+                const copy = variants.slice();
+                copy[i] = e.target.value;
+                setVariants(copy);
+              }}
+              className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"
+            />
+            <TextureRow category="biome_wall" id={variantId} hideLabel />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const copy = variants.slice();
+              copy.splice(i, 1);
+              setVariants(copy);
+            }}
+            className="text-[10px] text-zinc-500 hover:text-red-400 pt-1"
+            title="remove"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => setVariants([...variants, nextDefaultId()])}
+        className="text-[10px] text-zinc-400 hover:text-zinc-200 px-2 py-0.5 border border-zinc-800 rounded"
+      >
+        + add variant
+      </button>
     </div>
   );
 }
@@ -696,75 +945,3 @@ function IdPicker({
 // centre — rendered in iso with the biome's palette. Re-mounts
 // whenever the relevant biome bits change (palette, room size).
 
-const PREVIEW_TILE = 32;
-const PREVIEW_SELF_ID = 'biome_preview_self';
-
-function BiomePreview({ draft }: { draft: BiomeDef }) {
-  const buildInit = (): GameInit => {
-    // Use the room-size-max as the demo room dimensions so the
-    // preview reflects "big room" feel for biomes that author one.
-    const tilesW = Math.max(6, Math.min(12, draft.generation.roomSizeMax));
-    const tilesH = tilesW;
-    const halfW = (tilesW * PREVIEW_TILE) / 2;
-    const halfH = (tilesH * PREVIEW_TILE) / 2;
-    const layout: SceneLayout = {
-      worldBounds: { x: -1000, y: -1000, w: 2000, h: 2000 },
-      walkables: [
-        { x: -halfW, y: -halfH, w: tilesW * PREVIEW_TILE, h: tilesH * PREVIEW_TILE },
-      ],
-      rooms: [
-        { x: -halfW, y: -halfH, w: tilesW * PREVIEW_TILE, h: tilesH * PREVIEW_TILE },
-      ],
-      spawn: { x: 0, y: 0 },
-      interactables: [],
-      tileSize: PREVIEW_TILE,
-      // The editor passes init.palette explicitly, so this id
-      // is just a label — the renderer's palette resolver
-      // short-circuits before reading it.
-      biome: draft.id,
-    };
-    const self: Player = {
-      characterId: PREVIEW_SELF_ID,
-      accountId: 'editor',
-      displayName: 'self',
-      x: 0,
-      y: 0,
-      hp: 100,
-      maxHp: 100,
-      stamina: 100,
-      maxStamina: 100,
-      shield: 0,
-      maxShield: 0,
-      alive: true,
-    };
-    return {
-      self,
-      others: [],
-      enemies: [],
-      projectiles: [],
-      loot: [],
-      corpses: [],
-      buildings: [],
-      props: [],
-      layout,
-      sendInput: () => {},
-      sendFire: () => {},
-      sendBuild: () => {},
-      sendDemolish: () => {},
-      onNearInteractableChanged: () => {},
-      onNearWorkstationsChanged: () => {},
-      palette: {
-        floor: draft.palette.floor,
-        // Iso uses two wall tones (top + front). Use the biome's
-        // single wall colour for both — the renderer will tweak
-        // shade per face for depth. Accent isn't used yet; saved
-        // for future per-tile tile-textures.
-        wallTop: draft.palette.wall,
-        wallFront: draft.palette.wall,
-      },
-    };
-  };
-  // Cheap signature: anything that affects geometry or palette.
-  const signature = `${draft.id}|${draft.palette.floor}|${draft.palette.wall}|${draft.palette.accent}|${draft.generation.roomSizeMax}`;
-  return <IsoPreview buildInit={buildInit} signature={signature} />;
-}

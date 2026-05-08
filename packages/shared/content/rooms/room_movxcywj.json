@@ -1,0 +1,160 @@
+{
+  "id": "room_movxcywj",
+  "label": "New Room",
+  "biomeAffinity": [
+    "default",
+    "frozen"
+  ],
+  "width": 12,
+  "height": 16,
+  "tilesB64": "AAAAAAAAAAAAAAAAAAICAgIAAAAAAAAAAAIAAAICAgICAgAAAAIAAAIAAAAAAgAAAAIAAAAAAAAAAgAAAAICAgIAAAAAAgAAAAAAAAIAAAAAAgAAAAAAAAAAAAAAAgAAAAAAAAIAAAAAAgAAAAAAAgICAgICAgAAAAAAAgAAAAAAAgAAAAAAAgAAAAAAAgAAAAAAAgAAAAAAAgAAAAAAAgICAAICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "entrySides": [
+    "N",
+    "W",
+    "S"
+  ],
+  "anchors": [
+    {
+      "kind": "door",
+      "tx": 4,
+      "ty": 4
+    },
+    {
+      "kind": "door",
+      "tx": 6,
+      "ty": 13
+    },
+    {
+      "kind": "enemy",
+      "tx": 2,
+      "ty": 2
+    },
+    {
+      "kind": "enemy",
+      "tx": 7,
+      "ty": 5
+    },
+    {
+      "kind": "enemy",
+      "tx": 6,
+      "ty": 7
+    },
+    {
+      "kind": "enemy",
+      "tx": 7,
+      "ty": 11
+    },
+    {
+      "kind": "enemy",
+      "tx": 6,
+      "ty": 10
+    },
+    {
+      "kind": "enemy",
+      "tx": 5,
+      "ty": 11
+    },
+    {
+      "kind": "loot",
+      "tx": 4,
+      "ty": 10
+    },
+    {
+      "kind": "loot",
+      "tx": 4,
+      "ty": 12
+    },
+    {
+      "kind": "loot",
+      "tx": 8,
+      "ty": 10
+    },
+    {
+      "kind": "loot",
+      "tx": 8,
+      "ty": 12
+    },
+    {
+      "kind": "loot",
+      "tx": 2,
+      "ty": 7
+    },
+    {
+      "kind": "enemy",
+      "tx": 2,
+      "ty": 10
+    },
+    {
+      "kind": "enemy",
+      "tx": 10,
+      "ty": 9
+    },
+    {
+      "kind": "entry",
+      "tx": 6,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 5,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 8
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 9
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 10
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 13
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 14
+    },
+    {
+      "kind": "entry",
+      "tx": 2,
+      "ty": 15
+    },
+    {
+      "kind": "entry",
+      "tx": 3,
+      "ty": 15
+    },
+    {
+      "kind": "entry",
+      "tx": 10,
+      "ty": 15
+    },
+    {
+      "kind": "entry",
+      "tx": 9,
+      "ty": 15
+    },
+    {
+      "kind": "entry",
+      "tx": 6,
+      "ty": 15
+    },
+    {
+      "kind": "entry",
+      "tx": 5,
+      "ty": 15
+    }
+  ],
+  "role": "normal",
+  "weight": 1
+}

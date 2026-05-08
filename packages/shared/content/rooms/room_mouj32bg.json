@@ -1,0 +1,212 @@
+{
+  "id": "room_mouj32bg",
+  "label": "I room",
+  "biomeAffinity": [
+    "default",
+    "frozen",
+    "sun_bleached"
+  ],
+  "width": 16,
+  "height": 12,
+  "tilesB64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgICAAAAAAACAgIAAAAAAAIAAgAAAAAAAgACAAAAAAACAAICAgICAgIAAgAAAAAAAgACAgICAgICAAIAAAAAAAIAAgAAAAAAAgACAAAAAAACAgIAAAAAAAICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "entrySides": [
+    "N",
+    "W",
+    "E",
+    "S"
+  ],
+  "anchors": [
+    {
+      "kind": "enemy",
+      "tx": 10,
+      "ty": 3
+    },
+    {
+      "kind": "enemy",
+      "tx": 8,
+      "ty": 4
+    },
+    {
+      "kind": "enemy",
+      "tx": 6,
+      "ty": 3
+    },
+    {
+      "kind": "enemy",
+      "tx": 6,
+      "ty": 8
+    },
+    {
+      "kind": "enemy",
+      "tx": 8,
+      "ty": 7
+    },
+    {
+      "kind": "enemy",
+      "tx": 10,
+      "ty": 8
+    },
+    {
+      "kind": "loot",
+      "tx": 2,
+      "ty": 4
+    },
+    {
+      "kind": "loot",
+      "tx": 2,
+      "ty": 6
+    },
+    {
+      "kind": "loot",
+      "tx": 14,
+      "ty": 7
+    },
+    {
+      "kind": "loot",
+      "tx": 14,
+      "ty": 5
+    },
+    {
+      "kind": "prop",
+      "tx": 4,
+      "ty": 10
+    },
+    {
+      "kind": "prop",
+      "tx": 8,
+      "ty": 10
+    },
+    {
+      "kind": "prop",
+      "tx": 12,
+      "ty": 10
+    },
+    {
+      "kind": "prop",
+      "tx": 12,
+      "ty": 1
+    },
+    {
+      "kind": "prop",
+      "tx": 8,
+      "ty": 1
+    },
+    {
+      "kind": "prop",
+      "tx": 4,
+      "ty": 1
+    },
+    {
+      "kind": "entry",
+      "tx": 9,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 8,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 7,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 5
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 6
+    },
+    {
+      "kind": "entry",
+      "tx": 15,
+      "ty": 6
+    },
+    {
+      "kind": "entry",
+      "tx": 15,
+      "ty": 5
+    },
+    {
+      "kind": "entry",
+      "tx": 8,
+      "ty": 11
+    },
+    {
+      "kind": "entry",
+      "tx": 7,
+      "ty": 11
+    },
+    {
+      "kind": "entry",
+      "tx": 9,
+      "ty": 11
+    },
+    {
+      "kind": "entry",
+      "tx": 2,
+      "ty": 11
+    },
+    {
+      "kind": "entry",
+      "tx": 1,
+      "ty": 11
+    },
+    {
+      "kind": "entry",
+      "tx": 2,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 1,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 13,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 14,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 15,
+      "ty": 1
+    },
+    {
+      "kind": "entry",
+      "tx": 15,
+      "ty": 2
+    },
+    {
+      "kind": "entry",
+      "tx": 15,
+      "ty": 9
+    },
+    {
+      "kind": "entry",
+      "tx": 15,
+      "ty": 10
+    },
+    {
+      "kind": "entry",
+      "tx": 14,
+      "ty": 11
+    },
+    {
+      "kind": "entry",
+      "tx": 13,
+      "ty": 11
+    }
+  ],
+  "role": "normal",
+  "weight": 1
+}

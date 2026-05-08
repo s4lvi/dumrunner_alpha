@@ -1,0 +1,86 @@
+{
+  "id": "frozen_pillared",
+  "label": "Pillared Hall",
+  "biomeAffinity": [
+    "default",
+    "frozen"
+  ],
+  "width": 8,
+  "height": 6,
+  "tilesB64": "AAAAAAAAAAAAAAAAAAAAAAAAAgAAAgAAAAAAAAAAAAAAAAIAAAIAAAAAAAAAAAAA",
+  "entrySides": [
+    "N",
+    "E",
+    "S",
+    "W"
+  ],
+  "anchors": [
+    {
+      "kind": "enemy",
+      "tx": 4,
+      "ty": 1
+    },
+    {
+      "kind": "prop",
+      "tx": 3,
+      "ty": 3
+    },
+    {
+      "kind": "prop",
+      "tx": 4,
+      "ty": 4
+    },
+    {
+      "kind": "entry",
+      "tx": 3,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 7,
+      "ty": 3
+    },
+    {
+      "kind": "entry",
+      "tx": 4,
+      "ty": 5
+    },
+    {
+      "kind": "entry",
+      "tx": 3,
+      "ty": 5
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 1
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 3
+    },
+    {
+      "kind": "entry",
+      "tx": 7,
+      "ty": 1
+    },
+    {
+      "kind": "entry",
+      "tx": 4,
+      "ty": 0
+    },
+    {
+      "kind": "entry",
+      "tx": 0,
+      "ty": 2
+    },
+    {
+      "kind": "entry",
+      "tx": 7,
+      "ty": 2
+    }
+  ],
+  "role": "normal",
+  "weight": 1
+}

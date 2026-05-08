@@ -20,6 +20,13 @@ export type JoinTokenPayload = {
   displayName: string;
   // Unix seconds; tokens are short-lived (default 60s issuer side).
   exp: number;
+  // Optional flag: when true, the WS server routes this connection
+  // into the editor sandbox (isolated scene, no persistence, no
+  // shared world) instead of the normal player flow. Minted by
+  // /api/editor/sandbox/url; verified by the WS handler. Same
+  // HMAC signing path as regular tokens — the only difference is
+  // which world type the server creates on accept.
+  sandbox?: boolean;
 };
 
 const TOKEN_VERSION = 'v1';

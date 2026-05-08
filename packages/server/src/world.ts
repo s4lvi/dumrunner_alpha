@@ -37,6 +37,7 @@ import {
   addRecipeOutputToInventory,
   ATTACHMENT_DEFS,
   BLUEPRINT_CATALOG,
+  isBlueprintAvailable,
   buildingParallelSlots,
   computeSuitStats,
   CONSUMABLES,
@@ -85,6 +86,7 @@ import {
   DEFAULT_BIOME_ID,
   getBiomesForWire,
 } from './biomes.js';
+import { getPropVisualsForWire } from './props.js';
 
 // Surface is an open scene (no walls) but ships a layout so the client knows
 // where the dungeon entrance is. Walkables are empty → collision is skipped.
@@ -210,6 +212,11 @@ export class World {
   private persistTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private lastTickAt = 0;
+  // Wall-clock of the previous tickHordeClock call. Drives the
+  // empty-server pause: when nobody's connected, we slide
+  // cycleStartedAt / hordeEndsAt forward by the empty gap so
+  // perihelion doesn't fire while no one is around to defend.
+  private lastHordeClockAt = 0;
   private hydrated = false;
   private worldSeed = 0;
   // Cycle counter — increments at the end of each horde. Procgen seeds
@@ -293,6 +300,19 @@ export class World {
       onBuildingsChanged: () => this.recomputePowerState(),
       dropItemsOnDeath: () => this.worldConfig.dropItemsOnDeath,
       applyPlayerEffect: (id, effect) => this.applyPlayerEffect(id, effect),
+      onPlayerEquipmentChanged: (id) => {
+        const conn = this.connections.get(id);
+        if (!conn) return;
+        this.recomputePlayerStats(conn);
+        // Clamp current pools against the new (lower) maxes.
+        if (conn.hp > conn.maxHp) conn.hp = conn.maxHp;
+        if (conn.shield > conn.maxShield) conn.shield = conn.maxShield;
+        if (conn.stamina > conn.maxStamina) conn.stamina = conn.maxStamina;
+        this.sendTo(id, {
+          type: 'equipment_changed',
+          equipment: conn.equipment,
+        });
+      },
     };
     // Surface always exists so cold servers spawn enemies immediately.
     const surface = new Scene(
@@ -467,13 +487,24 @@ export class World {
     }
 
     const sceneId = SURFACE_SCENE_ID;
+    // Always rehydrate at the surface portal regardless of the saved
+    // pos_x / pos_y. The DB doesn't persist which scene the player
+    // was in, so a player who logged out in a dungeon would otherwise
+    // land at those world coords on the surface — typically far from
+    // the portal. Dungeon scenes are per-cycle anyway, so dungeon
+    // resume isn't a real feature; surface-portal-on-join is the
+    // safe default.
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    const spawn = surface
+      ? surface.findSafeSpawnNear(SURFACE_ENTRANCE_X, SURFACE_ENTRANCE_Y)
+      : { x: SURFACE_ENTRANCE_X, y: SURFACE_ENTRANCE_Y };
     const conn: Connection = {
       ws,
       characterId: player.characterId,
       accountId: player.accountId,
       displayName: player.displayName,
-      x: player.x,
-      y: player.y,
+      x: spawn.x,
+      y: spawn.y,
       hp: player.hp,
       maxHp: player.maxHp,
       stamina: player.stamina,
@@ -579,6 +610,7 @@ export class World {
       knownBlueprints: mergedBlueprints(conn),
       enemyVisuals: getEnemyVisualsForWire(),
       biomes: getBiomesForWire(),
+      propVisuals: getPropVisualsForWire(),
     });
 
     scene.broadcast(
@@ -1076,9 +1108,18 @@ export class World {
         COMBAT.CRAFT_STATION_RANGE_PX
       );
       if (nearby.length === 0) return;
+      // Also gate on the recipe's `stationTier` requirement: the
+      // chosen station's benchTier must be ≥ recipe.stationTier.
+      // Recipes without a stationTier set ride at tier 1 (any
+      // station). Rejecting at the world layer means the bench-
+      // tier check works for any future station type, not just
+      // the Weapon Bench.
+      const requiredTier = recipe.stationTier ?? 1;
       let bestStation: string | null = null;
       let bestQueueDepth = Infinity;
       for (const station of nearby) {
+        const stationTier = station.benchTier ?? 1;
+        if (stationTier < requiredTier) continue;
         let depth = 0;
         for (const job of this.activeCraftJobs.values()) {
           if (job.stationBuildingId === station.id) depth++;
@@ -1088,10 +1129,20 @@ export class World {
           bestStation = station.id;
         }
       }
-      if (
-        bestStation === null ||
-        bestQueueDepth >= MAX_QUEUE_PER_STATION
-      ) {
+      if (bestStation === null) {
+        // Either every station is over queue depth, or none meet
+        // the tier requirement. In the tier-gate case the client
+        // UI greys out the recipe, but a craft request still
+        // reaches us if e.g. the bench was just demolished mid-
+        // submit. Reuse the queue-full error since both surface
+        // a "couldn't fit your job at any nearby bench" toast.
+        this.sendDirect(conn.ws, {
+          type: 'error',
+          message: 'station_queue_full',
+        });
+        return;
+      }
+      if (bestQueueDepth >= MAX_QUEUE_PER_STATION) {
         this.sendDirect(conn.ws, {
           type: 'error',
           message: 'station_queue_full',
@@ -1338,7 +1389,8 @@ export class World {
     const layout = scene.layout;
     if (!layout || layout.tileSize <= 0) return;
     const b = scene.getBuilding(buildingId);
-    if (!b || b.kind !== 'door') return;
+    if (!b) return;
+    if (b.kind !== 'door' && b.kind !== 'wall_door') return;
 
     const tileSize = layout.tileSize;
     const cx = (b.tileX + 0.5) * tileSize;
@@ -1346,6 +1398,14 @@ export class World {
     // Reach: ~2 tiles from the door centre. Generous so the player
     // doesn't have to wedge into a wall corner to interact.
     if (Math.hypot(conn.x - cx, conn.y - cy) > 64) return;
+
+    // Player-built wall_door: toggle open/close. No key consumed; the
+    // building persists across cycles. Done before the locked-door
+    // path so a wall_door near a key never accidentally drains keys.
+    if (b.kind === 'wall_door') {
+      scene.toggleWallDoor(buildingId);
+      return;
+    }
 
     // No-key isn't an error — the prompt already tells the player they
     // need a key. Silently reject so we don't spam the toast / console.
@@ -1372,6 +1432,13 @@ export class World {
       conn.knownBlueprints.has(blueprintId) ||
       conn.persistentBlueprints.has(blueprintId)
     ) {
+      return;
+    }
+    // E1 progression-tree gate: every prerequisite blueprint must
+    // already be in the player's known set (per-cycle OR persistent
+    // — same `mergedBlueprints` check the client uses).
+    const known = mergedBlueprints(conn);
+    if (!isBlueprintAvailable(entry, new Set(known))) {
       return;
     }
     if (conn.sceneId !== SURFACE_SCENE_ID) return;
@@ -2276,14 +2343,30 @@ export class World {
     }
   }
 
-  // Drives the day-clock + perihelion + horde state machine. Three states:
+  // Drives the day-clock + perihelion + horde state machine.
+  // States:
   //   - normal: counting down to perihelion. When elapsed >= cycle length,
   //     fire the horde.
   //   - hordeActive: counting down to horde end. When elapsed >= horde
   //     length, end the horde and reset the cycle clock.
-  //   - (idle when no players are connected — driven by the existing idle
-  //     shutdown logic; clock resumes when someone joins again.)
+  // The clock is paused when zero players are connected. Wall-clock
+  // anchors (cycleStartedAt, hordeEndsAt) get slid forward by the empty
+  // gap so the cycle resumes from the same elapsed point when the next
+  // player joins — an idle overnight server doesn't burn cycles.
   private tickHordeClock(now: number): void {
+    const prev = this.lastHordeClockAt;
+    this.lastHordeClockAt = now;
+    if (this.connections.size === 0) {
+      // Slide the cycle anchor forward so when the next player joins
+      // the same amount of cycle time remains. Same trick for the
+      // active horde's end timestamp.
+      const dt = prev === 0 ? 0 : now - prev;
+      if (dt > 0) {
+        this.cycleStartedAt += dt;
+        if (this.hordeActive) this.hordeEndsAt += dt;
+      }
+      return;
+    }
     const cycleLengthMs =
       this.worldConfig.daysPerCycle * this.worldConfig.dayDurationMs;
     if (!this.hordeActive) {

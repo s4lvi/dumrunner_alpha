@@ -89,8 +89,17 @@ export const COMBAT = {
   TICK_MS: 50,
 
   PLAYER_MAX_HP: 100,
-  PLAYER_RADIUS: 14,
-  PLAYER_MOVE_SPEED: 220,        // px/sec — must match client prediction speed
+  // 10 px on a 32-px tile leaves 6 px margin each side in a
+  // single-tile corridor — wide enough that the circle-vs-AABB
+  // check doesn't hang up on sub-pixel jitter at the wall edges.
+  // Was 14 (only 2 px of margin), which felt sticky.
+  PLAYER_RADIUS: 10,
+  // 140 px/sec ≈ 4.4 tiles/sec at TILE_SIZE=32. Tuned for the
+  // FPS view after walls were resized to cubes — at the previous
+  // 220 px/sec the camera read as too fast against the now-square
+  // wall faces. Server is authoritative; client prediction (in
+  // pixi.ts) reads this same constant.
+  PLAYER_MOVE_SPEED: 140,        // px/sec — must match client prediction speed
   PLAYER_INPUT_TTL_MS: 200,      // input older than this snaps back to zero
   PLAYER_BOUND: 10_000,          // hard clamp on position; world-specific later
   PLAYER_RESPAWN_MS: 3000,

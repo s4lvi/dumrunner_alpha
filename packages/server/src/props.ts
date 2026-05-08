@@ -12,6 +12,28 @@ import type { PropDef } from '@dumrunner/shared';
 
 export const PROPS: Record<string, PropDef> = {};
 
+// Wire-shaped subset of PropDef.visual for the welcome message.
+// Mirrors the enemyVisuals + biomes pattern so the FPS renderer
+// has per-prop billboard scale + ground anchor at session start.
+export function getPropVisualsForWire(): Record<
+  string,
+  { tint?: string; spriteSize?: number; spriteGroundOffset?: number }
+> {
+  const out: Record<
+    string,
+    { tint?: string; spriteSize?: number; spriteGroundOffset?: number }
+  > = {};
+  for (const id of Object.keys(PROPS)) {
+    const v = PROPS[id].visual;
+    out[id] = {
+      tint: v.tint,
+      spriteSize: v.spriteSize,
+      spriteGroundOffset: v.spriteGroundOffset,
+    };
+  }
+  return out;
+}
+
 export async function initProps(): Promise<void> {
   const defs = await loadProps();
   for (const k of Object.keys(PROPS)) delete PROPS[k];

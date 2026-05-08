@@ -13,8 +13,10 @@ import { buildingsToMinimapList, type MinimapSnapshot } from './minimap';
 import { subscribe as subscribeOverrides } from '../textureOverrides';
 import {
   circleFits,
+  decodeTileGrid,
   enemyVisualFor,
   isInsideAny,
+  isWalkableTileId,
   materialTint,
   segmentInsideWalkables,
   TIER_COLORS_NUM,
@@ -72,6 +74,13 @@ export type GameInit = {
     all: BuildingKind[];
     nearest: BuildingKind | null;
     nearestDoorId: string | null;
+    // Kind of the nearest door (drives prompt copy: locked dungeon
+    // doors say "costs 1 key", player-built wall_doors say "Open"
+    // or "Close"). Null when no door in range.
+    nearestDoorKind: 'door' | 'wall_door' | null;
+    // For wall_doors, the open/closed state. Undefined for the
+    // dungeon `door` kind (always closed when present).
+    nearestDoorOpen: boolean;
     nearestChestId: string | null;
     // Highest-tier weapon bench in range. 0 if no bench in range.
     // Mirrors the server's nearestWeaponBenchTier check so the
@@ -171,6 +180,10 @@ export type GameHandle = {
   // The currently-equipped weapon (selected hotbar slot if it's a weapon),
   // or null. Pixi gates fire/swing visuals + outbound fire messages on this.
   setEquippedWeapon(weaponId: import('@dumrunner/shared').WeaponKind | null): void;
+  // Horde-active flag, driven by the world_clock subscription in Game.tsx.
+  // FPS uses this to swap the surface skybox between normal and
+  // perihelion variants. Other renderers can no-op.
+  setHordeActive(active: boolean): void;
   swapScene(state: SceneState): void;
   // Snapshot of the renderer's current scene state. Used by the host to
   // hot-swap renderers (FPS ↔ top-down) without losing position / entities.
@@ -231,7 +244,7 @@ const SELF_COLOR = 0xf97316; // dûm orange
 const OTHER_COLOR = 0x4dd0e1;
 const DEAD_COLOR = 0x444444;
 const PROJECTILE_COLOR = 0xfafafa;
-const MOVE_SPEED = 220; // px/sec
+const MOVE_SPEED = 140; // px/sec — must match COMBAT.PLAYER_MOVE_SPEED
 const NETWORK_TICK_HZ = 20;
 
 type RenderedPlayer = {
@@ -925,9 +938,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   }
 
   function drawPlayerHpBar(rp: RenderedPlayer) {
-    const ratio =
-      rp.data.maxHp > 0 ? Math.max(0, rp.data.hp / rp.data.maxHp) : 0;
     rp.hpFill.clear();
+    // Hide the over-character HP bar for other players when they
+    // are at full HP — the local player has their own permanent
+    // HUD bar so this overlay is just visual noise otherwise.
+    if (rp.data.hp >= rp.data.maxHp || rp.data.maxHp <= 0) return;
+    const ratio = Math.max(0, rp.data.hp / rp.data.maxHp);
     rp.hpFill.roundRect(-17, -21, 34 * ratio, 2, 1).fill({ color: 0x22c55e });
   }
 
@@ -938,7 +954,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       existing.targetX = e.x;
       existing.targetY = e.y;
       existing.container.position.set(e.x, e.y);
-      existing.container.visible = true;
+      // Hp=0 enemies are pending an enemy_killed cleanup that
+      // arrives a tick later; keep them hidden so a snapshot
+      // restore (e.g. V-cycle) doesn't unhide a dead sprite.
+      existing.container.visible = e.hp > 0;
       drawEnemyHpBar(existing);
       return existing;
     }
@@ -968,6 +987,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     container.addChild(hpFill);
 
     enemiesLayer.addChild(container);
+    // First-add can land already-dead (hp=0) when restoring from a
+    // snapshot; keep the sprite hidden until enemy_killed arrives.
+    container.visible = e.hp > 0;
 
     const re: RenderedEnemy = {
       data: { ...e },
@@ -1075,11 +1097,14 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   }
 
   function drawEnemyHpBar(re: RenderedEnemy) {
-    const ratio =
-      re.data.maxHp > 0 ? Math.max(0, re.data.hp / re.data.maxHp) : 0;
+    re.hpFill.clear();
+    // Hide the bar entirely when the enemy is at full HP — visual
+    // noise during peaceful moments and makes "what hit me" reads
+    // cleaner during combat (any visible bar = recently damaged).
+    if (re.data.hp >= re.data.maxHp || re.data.maxHp <= 0) return;
+    const ratio = Math.max(0, re.data.hp / re.data.maxHp);
     const visual = visualFor(re.data.kind);
     const barW = visual.size * 2 + 8;
-    re.hpFill.clear();
     re.hpFill
       .roundRect(-barW / 2 + 1, -visual.size - 11, (barW - 2) * ratio, 3, 1.5)
       .fill({ color: 0xef4444 });
@@ -1663,6 +1688,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           all: [],
           nearest: null,
           nearestDoorId: null,
+          nearestDoorKind: null,
+          nearestDoorOpen: false,
           nearestChestId: null,
           weaponBenchTier: 0,
           weaponBenches: [],
@@ -1675,6 +1702,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     let nearestKind: BuildingKind | null = null;
     let nearestDsq = Infinity;
     let nearestDoorId: string | null = null;
+    let nearestDoorKind: 'door' | 'wall_door' | null = null;
+    let nearestDoorOpen = false;
     let nearestDoorDsq = Infinity;
     let nearestChestId: string | null = null;
     let nearestChestDsq = Infinity;
@@ -1692,10 +1721,12 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
       const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
       const dsq = dx * dx + dy * dy;
-      if (b.kind === "door") {
+      if (b.kind === "door" || b.kind === "wall_door") {
         if (dsq <= r2 && dsq < nearestDoorDsq) {
           nearestDoorDsq = dsq;
           nearestDoorId = b.id;
+          nearestDoorKind = b.kind;
+          nearestDoorOpen = b.kind === "wall_door" ? b.open === true : false;
         }
         continue;
       }
@@ -1735,6 +1766,10 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       "|" +
       (nearestDoorId ?? "") +
       "|" +
+      (nearestDoorKind ?? "") +
+      "|" +
+      (nearestDoorOpen ? "1" : "0") +
+      "|" +
       (nearestChestId ?? "") +
       "|" +
       String(weaponBenchTier) +
@@ -1746,6 +1781,8 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         all: [...found],
         nearest: nearestKind,
         nearestDoorId,
+        nearestDoorKind,
+        nearestDoorOpen,
         nearestChestId,
         weaponBenchTier,
         weaponBenches,
@@ -1940,6 +1977,11 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     if (!layout || layout.walkables.length === 0) {
       // Surface — open world, draw the original infinite-feeling grid.
       drawOpenGrid(layoutLayer);
+    } else if (layout.tileGrid) {
+      // Tile grid is the source of truth — paints per-cell floor /
+      // wall, picking up template stamps that walkables[] doesn't
+      // represent.
+      drawDungeonFloorFromTileGrid(layoutLayer, layout);
     } else {
       drawDungeonFloor(
         layoutLayer,
@@ -1972,6 +2014,92 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     const origin = new Graphics();
     origin.circle(0, 0, 6).fill({ color: 0x6b7280 });
     parent.addChild(origin);
+  }
+
+  // Tile-grid-driven dungeon paint. Per-cell: floor tiles get
+  // filled with the room/corridor's palette, wall tiles get an
+  // outlined cell so template-stamped pillars / cave walls / doors
+  // all show up in the top-down view. Falls back to the existing
+  // walkables-based path when no grid is present.
+  function drawDungeonFloorFromTileGrid(
+    parent: Container,
+    layout: SceneLayout,
+  ): void {
+    if (!layout.tileGrid) return;
+    const grid = layout.tileGrid;
+    const tiles = decodeTileGrid(grid);
+    const tileSize = grid.tileSize;
+    const rooms = layout.rooms;
+
+    // Dark void background under everything.
+    const voidBg = new Graphics();
+    voidBg.rect(-6000, -6000, 12000, 12000).fill({ color: 0x05070a });
+    parent.addChild(voidBg);
+
+    // Per-cell floor fill. Cells inside an authored room rect get
+    // the room's tint so chambers stay visually distinct; corridor
+    // cells get the neutral fill.
+    const floor = new Graphics();
+    for (let ly = 0; ly < grid.height; ly++) {
+      for (let lx = 0; lx < grid.width; lx++) {
+        const id = tiles[ly * grid.width + lx];
+        if (!isWalkableTileId(id)) continue;
+        const wx = (grid.originTileX + lx) * tileSize;
+        const wy = (grid.originTileY + ly) * tileSize;
+        const cx = wx + tileSize / 2;
+        const cy = wy + tileSize / 2;
+        let color = 0x1f242c;
+        for (const r of rooms) {
+          if (cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h) {
+            color = roomFloorColor(r);
+            break;
+          }
+        }
+        floor.rect(wx, wy, tileSize, tileSize).fill({ color });
+      }
+    }
+    parent.addChild(floor);
+
+    // Tile gridlines on floor cells — same readability cue as the
+    // rect-based path.
+    const gridLines = new Graphics();
+    for (let ly = 0; ly < grid.height; ly++) {
+      for (let lx = 0; lx < grid.width; lx++) {
+        if (!isWalkableTileId(tiles[ly * grid.width + lx])) continue;
+        const wx = (grid.originTileX + lx) * tileSize;
+        const wy = (grid.originTileY + ly) * tileSize;
+        gridLines.rect(wx, wy, tileSize, tileSize);
+      }
+    }
+    gridLines.stroke({ color: 0x2a313b, width: 1 });
+    parent.addChild(gridLines);
+
+    // Walls — outline every cell whose tile id isn't walkable AND
+    // which has at least one walkable 4-neighbour. Skips the void
+    // hinterland out at the dungeon edges.
+    const walls = new Graphics();
+    const isWalk = (lx: number, ly: number): boolean => {
+      if (lx < 0 || ly < 0 || lx >= grid.width || ly >= grid.height) return false;
+      return isWalkableTileId(tiles[ly * grid.width + lx]);
+    };
+    for (let ly = 0; ly < grid.height; ly++) {
+      for (let lx = 0; lx < grid.width; lx++) {
+        if (isWalk(lx, ly)) continue;
+        if (
+          !isWalk(lx - 1, ly) &&
+          !isWalk(lx + 1, ly) &&
+          !isWalk(lx, ly - 1) &&
+          !isWalk(lx, ly + 1)
+        ) {
+          continue;
+        }
+        const wx = (grid.originTileX + lx) * tileSize;
+        const wy = (grid.originTileY + ly) * tileSize;
+        walls.rect(wx, wy, tileSize, tileSize).fill({ color: 0x252a32 });
+      }
+    }
+    walls.stroke({ color: 0x3b4350, width: 1 });
+    parent.addChild(walls);
   }
 
   function drawDungeonFloor(
@@ -2425,6 +2553,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     setEquippedWeapon(weaponId) {
       equippedWeapon = weaponId;
       if (weaponId === null) mouseDown = false;
+    },
+    setHordeActive() {
+      // Top-down renderer doesn't have a sky.
     },
     swapScene(state: SceneState) {
       ifReady(() => {

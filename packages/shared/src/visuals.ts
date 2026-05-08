@@ -45,6 +45,32 @@ export function setEnemyVisuals(
   Object.assign(ENEMY_VISUALS, visuals);
 }
 
+// ---------- Prop visual registry ----------
+//
+// Per-prop visual data the renderer needs but that doesn't live in
+// the per-tick PropState wire payload. Populated from JSON content
+// (PropDef.visual) at server boot and shipped via welcome's
+// propVisuals field so the client picks the right billboard scale
+// + ground offset for each kind without a deploy.
+export type PropVisual = {
+  tint?: string;
+  spriteSize?: number;        // FPS world-units; 1.0 = one wall height.
+  spriteGroundOffset?: number; // 0..1 — 0 = floor-anchored, 1 = ceiling.
+};
+
+export const PROP_VISUALS: Record<string, PropVisual> = {};
+
+export function propVisualFor(kind: string): PropVisual {
+  return PROP_VISUALS[kind] ?? {};
+}
+
+export function setPropVisuals(
+  visuals: Record<string, PropVisual>,
+): void {
+  for (const k of Object.keys(PROP_VISUALS)) delete PROP_VISUALS[k];
+  Object.assign(PROP_VISUALS, visuals);
+}
+
 // ---------- Biome registry ----------
 //
 // Per-biome render palette shipped to the client at session
@@ -75,6 +101,14 @@ export type BiomeHazardInfo = {
 
 export const BIOMES: Record<string, BiomePalette> = {};
 export const BIOME_HAZARDS: Record<string, BiomeHazardInfo> = {};
+// Per-biome variant id lists derived from each biome's tileSet.
+// Renderers hash a per-cell variant index into these arrays to
+// pick a wall / floor texture override. Empty arrays mean
+// "single-texture fallback" — see pickCellVariant docs.
+export const BIOME_TILE_VARIANTS: Record<
+  string,
+  { wallTextureIds: string[]; floorTextureIds: string[] }
+> = {};
 
 export const FALLBACK_BIOME_PALETTE: BiomePalette = {
   floor: '#1f242c',
@@ -94,11 +128,31 @@ export function biomeHazardFor(
   return BIOME_HAZARDS[biomeId] ?? null;
 }
 
+export function biomeTileVariantsFor(
+  biomeId: string | undefined | null,
+  role: 'wall' | 'floor',
+): string[] {
+  if (!biomeId) return [];
+  const entry = BIOME_TILE_VARIANTS[biomeId];
+  if (!entry) return [];
+  return role === 'wall' ? entry.wallTextureIds : entry.floorTextureIds;
+}
+
 export function setBiomePalettes(
-  palettes: Record<string, BiomePalette & Partial<BiomeHazardInfo>>,
+  palettes: Record<
+    string,
+    BiomePalette &
+      Partial<BiomeHazardInfo> & {
+        wallTextureIds?: string[];
+        floorTextureIds?: string[];
+      }
+  >,
 ): void {
   for (const k of Object.keys(BIOMES)) delete BIOMES[k];
   for (const k of Object.keys(BIOME_HAZARDS)) delete BIOME_HAZARDS[k];
+  for (const k of Object.keys(BIOME_TILE_VARIANTS)) {
+    delete BIOME_TILE_VARIANTS[k];
+  }
   for (const id of Object.keys(palettes)) {
     const entry = palettes[id];
     BIOMES[id] = {
@@ -113,6 +167,10 @@ export function setBiomePalettes(
         hazardZoneIntensities: entry.hazardZoneIntensities,
       };
     }
+    BIOME_TILE_VARIANTS[id] = {
+      wallTextureIds: entry.wallTextureIds ?? [],
+      floorTextureIds: entry.floorTextureIds ?? [],
+    };
   }
 }
 

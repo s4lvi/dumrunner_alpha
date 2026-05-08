@@ -6,10 +6,26 @@
 
 'use client';
 
-import type { BiomeDef, EnemyDef, PropDef } from '@dumrunner/shared';
+import type {
+  BiomeDef,
+  CorridorTemplate,
+  EnemyDef,
+  PropDef,
+  RoomTemplate,
+} from '@dumrunner/shared';
+import type { EditorArea } from '@dumrunner/shared/content/loader';
 
-type Area = 'biomes' | 'enemies' | 'props';
-type Schema = { biomes: BiomeDef; enemies: EnemyDef; props: PropDef };
+// One row per EditorArea — extending the union in loader.ts adds
+// a type-error here that pins the new schema. Any new editor
+// area gets caught at compile time.
+type Schema = {
+  biomes: BiomeDef;
+  enemies: EnemyDef;
+  props: PropDef;
+  rooms: RoomTemplate;
+  corridors: CorridorTemplate;
+};
+type Area = EditorArea;
 
 const BASE = '/api/editor/content';
 

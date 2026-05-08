@@ -30,8 +30,8 @@ import {
   type SceneLayout,
 } from '@dumrunner/shared';
 import { runGame, type GameHandle, type GameInit } from '@/lib/game/pixi';
-import { runIsoGame } from '@/lib/game/iso';
 import { runFpsGame } from '@/lib/game/fps';
+import { runTopdownGame } from '@/lib/game/topdown';
 import { listEntities } from '@/lib/editorContentClient';
 import { TextureRow } from '../_components/TextureRow';
 
@@ -43,14 +43,14 @@ const MATERIAL_KINDS = Object.keys(MATERIALS) as MaterialKind[];
 const TILE = 32;
 // Walking speed (px/sec). Matches COMBAT.PLAYER_MOVE_SPEED so the
 // editor's local physics feels the same as the live game.
-const WALK_SPEED = 220;
+const WALK_SPEED = 140;
 const SPRINT_MULTIPLIER = 1.6;
 
-type RendererMode = 'iso' | 'topdown' | 'fps';
-const RENDERER_CYCLE: RendererMode[] = ['iso', 'topdown', 'fps'];
+type RendererMode = 'topdown' | 'fps';
+const RENDERER_CYCLE: RendererMode[] = ['fps', 'topdown'];
 
 function runnerFor(mode: RendererMode): typeof runGame {
-  return mode === 'fps' ? runFpsGame : mode === 'iso' ? runIsoGame : runGame;
+  return mode === 'fps' ? runFpsGame : runTopdownGame;
 }
 
 const SELF_ID = 'editor_self';
@@ -65,7 +65,7 @@ export default function EditorPage() {
   // callback (renderer pushes input here as if to a real server).
   const inputRef = useRef({ mx: 0, my: 0, sprint: false });
 
-  const [rendererMode, setRendererMode] = useState<RendererMode>('iso');
+  const [rendererMode, setRendererMode] = useState<RendererMode>('fps');
   // Content ids load from the JSON content via API so fresh
   // authoring shows up here without a code edit. Single fetch
   // resolves all the lists in parallel.
@@ -191,7 +191,7 @@ export default function EditorPage() {
           {propIds.length === 0 && (
             <p className="text-[10px] text-zinc-500 px-2">
               No decorators authored yet. Add some at{' '}
-              <code className="text-zinc-300">/editor/decorators</code>.
+              <code className="text-zinc-300">/editor/props</code>.
             </p>
           )}
           {propIds.map((id) => (
@@ -228,8 +228,22 @@ export default function EditorPage() {
           </p>
           <div className="text-[10px] text-zinc-500 px-2 mb-1">Floor</div>
           <TextureRow category="biome_floor" id="surface" hideLabel />
-          <div className="text-[10px] text-zinc-500 px-2 mt-2 mb-1">Skybox</div>
+          <div className="text-[10px] text-zinc-500 px-2 mt-2 mb-1">
+            Skybox (normal)
+          </div>
           <TextureRow category="biome_skybox" id="surface" hideLabel />
+          <div className="text-[10px] text-zinc-500 px-2 mt-2 mb-1">
+            Skybox (perihelion / horde)
+          </div>
+          <p className="text-[9px] text-zinc-600 px-2 mb-1">
+            Renderer swaps to this when the horde is active. Falls
+            back to the normal surface skybox if absent.
+          </p>
+          <TextureRow
+            category="biome_skybox"
+            id="surface_perihelion"
+            hideLabel
+          />
         </Section>
         <Section title="Biomes (floor)">
           {biomeIds.length === 0 && (
@@ -250,6 +264,15 @@ export default function EditorPage() {
             <TextureRow
               key={`biome_ceiling-${id}`}
               category="biome_ceiling"
+              id={id}
+            />
+          ))}
+        </Section>
+        <Section title="Biomes (wall)">
+          {biomeIds.map((id) => (
+            <TextureRow
+              key={`biome_wall-${id}`}
+              category="biome_wall"
               id={id}
             />
           ))}

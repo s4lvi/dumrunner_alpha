@@ -8,14 +8,21 @@
     "accent": "#94a3b8"
   },
   "generation": {
-    "roomCountMin": 6,
-    "roomCountMax": 10,
+    "roomCountMin": 12,
+    "roomCountMax": 32,
     "roomSizeMin": 4,
-    "roomSizeMax": 9,
-    "corridorWidth": 2,
-    "branching": 0.3,
-    "propDensity": 0.04,
-    "enemyDensity": 0.03,
+    "roomSizeMax": 18,
+    "corridorWidth": 1,
+    "lockCorridorWidth": true,
+    "branching": 0.59,
+    "roomTemplateChance": 0.25,
+    "tunnelerCount": 1,
+    "tunnelerStepBudget": 5000,
+    "turnChance": 0.28,
+    "roomChance": 0.32,
+    "widthChangeChance": 0.052,
+    "propDensity": 0.07,
+    "enemyDensity": 0.05,
     "lootDensity": 0.4,
     "hazardIntensity": 0,
     "safeRoomChance": 1,
@@ -58,5 +65,25 @@
       "materialId": "wire",
       "multiplier": 1
     }
-  ]
+  ],
+  "tileSet": {
+    "tiles": [
+      {
+        "id": 1,
+        "label": "default_floor",
+        "role": "floor",
+        "walkable": true,
+        "blocksLOS": false,
+        "blocksProjectiles": false
+      },
+      {
+        "id": 2,
+        "label": "default_wall",
+        "role": "wall",
+        "walkable": false,
+        "blocksLOS": true,
+        "blocksProjectiles": true
+      }
+    ]
+  }
 }

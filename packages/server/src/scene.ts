@@ -70,7 +70,13 @@ import {
   ensureEnemyAsset,
   ensureMaterialAsset,
 } from './assetGenClient.js';
-import { isInsideAny, segmentInsideWalkables } from '@dumrunner/shared';
+import {
+  decodeTileGrid,
+  isInsideAny,
+  isWalkableTileId,
+  segmentInsideWalkables,
+  tileIdAt,
+} from '@dumrunner/shared';
 import {
   type InitialDoor,
   type InitialEnemySpawn,
@@ -295,6 +301,10 @@ export type SceneSnapshot = {
     // Mk3 across server restarts. Optional for backward compat
     // with snapshots written before Phase 2.
     benchTier?: 1 | 2 | 3 | 4;
+    // Wall_door only — the open/closed state. Persisted so a
+    // base layout reloads with the same door states the player
+    // left them in.
+    open?: boolean;
   }>;
   nextEnemyId: number;
   nextProjectileId: number;
@@ -345,6 +355,12 @@ export class Scene {
   // Surface scenes have layout = null and skip collision.
   readonly layout: SceneLayout | null;
 
+  // Decoded tile grid bytes (one allocation per scene) — collision
+  // and AI line-of-sight read from this when present so template-
+  // stamped walls block movement and projectiles. Null for layouts
+  // without a tileGrid (surface, legacy snapshots).
+  private readonly layoutTiles: Uint8Array | null;
+
   // Parsed from the scene id (`dungeon:N` → N). 0 for surface and
   // any other non-dungeon scene. Drives the hazard tick's depth
   // ramp without forcing every Scene caller to pass it in.
@@ -369,6 +385,7 @@ export class Scene {
     this.kind = kind;
     this.bindings = bindings;
     this.layout = layout;
+    this.layoutTiles = layout?.tileGrid ? decodeTileGrid(layout.tileGrid) : null;
     // Parse the 1-based floor index from `dungeon:N`; surface and
     // unknown scene ids fall through to 0 (no hazard).
     if (id.startsWith('dungeon:')) {
@@ -628,6 +645,40 @@ export class Scene {
     }
   }
 
+  // ---------- editor sandbox API ----------
+  // Public spawning + clearing entry points used by SandboxWorld.
+  // Live game code never calls these — it's the same code path as
+  // the per-floor enemy seeding but exposed as one-off helpers.
+
+  spawnEnemyFromTemplate(
+    templateId: string,
+    x: number,
+    y: number,
+  ): boolean {
+    const tpl = TEMPLATES[templateId];
+    if (!tpl) return false;
+    const id = `e${this.nextEnemyId++}`;
+    const enemy = instantiateEnemy(id, tpl, x, y);
+    this.enemies.set(id, enemy);
+    this.broadcast({ type: 'enemy_spawned', enemy: toEnemyState(enemy) });
+    ensureEnemyAsset(tpl);
+    return true;
+  }
+
+  clearAllEnemies(): void {
+    for (const id of [...this.enemies.keys()]) {
+      this.enemies.delete(id);
+      this.broadcast({ type: 'enemy_killed', id });
+    }
+  }
+
+  clearAllProps(): void {
+    for (const id of [...this.props.keys()]) {
+      this.props.delete(id);
+      this.broadcast({ type: 'prop_destroyed', id });
+    }
+  }
+
   // ---------- input handlers (called from World) ----------
 
   handleBuildRequest(
@@ -712,6 +763,9 @@ export class Scene {
       // upgrade_workstation message + a Bench Upgrade item from the
       // Forge. Other building kinds leave benchTier undefined.
       benchTier: kind === 'weapon_bench' ? 1 : undefined,
+      // Player-built doors start CLOSED so a freshly-placed door
+      // gates the doorway by default — opening is an explicit act.
+      open: kind === 'wall_door' ? false : undefined,
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
@@ -1827,6 +1881,9 @@ export class Scene {
       // Doors are dungeon fixtures, not destructible — wandering enemies
       // shouldn't chew through them.
       if (b.kind === 'door') continue;
+      // Open player-built doors are walk-through, so they're not a
+      // valid melee target either. Closed wall_doors still get chewed.
+      if (b.kind === 'wall_door' && b.open === true) continue;
       const cx = (b.tileX + b.width / 2) * tileSize;
       const cy = (b.tileY + b.height / 2) * tileSize;
       // AABB-vs-circle distance (treat the building footprint as a rect).
@@ -1928,10 +1985,11 @@ export class Scene {
             };
           }
         }
-        // Buildings block player bullets too — doors and the player's
-        // own walls should stop a round, not pass through it. Doors are
-        // intentionally unbreakable so we just consume the projectile
-        // without applying damage.
+        // Player-owned buildings block player bullets — your walls
+        // and turrets are cover, not targets. Round consumes on hit
+        // but no damage transfers. (All buildings in alpha are
+        // player-placed, so any projectile-vs-building from a
+        // player-owned projectile is friendly fire.)
         const tileSize = this.layout?.tileSize ?? 0;
         if (tileSize > 0) {
           for (const b of this.buildings.values()) {
@@ -1951,13 +2009,9 @@ export class Scene {
             );
             if (t !== null && t < earliestT) {
               earliestT = t;
-              const target = b;
-              hitAction =
-                target.kind === 'door'
-                  ? () => {
-                      /* doors absorb the round without taking damage */
-                    }
-                  : () => this.damageBuilding(target, p.damage, now);
+              hitAction = () => {
+                /* friendly building absorbs the round, no damage */
+              };
             }
           }
         }
@@ -2424,34 +2478,47 @@ export class Scene {
     // null for now and let the chat just say "X died".
     this.bindings.onPlayerDied(conn.characterId, null);
 
-    // Drop the player's bag contents to a corpse at the death position.
-    // EQUIPPED gear (chassis / plating / life-support / utility / cargo
-    // grid) intentionally stays on the player — it's "what you're
-    // wearing." Only loose inventory + ammo + materials goes to the
-    // corpse. The corpse persists in this scene until perihelion or
-    // until someone picks it up.
-    //
-    // Per-server world rule `dropItemsOnDeath` lets the owner switch off
-    // full-loot — when false, the bag stays with the player too.
+    // Drop the player's bag AND equipped suit gear to a corpse at the
+    // death position. Per-server `dropItemsOnDeath` rule controls full-
+    // loot — when false, the player keeps everything (bag + suit) on
+    // respawn.
     const dropItems = this.bindings.dropItemsOnDeath();
-    const hasAny = dropItems && conn.inventory.some((s) => s.kind !== 'empty');
-    if (hasAny) {
-      const corpseId = `c${this.nextCorpseId++}`;
-      const corpse: CorpseRuntime = {
-        id: corpseId,
-        ownerCharacterId: conn.characterId,
-        ownerDisplayName: conn.displayName,
-        x: conn.x,
-        y: conn.y,
-        // Deep-copy the slots — the player's array is about to be reset.
-        inventory: conn.inventory.map((s) => ({ ...s })),
-      };
-      this.corpses.set(corpseId, corpse);
-      this.broadcast({ type: 'corpse_spawned', corpse: toCorpseState(corpse) });
-    }
-    // Only wipe the bag if items actually dropped. With dropItemsOnDeath
-    // off, the player keeps everything across the death/respawn.
     if (dropItems) {
+      // Build the corpse inventory: live bag slots first, then any
+      // currently-equipped suit pieces wrapped as `part` slots.
+      const corpseInventory: typeof conn.inventory = conn.inventory.map(
+        (s) => ({ ...s }),
+      );
+      let droppedAnyEquipment = false;
+      for (const slotKey of Object.keys(conn.equipment) as Array<
+        keyof typeof conn.equipment
+      >) {
+        const part = conn.equipment[slotKey];
+        if (!part) continue;
+        // Append to corpse inventory; grow if the bag was already full.
+        // The corpse inventory has no length cap — it's a transient
+        // pickup buffer, not a wearable slot grid.
+        corpseInventory.push({ kind: 'part', part: { ...part } });
+        conn.equipment[slotKey] = null;
+        droppedAnyEquipment = true;
+      }
+      const hasAny =
+        droppedAnyEquipment ||
+        corpseInventory.some((s) => s.kind !== 'empty');
+      if (hasAny) {
+        const corpseId = `c${this.nextCorpseId++}`;
+        const corpse: CorpseRuntime = {
+          id: corpseId,
+          ownerCharacterId: conn.characterId,
+          ownerDisplayName: conn.displayName,
+          x: conn.x,
+          y: conn.y,
+          inventory: corpseInventory,
+        };
+        this.corpses.set(corpseId, corpse);
+        this.broadcast({ type: 'corpse_spawned', corpse: toCorpseState(corpse) });
+      }
+      // Wipe the bag.
       for (let i = 0; i < conn.inventory.length; i++) {
         conn.inventory[i] = { kind: 'empty' };
       }
@@ -2460,6 +2527,11 @@ export class Scene {
         type: 'inventory_changed',
         inventory: conn.inventory,
       });
+      // World re-derives suit stats off the now-empty equipment and
+      // broadcasts equipment_changed so the HUD catches up.
+      if (droppedAnyEquipment) {
+        this.bindings.onPlayerEquipmentChanged(conn.characterId);
+      }
     }
   }
 
@@ -2567,11 +2639,18 @@ export class Scene {
     return false;
   }
 
-  // Single-point passability: inside walkables (if any) AND not inside any
-  // building footprint.
+  // Single-point passability. Tile grid is the authoritative wall
+  // map when present (carries template stamps that walkables[]
+  // doesn't represent). Falls back to walkables for surface +
+  // legacy layouts.
   private pointPassable(x: number, y: number): boolean {
-    const walkables = this.layout?.walkables ?? [];
-    if (walkables.length > 0 && !isInsideAny(walkables, x, y)) return false;
+    if (this.layout?.tileGrid && this.layoutTiles) {
+      const id = tileIdAt(this.layout.tileGrid, this.layoutTiles, x, y);
+      if (!isWalkableTileId(id)) return false;
+    } else {
+      const walkables = this.layout?.walkables ?? [];
+      if (walkables.length > 0 && !isInsideAny(walkables, x, y)) return false;
+    }
     if (this.isPointInAnyBuilding(x, y)) return false;
     return true;
   }
@@ -2587,18 +2666,40 @@ export class Scene {
     return true;
   }
 
-  // Segment passability for LoS: stays inside walkables AND doesn't pass
-  // through any building tile. Sampled at the same step as
-  // segmentInsideWalkables.
+  // Segment passability for LoS: stays inside walkable cells AND
+  // doesn't pass through any building tile. When the tile grid is
+  // present, sample along the segment and reject any cell that
+  // isn't a floor tile id (catches template-stamped walls).
   private segmentClear(
     x1: number,
     y1: number,
     x2: number,
     y2: number
   ): boolean {
-    const walkables = this.layout?.walkables ?? [];
-    if (walkables.length > 0 && !segmentInsideWalkables(walkables, x1, y1, x2, y2)) {
-      return false;
+    if (this.layout?.tileGrid && this.layoutTiles) {
+      const grid = this.layout.tileGrid;
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const len = Math.hypot(dx, dy);
+      // Sample at half-tile stride so a 1-tile-wide pillar can't
+      // slip between samples.
+      const step = Math.max(8, grid.tileSize / 2);
+      const steps = Math.max(1, Math.ceil(len / step));
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const sx = x1 + dx * t;
+        const sy = y1 + dy * t;
+        const id = tileIdAt(grid, this.layoutTiles, sx, sy);
+        if (!isWalkableTileId(id)) return false;
+      }
+    } else {
+      const walkables = this.layout?.walkables ?? [];
+      if (
+        walkables.length > 0 &&
+        !segmentInsideWalkables(walkables, x1, y1, x2, y2)
+      ) {
+        return false;
+      }
     }
     if (this.buildings.size === 0) return true;
     // 8px sample stride — half the smallest tile dimension we ship
@@ -2618,6 +2719,9 @@ export class Scene {
     const tileSize = this.layout?.tileSize ?? 0;
     if (tileSize <= 0) return false;
     for (const b of this.buildings.values()) {
+      // Open player-built doors are walk-through. Same check
+      // doubles for projectile collision (LoS goes through too).
+      if (b.kind === 'wall_door' && b.open === true) continue;
       const px = b.tileX * tileSize;
       const py = b.tileY * tileSize;
       const pw = b.width * tileSize;
@@ -2734,6 +2838,19 @@ export class Scene {
         if (dx + dy === 1) queue.push(other);
       }
     }
+    return true;
+  }
+
+  // Toggle a player-built wall_door's open state. Unlike openDoor,
+  // the building persists — only the `open` flag flips, and the new
+  // state is re-broadcast as building_placed so each client refreshes
+  // its renderer / collision state. No flood-fill: each wall_door is
+  // an independent 1x1 placeable.
+  toggleWallDoor(buildingId: string): boolean {
+    const b = this.buildings.get(buildingId);
+    if (!b || b.kind !== 'wall_door') return false;
+    b.open = !b.open;
+    this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
     return true;
   }
 
@@ -2875,10 +2992,14 @@ export interface SceneBindings {
   // kind/identity change. World recomputes power capacity / draw and
   // broadcasts the new power state.
   onBuildingsChanged(): void;
-  // Per-server world rule: true = bag drops as a corpse on death (full-
-  // loot mode), false = bag stays with the player on respawn. Equipped
-  // suit gear stays in either case.
+  // Per-server world rule: true = bag + equipped suit drops as a corpse
+  // on death (full-loot mode), false = both stay with the player.
   dropItemsOnDeath(): boolean;
+  // Triggered when Scene mutates a player's equipment (currently only
+  // killPlayer's death-drop). World recomputes suit stats and clamps
+  // hp/shield/stamina against the new lower maxes; then broadcasts
+  // 'equipment_changed' so the client HUD catches up.
+  onPlayerEquipmentChanged(characterId: string): void;
   // Apply a timed status effect to a player. Routes through World so
   // the same id refreshes the timer instead of stacking, and the
   // 'player_effects' broadcast carries the authoritative list.
@@ -3019,6 +3140,7 @@ function toBuildingState(b: BuildingRuntime): BuildingState {
     maxHp: b.maxHp,
     ...(includeOutput ? { output: b.output.map((s) => ({ ...s })) } : {}),
     ...(b.benchTier !== undefined ? { benchTier: b.benchTier } : {}),
+    ...(b.open !== undefined ? { open: b.open } : {}),
   };
 }
 

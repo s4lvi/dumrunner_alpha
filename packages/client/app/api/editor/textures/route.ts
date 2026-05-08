@@ -23,6 +23,7 @@ const ALLOWED_CATEGORIES = new Set([
   'biome_floor',
   'biome_ceiling',
   'biome_skybox',
+  'biome_wall',
 ]);
 const SAFE_ID = /^[a-z0-9_-]+$/i;
 const ALLOWED_EXTS = ['png', 'webp', 'jpg'] as const;

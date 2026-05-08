@@ -2,7 +2,11 @@
   "id": "sun_bleached",
   "label": "Sun-Bleached Ruins",
   "dominantHazard": "heat",
-  "palette": { "floor": "#3a2d1c", "wall": "#7c4a1f", "accent": "#fde68a" },
+  "palette": {
+    "floor": "#3a2d1c",
+    "wall": "#7c4a1f",
+    "accent": "#fde68a"
+  },
   "generation": {
     "roomCountMin": 8,
     "roomCountMax": 14,
@@ -18,18 +22,66 @@
     "extremeRoomChance": 0.1
   },
   "enemyRoster": [
-    { "id": "armored",      "weight": 1.0 },
-    { "id": "brute_chaser", "weight": 0.6 },
-    { "id": "flame_drone",  "weight": 0.8 }
+    {
+      "id": "armored",
+      "weight": 1
+    },
+    {
+      "id": "brute_chaser",
+      "weight": 0.6
+    },
+    {
+      "id": "flame_drone",
+      "weight": 0.8
+    }
   ],
   "propPalette": [
-    { "id": "rock", "weight": 1.5, "naturalOnly": true },
-    { "id": "barrel", "weight": 1.0 },
-    { "id": "crate", "weight": 0.6 },
-    { "id": "explosive_barrel", "weight": 0.3 }
+    {
+      "id": "rock",
+      "weight": 1.5,
+      "naturalOnly": true
+    },
+    {
+      "id": "barrel",
+      "weight": 1
+    },
+    {
+      "id": "crate",
+      "weight": 0.6
+    },
+    {
+      "id": "explosive_barrel",
+      "weight": 0.3
+    }
   ],
   "lootBias": [
-    { "materialId": "alloy",  "multiplier": 1.4 },
-    { "materialId": "scrap",  "multiplier": 1.1 }
-  ]
+    {
+      "materialId": "alloy",
+      "multiplier": 1.4
+    },
+    {
+      "materialId": "scrap",
+      "multiplier": 1.1
+    }
+  ],
+  "tileSet": {
+    "tiles": [
+      {
+        "id": 1,
+        "label": "default_floor",
+        "role": "floor",
+        "walkable": true,
+        "blocksLOS": false,
+        "blocksProjectiles": false
+      },
+      {
+        "id": 2,
+        "label": "default_wall",
+        "role": "wall",
+        "walkable": false,
+        "blocksLOS": true,
+        "blocksProjectiles": true
+      }
+    ]
+  }
 }

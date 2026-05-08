@@ -75,6 +75,12 @@ export type Recipe = {
   // for hand-craftable basics. Station recipes set this to give the dive
   // / craft loop a real "queue and go scavenge" flow.
   craftTimeMs?: number;
+  // Minimum bench tier required to craft, mapped against the
+  // building's `benchTier` (1..4). Omitted = no tier gate (default
+  // for tier-agnostic recipes like materials and basic mods).
+  // Higher-tier weapons / mods set this so a Mk1 bench can't
+  // crank out Mk4-only recipes.
+  stationTier?: number;
 };
 
 export const RECIPES: Record<string, Recipe> = {
@@ -84,6 +90,21 @@ export const RECIPES: Record<string, Recipe> = {
     name: 'Wall',
     inputs: [{ kind: 'material', materialId: 'scrap', count: 5 }],
     output: { kind: 'placeable', buildingKind: 'wall', count: 1 },
+    workstation: null,
+    blueprintId: null,
+  },
+  // Player-built openable door. Cheaper than a wall but lower
+  // HP — a real defensive trade-off (you can pass through your
+  // own perimeter without breaking it down). Hand-craftable so
+  // a fresh player can gate a doorway from the start.
+  wall_door: {
+    id: 'wall_door',
+    name: 'Door',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 8 },
+      { kind: 'material', materialId: 'wire', count: 2 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'wall_door', count: 1 },
     workstation: null,
     blueprintId: null,
   },
@@ -611,6 +632,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_compensator',
     craftTimeMs: 30_000,
+    stationTier: 2,
   },
   craft_mod_stabilizer: {
     id: 'craft_mod_stabilizer',
@@ -623,6 +645,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_stabilizer',
     craftTimeMs: 30_000,
+    stationTier: 2,
   },
   craft_mod_overclock: {
     id: 'craft_mod_overclock',
@@ -635,6 +658,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_overclock',
     craftTimeMs: 30_000,
+    stationTier: 3,
   },
   craft_mod_dampener: {
     id: 'craft_mod_dampener',
@@ -648,6 +672,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_dampener',
     craftTimeMs: 35_000,
+    stationTier: 3,
   },
   craft_mod_armor_piercer: {
     id: 'craft_mod_armor_piercer',
@@ -660,6 +685,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_armor_piercer',
     craftTimeMs: 40_000,
+    stationTier: 3,
   },
   craft_mod_lightweight: {
     id: 'craft_mod_lightweight',
@@ -686,6 +712,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_incendiary',
     craftTimeMs: 50_000,
+    stationTier: 4,
   },
   craft_mod_chem: {
     id: 'craft_mod_chem',
@@ -699,6 +726,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_chem',
     craftTimeMs: 50_000,
+    stationTier: 4,
   },
   craft_mod_cryo: {
     id: 'craft_mod_cryo',
@@ -712,6 +740,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_mod_cryo',
     craftTimeMs: 50_000,
+    stationTier: 4,
   },
   craft_aff_damage_15: {
     id: 'craft_aff_damage_15',
@@ -725,6 +754,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_aff_damage_15',
     craftTimeMs: 30_000,
+    stationTier: 2,
   },
   craft_aff_firerate_25: {
     id: 'craft_aff_firerate_25',
@@ -738,6 +768,7 @@ export const RECIPES: Record<string, Recipe> = {
     workstation: 'weapon_bench',
     blueprintId: 'bp_aff_firerate_25',
     craftTimeMs: 30_000,
+    stationTier: 2,
   },
 
   // ---- Electronics Bench: suit affixes ----
@@ -971,6 +1002,18 @@ export type BlueprintCatalogEntry = {
   description: string;
   cost: number; // in artifacts
   tier: BlueprintTier;
+  // When true, the blueprint is hidden from uplink listings + the
+  // crafting modal but still resolvable by id. Used for orphan
+  // blueprints whose station hasn't shipped yet (suit-affix mods
+  // need the Suit Assembly Bench which is Phase 2.5+).
+  hidden?: boolean;
+  // Other blueprint ids that must already be known before this one
+  // becomes available at the artifact uplink. Forms the DAG of
+  // E1's progression tree. Empty / omitted = root node, available
+  // from the start (subject to the cost still being paid).
+  // Locked blueprints still appear in the uplink UI but greyed
+  // out with their unlock conditions visible.
+  prerequisites?: string[];
 };
 
 export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
@@ -1009,6 +1052,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'High-damage long-range slug. Slow rate of fire. Crafted at the Workbench.',
     cost: 6,
     tier: 'rare',
+    prerequisites: ['bp_smg'],
   },
   bp_sniper: {
     id: 'bp_sniper',
@@ -1018,6 +1062,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'Pinpoint accuracy, devastating per-shot damage, four-round mag. Crafted at the Weapon Bench.',
     cost: 10,
     tier: 'rare',
+    prerequisites: ['bp_rifle'],
   },
   bp_heavy: {
     id: 'bp_heavy',
@@ -1027,6 +1072,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'Tank-buster slug. Slow projectile, slow cadence, ridiculous damage. Crafted at the Weapon Bench.',
     cost: 10,
     tier: 'rare',
+    prerequisites: ['bp_rifle'],
   },
   bp_energy: {
     id: 'bp_energy',
@@ -1036,6 +1082,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'High-cadence laser carbine. Lower per-hit damage but blinding projectile speed. Crafted at the Weapon Bench.',
     cost: 12,
     tier: 'rare',
+    prerequisites: ['bp_mod_overclock'],
   },
   bp_sword: {
     id: 'bp_sword',
@@ -1054,6 +1101,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'Slow, devastating, AoE-feeling cone. Pulps brutes in two hits. Crafted at the Workbench.',
     cost: 6,
     tier: 'rare',
+    prerequisites: ['bp_sword'],
   },
   bp_energy_blade: {
     id: 'bp_energy_blade',
@@ -1063,6 +1111,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'Fast, high-damage, narrow arc. Pairs well with imbue mods — every cut chills, burns, or poisons. Crafted at the Weapon Bench.',
     cost: 10,
     tier: 'rare',
+    prerequisites: ['bp_hammer'],
   },
   bp_turret: {
     id: 'bp_turret',
@@ -1080,6 +1129,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'High-RoF turret. Consumes a built SMG. Crafted at an Electronics Bench.',
     cost: 6,
     tier: 'uncommon',
+    prerequisites: ['bp_turret', 'bp_smg'],
   },
   bp_turret_shotgun: {
     id: 'bp_turret_shotgun',
@@ -1089,6 +1139,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'Close-range pellet sweeper. Consumes a built Shotgun. Crafted at an Electronics Bench.',
     cost: 6,
     tier: 'uncommon',
+    prerequisites: ['bp_turret', 'bp_shotgun'],
   },
   bp_turret_rifle: {
     id: 'bp_turret_rifle',
@@ -1098,6 +1149,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       'Long-range single-shot turret. Consumes a built Rifle. Crafted at an Electronics Bench.',
     cost: 8,
     tier: 'rare',
+    prerequisites: ['bp_turret', 'bp_rifle'],
   },
   bp_mod_foregrip: {
     id: 'bp_mod_foregrip',
@@ -1122,6 +1174,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: '-50% spread. Tighter than a Foregrip.',
     cost: 6,
     tier: 'uncommon',
+    prerequisites: ['bp_mod_foregrip'],
   },
   bp_mod_stabilizer: {
     id: 'bp_mod_stabilizer',
@@ -1130,6 +1183,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: '+10% damage. Heavier action, harder hits.',
     cost: 6,
     tier: 'uncommon',
+    prerequisites: ['bp_mod_high_velocity'],
   },
   bp_mod_overclock: {
     id: 'bp_mod_overclock',
@@ -1138,6 +1192,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: '+18% fire rate. Burns through ammo faster.',
     cost: 7,
     tier: 'rare',
+    prerequisites: ['bp_aff_firerate_25'],
   },
   bp_mod_dampener: {
     id: 'bp_mod_dampener',
@@ -1146,6 +1201,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: '-25% spread, +150 px/sec projectile speed.',
     cost: 7,
     tier: 'rare',
+    prerequisites: ['bp_mod_compensator'],
   },
   bp_mod_armor_piercer: {
     id: 'bp_mod_armor_piercer',
@@ -1154,6 +1210,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: '+18% damage. Engineered for armoured targets.',
     cost: 8,
     tier: 'rare',
+    prerequisites: ['bp_aff_damage_15'],
   },
   bp_mod_lightweight: {
     id: 'bp_mod_lightweight',
@@ -1170,6 +1227,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: 'Hits ignite the target — 8 dps burn for 4s. Crafted at the Weapon Bench.',
     cost: 10,
     tier: 'rare',
+    prerequisites: ['bp_mod_armor_piercer'],
   },
   bp_mod_chem: {
     id: 'bp_mod_chem',
@@ -1178,6 +1236,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: 'Hits poison the target — 10 dps for 5s. Crafted at the Weapon Bench.',
     cost: 10,
     tier: 'rare',
+    prerequisites: ['bp_mod_armor_piercer'],
   },
   bp_mod_cryo: {
     id: 'bp_mod_cryo',
@@ -1186,6 +1245,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: 'Hits chill the target — 35% slow for 3s. Crafted at the Weapon Bench.',
     cost: 10,
     tier: 'rare',
+    prerequisites: ['bp_mod_armor_piercer'],
   },
   bp_aff_damage_15: {
     id: 'bp_aff_damage_15',
@@ -1194,6 +1254,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: '+15% damage on every shot. Slots into a weapon frame.',
     cost: 6,
     tier: 'rare',
+    prerequisites: ['bp_mod_stabilizer'],
   },
   bp_aff_firerate_25: {
     id: 'bp_aff_firerate_25',
@@ -1202,6 +1263,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: '25% faster cadence. Slots into a weapon grip.',
     cost: 6,
     tier: 'rare',
+    prerequisites: ['bp_mod_lightweight'],
   },
   bp_aff_shield_25: {
     id: 'bp_aff_shield_25',
@@ -1211,6 +1273,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       '+25 max shield (rolled). Slots into a suit plating piece via the Suit Assembly Bench.',
     cost: 5,
     tier: 'uncommon',
+    hidden: true,
   },
   bp_aff_speed_5: {
     id: 'bp_aff_speed_5',
@@ -1220,6 +1283,7 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
       '+5% movement speed (rolled). Slots into a suit utility mod via the Suit Assembly Bench.',
     cost: 5,
     tier: 'uncommon',
+    hidden: true,
   },
 };
 
@@ -1233,7 +1297,43 @@ export function blueprintDisplayName(bp: BlueprintCatalogEntry): string {
 }
 
 export function listBlueprints(): BlueprintCatalogEntry[] {
-  return Object.values(BLUEPRINT_CATALOG);
+  // Hides orphan blueprints whose station hasn't shipped yet.
+  // Lookup by id still works — `BLUEPRINT_CATALOG[id]` returns
+  // hidden entries so existing-grant code paths keep functioning.
+  return Object.values(BLUEPRINT_CATALOG).filter((b) => !b.hidden);
+}
+
+// E1 (Blueprint Progression Tree). All a blueprint's prerequisites
+// must be present in `known` for the blueprint to be available
+// (purchasable at the artifact uplink + craftable). Locked
+// blueprints still surface in the UI greyed out so players can
+// see what's around the corner.
+export function isBlueprintAvailable(
+  bp: BlueprintCatalogEntry,
+  known: ReadonlySet<string>,
+): boolean {
+  const prereqs = bp.prerequisites;
+  if (!prereqs || prereqs.length === 0) return true;
+  for (const id of prereqs) {
+    if (!known.has(id)) return false;
+  }
+  return true;
+}
+
+// Convenience: split the catalog into available / locked relative
+// to a player's known-blueprint set. Hidden blueprints are
+// excluded from both lists (same as `listBlueprints()`).
+export function listBlueprintsForPlayer(
+  known: ReadonlySet<string>,
+): { available: BlueprintCatalogEntry[]; locked: BlueprintCatalogEntry[] } {
+  const available: BlueprintCatalogEntry[] = [];
+  const locked: BlueprintCatalogEntry[] = [];
+  for (const bp of Object.values(BLUEPRINT_CATALOG)) {
+    if (bp.hidden) continue;
+    if (isBlueprintAvailable(bp, known)) available.push(bp);
+    else locked.push(bp);
+  }
+  return { available, locked };
 }
 
 // ---------- salvage ----------
