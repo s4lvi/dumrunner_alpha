@@ -6,7 +6,7 @@
 // the live procgen render lands with E3.4's per-tile sprite
 // support; stubbing the layout now keeps the form work decoupled).
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import type {
   BiomeDef,
   HazardKind,
@@ -86,6 +86,17 @@ function makeBlank(id = 'new_biome'): BiomeDef {
 }
 
 export default function BiomeEditorPage() {
+  // useEntityEditor reads useSearchParams; wrap the body in
+  // Suspense so the static prerender pass doesn't bail on the
+  // CSR hook.
+  return (
+    <Suspense fallback={null}>
+      <BiomeEditorBody />
+    </Suspense>
+  );
+}
+
+function BiomeEditorBody() {
   const {
     entries,
     selectedId,

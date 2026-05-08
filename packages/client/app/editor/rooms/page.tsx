@@ -12,7 +12,7 @@
 // renderer resolves tile ids per biome at runtime, so every biome
 // the template targets must have a compatible tileSet.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AnchorKind,
   BiomeDef,
@@ -143,6 +143,16 @@ function makeBlank(id = 'new_room'): RoomTemplate {
 }
 
 export default function RoomEditorPage() {
+  // useEntityEditor reads useSearchParams; wrap in Suspense so
+  // the static prerender pass doesn't bail on the CSR hook.
+  return (
+    <Suspense fallback={null}>
+      <RoomEditorBody />
+    </Suspense>
+  );
+}
+
+function RoomEditorBody() {
   // Decoded tile array — kept in sync with draft.tilesB64. Lives
   // outside useEntityEditor because it's a per-render mutable
   // working buffer (the canvas paints into it directly), not a

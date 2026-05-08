@@ -5,7 +5,7 @@
 // conditional-form shape: onDestroy switches on whether the
 // explode params and/or loot table are required.
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import type { PropDef } from '@dumrunner/shared';
 import { listEntities } from '@/lib/editorContentClient';
 import {
@@ -39,6 +39,16 @@ function makeBlank(id = 'new_prop'): PropDef {
 }
 
 export default function PropEditorPage() {
+  // useEntityEditor reads useSearchParams; wrap in Suspense so
+  // the static prerender pass doesn't bail on the CSR hook.
+  return (
+    <Suspense fallback={null}>
+      <PropEditorBody />
+    </Suspense>
+  );
+}
+
+function PropEditorBody() {
   const {
     entries,
     selectedId,

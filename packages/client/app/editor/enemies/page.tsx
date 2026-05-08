@@ -6,7 +6,7 @@
 // attacks (melee / projectile / aoe_cone) + flee + stun + visual
 // + loot.
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import type {
   AoeConeEffectKind,
   AttackSpec,
@@ -106,6 +106,16 @@ function makeBlank(id = 'new_enemy'): EnemyDef {
 }
 
 export default function EnemyEditorPage() {
+  // useEntityEditor reads useSearchParams; wrap in Suspense so
+  // the static prerender pass doesn't bail on the CSR hook.
+  return (
+    <Suspense fallback={null}>
+      <EnemyEditorBody />
+    </Suspense>
+  );
+}
+
+function EnemyEditorBody() {
   const {
     entries,
     selectedId,

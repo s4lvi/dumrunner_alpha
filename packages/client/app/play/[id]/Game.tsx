@@ -6355,6 +6355,46 @@ function ItemIcon({
       </svg>
     );
   }
+  if (kind === 'placeable' && subkind === 'wall_mk2') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <rect x="2" y="4" width="20" height="6" fill="#475569" stroke="#0b0d10" strokeWidth={stroke} />
+        <rect x="2" y="14" width="20" height="6" fill="#475569" stroke="#0b0d10" strokeWidth={stroke} />
+        <line x1="11" y1="4" x2="11" y2="10" stroke="#0b0d10" strokeWidth={stroke} />
+        <line x1="6" y1="14" x2="6" y2="20" stroke="#0b0d10" strokeWidth={stroke} />
+        <line x1="16" y1="14" x2="16" y2="20" stroke="#0b0d10" strokeWidth={stroke} />
+        {/* Bolt heads on the corners hint at reinforcement */}
+        <circle cx="4" cy="6" r="0.9" fill="#cbd5e1" />
+        <circle cx="20" cy="6" r="0.9" fill="#cbd5e1" />
+        <circle cx="4" cy="18" r="0.9" fill="#cbd5e1" />
+        <circle cx="20" cy="18" r="0.9" fill="#cbd5e1" />
+      </svg>
+    );
+  }
+  if (kind === 'placeable' && subkind === 'wall_mk3') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <rect x="2" y="3" width="20" height="18" fill="#1e293b" stroke="#0b0d10" strokeWidth={stroke} />
+        {/* Composite layered plating */}
+        <rect x="3" y="5" width="18" height="3" fill="#64748b" />
+        <rect x="3" y="10" width="18" height="3" fill="#94a3b8" />
+        <rect x="3" y="15" width="18" height="3" fill="#64748b" />
+        <line x1="3" y1="5" x2="21" y2="5" stroke="#fbbf24" strokeWidth="0.7" />
+      </svg>
+    );
+  }
+  if (kind === 'placeable' && subkind === 'wall_mk4') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <rect x="2" y="3" width="20" height="18" fill="#0c1126" stroke="#000" strokeWidth={stroke} />
+        {/* Reactive plating — diamond inserts with energy core */}
+        <rect x="3" y="4" width="18" height="16" fill="#1e293b" />
+        <polygon points="12,5 19,12 12,19 5,12" fill="#3b0764" stroke="#06b6d4" strokeWidth="0.8" />
+        <polygon points="12,8 16,12 12,16 8,12" fill="#7c3aed" />
+        <circle cx="12" cy="12" r="1.6" fill="#22d3ee" />
+      </svg>
+    );
+  }
   if (kind === 'placeable' && subkind === 'wall_door') {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24">

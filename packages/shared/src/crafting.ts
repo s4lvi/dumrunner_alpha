@@ -97,6 +97,46 @@ export const RECIPES: Record<string, Recipe> = {
   // HP — a real defensive trade-off (you can pass through your
   // own perimeter without breaking it down). Hand-craftable so
   // a fresh player can gate a doorway from the start.
+  // Reinforced wall tiers. Each tier roughly doubles HP and steps
+  // up the workstation gate (workbench → electronics → forge), so
+  // the player has to tech up before a stronger perimeter is in
+  // reach. Recipes blueprint-gated through the E1 DAG.
+  wall_mk2: {
+    id: 'wall_mk2',
+    name: 'Reinforced Wall',
+    inputs: [
+      { kind: 'material', materialId: 'scrap', count: 8 },
+      { kind: 'material', materialId: 'alloy', count: 2 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'wall_mk2', count: 1 },
+    workstation: 'workbench',
+    blueprintId: 'bp_wall_mk2',
+    craftTimeMs: 4000,
+  },
+  wall_mk3: {
+    id: 'wall_mk3',
+    name: 'Composite Wall',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 4 },
+      { kind: 'material', materialId: 'wire', count: 2 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'wall_mk3', count: 1 },
+    workstation: 'electronics_bench',
+    blueprintId: 'bp_wall_mk3',
+    craftTimeMs: 6000,
+  },
+  wall_mk4: {
+    id: 'wall_mk4',
+    name: 'Reactive Wall',
+    inputs: [
+      { kind: 'material', materialId: 'alloy', count: 6 },
+      { kind: 'material', materialId: 'circuit', count: 2 },
+    ],
+    output: { kind: 'placeable', buildingKind: 'wall_mk4', count: 1 },
+    workstation: 'forge',
+    blueprintId: 'bp_wall_mk4',
+    craftTimeMs: 9000,
+  },
   wall_door: {
     id: 'wall_door',
     name: 'Door',
@@ -1120,6 +1160,38 @@ export const BLUEPRINT_CATALOG: Record<string, BlueprintCatalogEntry> = {
     description: 'Builds a self-targeting defence turret. Crafted at an Electronics Bench.',
     cost: 3,
     tier: 'common',
+  },
+  // Wall tier upgrades — root chain that doesn't depend on the
+  // weapon tree. Each tier doubles HP and steps the workstation
+  // up, so a fully-tech'd base needs every workshop online.
+  bp_wall_mk2: {
+    id: 'bp_wall_mk2',
+    recipeId: 'wall_mk2',
+    displayName: 'Reinforced Wall',
+    description:
+      '2x wall HP. Scrap + alloy. Crafted at the Workbench.',
+    cost: 4,
+    tier: 'uncommon',
+  },
+  bp_wall_mk3: {
+    id: 'bp_wall_mk3',
+    recipeId: 'wall_mk3',
+    displayName: 'Composite Wall',
+    description:
+      '4x wall HP. Alloy + wire. Crafted at the Electronics Bench.',
+    cost: 8,
+    tier: 'rare',
+    prerequisites: ['bp_wall_mk2'],
+  },
+  bp_wall_mk4: {
+    id: 'bp_wall_mk4',
+    recipeId: 'wall_mk4',
+    displayName: 'Reactive Wall',
+    description:
+      '8x wall HP. Alloy + circuit. Crafted at the Forge.',
+    cost: 14,
+    tier: 'legendary',
+    prerequisites: ['bp_wall_mk3'],
   },
   bp_turret_smg: {
     id: 'bp_turret_smg',

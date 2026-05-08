@@ -188,6 +188,9 @@ export type CraftJobState = {
 // BuildingState shape and tile placement model.
 export type BuildingKind =
   | 'wall'
+  | 'wall_mk2'
+  | 'wall_mk3'
+  | 'wall_mk4'
   | 'turret'
   | 'turret_smg'
   | 'turret_shotgun'
@@ -444,6 +447,9 @@ export const FireMsgSchema = z.object({
 
 const BuildingKindSchema = z.enum([
   'wall',
+  'wall_mk2',
+  'wall_mk3',
+  'wall_mk4',
   'turret',
   'turret_smg',
   'turret_shotgun',

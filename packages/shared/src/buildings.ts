@@ -41,6 +41,32 @@ export const BUILDING_REGISTRY: Record<BuildingKind, BuildingDef> = {
     isStation: false,
     isWorkstation: false,
   },
+  // Reinforced wall tiers. Same horde priority as the basic wall —
+  // enemies path/swing the same way, the player just has more time
+  // before the perimeter falls. HP roughly doubles per tier so the
+  // upgrade is felt without trivializing perihelion. Materials and
+  // station gates are in crafting.ts.
+  wall_mk2: {
+    label: 'Reinforced Wall',
+    maxHp: 400,
+    hordePriority: 10,
+    isStation: false,
+    isWorkstation: false,
+  },
+  wall_mk3: {
+    label: 'Composite Wall',
+    maxHp: 800,
+    hordePriority: 10,
+    isStation: false,
+    isWorkstation: false,
+  },
+  wall_mk4: {
+    label: 'Reactive Wall',
+    maxHp: 1600,
+    hordePriority: 10,
+    isStation: false,
+    isWorkstation: false,
+  },
   turret: {
     label: 'turret',
     maxHp: 120,
