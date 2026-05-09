@@ -19,6 +19,8 @@ const ALLOWED_CATEGORIES = new Set([
   'building_top',
   'prop',
   'prop_top',
+  'prop_open',
+  'prop_open_top',
   'material',
   'biome_floor',
   'biome_ceiling',

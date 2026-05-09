@@ -166,6 +166,38 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const corpses = new Map<string, CorpseState>();
   const buildings = new Map<string, BuildingState>();
   const props = new Map<string, PropState>();
+  // E5: container props are tile-snapped raycast cubes. This index
+  // maps "<tileX>,<tileY>" → PropState so castRay can test prop
+  // occupancy without scanning the props map per cell. Rebuilt on
+  // applySceneState / spawn / change / destroy.
+  const propAtTile = new Map<string, PropState>();
+  function propTileKey(x: number, y: number): string {
+    return `${x},${y}`;
+  }
+  function indexProp(p: PropState): void {
+    if (p.tileX === undefined || p.tileY === undefined) return;
+    const w = p.tileWidth ?? 1;
+    const d = p.tileDepth ?? 1;
+    for (let dy = 0; dy < d; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        propAtTile.set(propTileKey(p.tileX + dx, p.tileY + dy), p);
+      }
+    }
+  }
+  function unindexProp(p: PropState): void {
+    if (p.tileX === undefined || p.tileY === undefined) return;
+    const w = p.tileWidth ?? 1;
+    const d = p.tileDepth ?? 1;
+    for (let dy = 0; dy < d; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        propAtTile.delete(propTileKey(p.tileX + dx, p.tileY + dy));
+      }
+    }
+  }
+  function rebuildPropTileIndex(): void {
+    propAtTile.clear();
+    for (const p of props.values()) indexProp(p);
+  }
   const projectiles = new Map<string, ProjectileState>();
   // Server only emits projectile_spawned + projectile_despawned; the client
   // extrapolates motion locally using vx/vy from spawn time. Mirrors the
@@ -178,6 +210,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   for (const c of init.corpses) corpses.set(c.id, c);
   for (const b of init.buildings) buildings.set(b.id, b);
   for (const p of init.props) props.set(p.id, p);
+  rebuildPropTileIndex();
   for (const p of init.projectiles) {
     projectiles.set(p.id, p);
     projectileSpawnedAt.set(p.id, performance.now());
@@ -675,6 +708,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           nearestDoorKind: null,
           nearestDoorOpen: false,
           nearestChestId: null,
+          nearestContainerId: null,
           weaponBenchTier: 0,
           weaponBenches: [],
         });
@@ -692,8 +726,30 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     let nearestDoorDsq = Infinity;
     let nearestChestId: string | null = null;
     let nearestChestDsq = Infinity;
+    let nearestContainerId: string | null = null;
+    let nearestContainerDsq = Infinity;
     let weaponBenchTier = 0;
     const weaponBenches: { id: string; tier: number }[] = [];
+    // E5: container props live alongside buildings as interactable
+    // raycast cubes. Test footprint vs player position with the
+    // same AABB-distance trick the building loop uses.
+    for (const p of props.values()) {
+      if (p.tileX === undefined || p.tileY === undefined) continue;
+      if (!p.hasItems) continue;
+      const w = (p.tileWidth ?? 1) * tileSize;
+      const h = (p.tileDepth ?? 1) * tileSize;
+      const cx = (p.tileX + (p.tileWidth ?? 1) / 2) * tileSize;
+      const cy = (p.tileY + (p.tileDepth ?? 1) / 2) * tileSize;
+      const halfW = w / 2;
+      const halfH = h / 2;
+      const dx = Math.max(Math.abs(selfX - cx) - halfW, 0);
+      const dy = Math.max(Math.abs(selfY - cy) - halfH, 0);
+      const dsq = dx * dx + dy * dy;
+      if (dsq <= r2 && dsq < nearestContainerDsq) {
+        nearestContainerDsq = dsq;
+        nearestContainerId = p.id;
+      }
+    }
     for (const b of buildings.values()) {
       const cx = (b.tileX + b.width / 2) * tileSize;
       const cy = (b.tileY + b.height / 2) * tileSize;
@@ -753,6 +809,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       '|' +
       (nearestChestId ?? '') +
       '|' +
+      (nearestContainerId ?? '') +
+      '|' +
       String(weaponBenchTier) +
       '|' +
       weaponBenches.map((b) => `${b.id}:${b.tier}`).join(',');
@@ -765,6 +823,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         nearestDoorKind,
         nearestDoorOpen,
         nearestChestId,
+        nearestContainerId,
         weaponBenchTier,
         weaponBenches,
       });
@@ -1034,7 +1093,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         //   2. ('biome_wall', biomeId)       — single-texture upload
         //   3. ('building', 'wall')          — legacy default
         let tex: Texture | null;
-        if (hit.isBuilding) {
+        if (hit.isProp && hit.propRef) {
+          // Container prop sides. Open variants take priority when
+          // the prop is opened; both fall back to the closed
+          // texture so an unauthored open variant still reads.
+          const propKind = hit.propRef.kind;
+          tex =
+            (hit.propRef.opened
+              ? getFpsOverrideTexture('prop_open', propKind)
+              : null) ?? getFpsOverrideTexture('prop', propKind);
+        } else if (hit.isBuilding) {
           tex = getFpsOverrideTexture('building', hit.buildingKind ?? 'wall');
         } else {
           const variants = biomeTileVariantsFor(biomeId, 'wall');
@@ -1114,13 +1182,23 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
             const yNear = top;
             // Skip degenerate strips.
             if (yNear - yFar > 0.5) {
-              const topTexKind = hit.isBuilding
-                ? hit.buildingKind ?? 'wall'
-                : 'wall';
-              const topTex = getFpsOverrideTexture(
-                'building_top',
-                topTexKind,
-              );
+              // Container props get their own top texture pair —
+              // closed/open variants under ('prop_top') and
+              // ('prop_open_top'). Buildings use 'building_top';
+              // raw walls don't reach this branch (heightMult=1).
+              let topTex: Texture | null;
+              if (hit.isProp && hit.propRef) {
+                const k = hit.propRef.kind;
+                topTex =
+                  (hit.propRef.opened
+                    ? getFpsOverrideTexture('prop_open_top', k)
+                    : null) ?? getFpsOverrideTexture('prop_top', k);
+              } else {
+                const topTexKind = hit.isBuilding
+                  ? hit.buildingKind ?? 'wall'
+                  : 'wall';
+                topTex = getFpsOverrideTexture('building_top', topTexKind);
+              }
               if (topTex) {
                 // Subdivided per-column row strip — same fix as
                 // the floor / ceiling pass. The obstacle top has
@@ -1482,7 +1560,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // the sprite renders as a textured billboard (per-column UV
     // strip with z-test); otherwise falls back to the flat-color
     // column path.
-    texCategory?: 'enemy' | 'building' | 'prop' | 'player';
+    texCategory?: 'enemy' | 'building' | 'prop' | 'player' | 'material';
     texId?: string;
     // When true, anchor the sprite's CENTRE at eye level (the
     // horizon line) rather than its bottom at the floor. Used for
@@ -1573,6 +1651,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // hp=0 races: also defended in setPropHp, but safe-guard
       // here in case a snapshot brings a dead one in.
       if (p.hp <= 0) continue;
+      // Container props (E5) render as raycast cubes via the wall
+      // pass; skip them here so they don't double-render as a
+      // billboard inside their own cube.
+      if (p.tileX !== undefined && p.tileY !== undefined) continue;
       const dx = p.x - selfX;
       const dy = p.y - selfY;
       if (dx * dx + dy * dy > propMaxDsq) continue;
@@ -1606,8 +1688,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     }
     for (const l of loot.values()) {
       let color: number;
+      let texCategory: 'material' | undefined;
+      let texId: string | undefined;
       if (l.content.kind === 'material') {
         color = materialTint(l.content.materialId);
+        // Author-uploaded material textures live under
+        // ('material', materialId) — same id the texture editor
+        // ships them as. Falls back to the flat-colour rect when
+        // no upload exists for this material.
+        texCategory = 'material';
+        texId = l.content.materialId;
       } else if (l.content.kind === 'part') {
         color = TIER_COLORS_NUM[l.content.part.tier] ?? 0xffffff;
       } else {
@@ -1615,7 +1705,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         color = 0xfbbf24;
       }
       // Loot sits on the floor — small height.
-      pushSprite(l.x, l.y, color, 14);
+      pushSprite(l.x, l.y, color, 14, texCategory, texId);
     }
     const now = performance.now();
     for (const pr of projectiles.values()) {
@@ -1854,7 +1944,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       y: number,
       color: number,
       height: number,
-      texCategory?: 'enemy' | 'building' | 'prop' | 'player',
+      texCategory?: 'enemy' | 'building' | 'prop' | 'player' | 'material',
       texId?: string,
       floats: boolean = false,
       groundOffset: number = 0,
@@ -1912,6 +2002,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // doesn't render as a full wall in FPS. Walls + doors + power
   // links keep their existing full-height baseline.
   function stationHeightMultFor(hit: RayHit): number {
+    // Container props carry their own author-tunable height.
+    if (hit.isProp && hit.propRef?.heightMult !== undefined) {
+      return Math.max(0.1, Math.min(1, hit.propRef.heightMult));
+    }
     if (!hit.isBuilding || !hit.buildingKind) return 1.0;
     const def = BUILDING_REGISTRY[hit.buildingKind];
     if (!def) return 1.0;
@@ -2138,6 +2232,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     isBuilding: boolean;
     wallU: number;
     buildingKind: import('@dumrunner/shared').BuildingKind | null;
+    // Container prop hit. When present, the wall pass renders a
+    // cube using ('prop' / 'prop_top') textures (or the open
+    // variants when prop.opened). Mutually exclusive with
+    // isBuilding for a given hit cell.
+    isProp?: boolean;
+    propRef?: import('@dumrunner/shared').PropState | null;
     // Tile-space coords of the hit cell. Used by the wall pass
     // to hash a per-cell texture variant from the biome's
     // wallTextureIds list.
@@ -2230,7 +2330,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       }
       const buildingKind = buildingKindAt(mx, my);
       const isBuilding = buildingKind !== null;
-      if (!insideWalkable || isBuilding) {
+      // E5: container props occupy the cell as raycast cubes.
+      // propAtTile is keyed by integer cell coords, so a single
+      // map lookup decides occupancy. Buildings win over props
+      // when stacked (shouldn't happen — server guards against
+      // overlap — but keep the building branch first as a safe
+      // default for player-built structures).
+      const propRef = isBuilding ? null : propAtTile.get(propTileKey(mx, my));
+      const isProp = !!propRef;
+      if (!insideWalkable || isBuilding || isProp) {
         // Hit point in world coords. Texture-column sampling
         // picks the fractional offset along the wall face.
         const hitX = ox + dx * dist;
@@ -2257,13 +2365,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
           isBuilding,
           wallU,
           buildingKind,
+          isProp,
+          propRef: propRef ?? null,
           cellX: mx,
           cellY: my,
         };
         out.push(hit);
         // Stop only when we hit a full-height obstruction. Short
-        // obstacles (workstations, doors) are recorded then we
-        // keep walking to find the wall behind them.
+        // obstacles (workstations, doors, container props) are
+        // recorded then we keep walking to find the wall behind.
         if (stationHeightMultFor(hit) >= 1.0) return out;
       }
     }
@@ -2325,6 +2435,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     for (const c of state.corpses) corpses.set(c.id, c);
     for (const b of state.buildings) buildings.set(b.id, b);
     for (const p of state.props) props.set(p.id, p);
+    rebuildPropTileIndex();
     for (const p of state.projectiles) {
       projectiles.set(p.id, p);
       projectileSpawnedAt.set(p.id, performance.now());
@@ -2475,18 +2586,35 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       buildings.delete(id);
     },
     spawnProp(p) {
+      const prev = props.get(p.id);
+      if (prev) unindexProp(prev);
       props.set(p.id, p);
+      indexProp(p);
     },
     setPropHp(id, hp, maxHp) {
       const p = props.get(id);
       if (p) {
         p.hp = hp;
         p.maxHp = maxHp;
-        if (hp <= 0) props.delete(id); // hide-on-zero defence
+        if (hp <= 0) {
+          unindexProp(p);
+          props.delete(id);
+        }
       }
     },
     removeProp(id) {
+      const p = props.get(id);
+      if (p) unindexProp(p);
       props.delete(id);
+    },
+    changeProp(p) {
+      // E5: prop_changed updates an existing prop's state
+      // (typically opened/hasItems for containers). Re-index in
+      // case footprint shifted (it doesn't today, but cheap).
+      const prev = props.get(p.id);
+      if (prev) unindexProp(prev);
+      props.set(p.id, p);
+      indexProp(p);
     },
     setBuildMode(kind) {
       buildKind = kind;

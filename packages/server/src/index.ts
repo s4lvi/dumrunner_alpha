@@ -98,6 +98,8 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
   pickup_station_outputs: (w, c, m) =>
     w.handlePickupStationOutputs(c, m.kind),
   open_door: (w, c, m) => w.handleOpenDoor(c, m.buildingId),
+  open_container: (w, c, m) => w.handleOpenContainer(c, m.propId),
+  container_take: (w, c, m) => w.handleContainerTake(c, m.propId, m.slot),
   attach_weapon_affix: (w, c, m) =>
     w.handleAttachWeaponAffix(
       c,

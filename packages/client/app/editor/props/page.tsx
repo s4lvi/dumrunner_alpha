@@ -200,6 +200,142 @@ function PropEditorBody() {
               )}
             </FormSection>
 
+            <FormSection title="Container">
+              <p className="text-[10px] text-zinc-500 mb-2">
+                Make this prop a tile-snapped, openable cube the
+                player can E-interact to loot. Renders as a raycast
+                cube using <code className="text-zinc-300">prop</code>{' '}
+                (sides) +{' '}
+                <code className="text-zinc-300">prop_top</code>;
+                opened state swaps to{' '}
+                <code className="text-zinc-300">prop_open</code> /{' '}
+                <code className="text-zinc-300">prop_open_top</code>.
+              </p>
+              <CheckboxField
+                label="container"
+                value={draft.container !== undefined}
+                onChange={(v) => {
+                  if (v && !draft.container) {
+                    setDraft({
+                      ...draft,
+                      container: {
+                        tileWidth: 1,
+                        tileDepth: 1,
+                        heightMult: 0.5,
+                        rollCount: 3,
+                        lootTable: [
+                          { materialId: '', min: 1, max: 1, chance: 0.5 },
+                        ],
+                      },
+                    });
+                  } else if (!v && draft.container) {
+                    const { container: _drop, ...rest } = draft;
+                    setDraft(rest as PropDef);
+                  }
+                }}
+              />
+              {draft.container && (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    <NumberField
+                      label="tile width"
+                      value={draft.container.tileWidth}
+                      min={1}
+                      max={8}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          container: { ...draft.container!, tileWidth: v },
+                        })
+                      }
+                    />
+                    <NumberField
+                      label="tile depth"
+                      value={draft.container.tileDepth}
+                      min={1}
+                      max={8}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          container: { ...draft.container!, tileDepth: v },
+                        })
+                      }
+                    />
+                    <SliderField
+                      label="height"
+                      value={draft.container.heightMult}
+                      min={0.1}
+                      max={1}
+                      step={0.05}
+                      onChange={(v) =>
+                        setDraft({
+                          ...draft,
+                          container: { ...draft.container!, heightMult: v },
+                        })
+                      }
+                    />
+                  </div>
+                  <NumberField
+                    label="roll count"
+                    value={draft.container.rollCount}
+                    min={0}
+                    max={32}
+                    onChange={(v) =>
+                      setDraft({
+                        ...draft,
+                        container: { ...draft.container!, rollCount: v },
+                      })
+                    }
+                    hint="passes through the loot table at spawn"
+                  />
+                  <ListField
+                    label="container loot table"
+                    hint="weighted material drops rolled into the container's inventory at scene spawn."
+                    entries={draft.container.lootTable}
+                    newEntry={() => ({
+                      materialId: '',
+                      min: 1,
+                      max: 1,
+                      chance: 0.5,
+                    })}
+                    onChange={(next) =>
+                      setDraft({
+                        ...draft,
+                        container: { ...draft.container!, lootTable: next },
+                      })
+                    }
+                    renderRow={(entry, _i, update) => (
+                      <div className="grid grid-cols-[1fr_60px_60px_70px] gap-2">
+                        <TextField
+                          label="materialId"
+                          value={entry.materialId}
+                          monospace
+                          onChange={(v) => update({ ...entry, materialId: v })}
+                        />
+                        <NumberField
+                          label="min"
+                          value={entry.min}
+                          min={0}
+                          onChange={(v) => update({ ...entry, min: v })}
+                        />
+                        <NumberField
+                          label="max"
+                          value={entry.max}
+                          min={0}
+                          onChange={(v) => update({ ...entry, max: v })}
+                        />
+                        <SliderField
+                          label="chance"
+                          value={entry.chance}
+                          onChange={(v) => update({ ...entry, chance: v })}
+                        />
+                      </div>
+                    )}
+                  />
+                </>
+              )}
+            </FormSection>
+
             {draft.onDestroy === 'drop_loot' && (
               <ListField
                 label="Loot table"

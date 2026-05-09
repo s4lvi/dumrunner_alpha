@@ -1422,6 +1422,65 @@ export class World {
     });
   }
 
+  // E5: open a container prop. Validates same-scene + range; flips
+  // the prop's opened flag (broadcast for visual swap) and ships
+  // the container's inventory privately to the opener so the modal
+  // can render its contents.
+  handleOpenContainer(characterId: string, propId: string): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const scene = this.scenes.get(conn.sceneId);
+    if (!scene) return;
+    const layout = scene.layout;
+    if (!layout || layout.tileSize <= 0) return;
+    const p = scene.getContainerProp(propId);
+    if (!p) return;
+    if (!this.containerInRange(conn, p, layout.tileSize)) return;
+    scene.openContainerProp(propId);
+    scene.shipContainerInventory(propId, characterId);
+  }
+
+  // Take one slot's contents from a container into the player's
+  // inventory. Re-ships the container inventory after so the open
+  // modal updates; pushes the player's inventory_changed too.
+  handleContainerTake(
+    characterId: string,
+    propId: string,
+    slot: number,
+  ): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const scene = this.scenes.get(conn.sceneId);
+    if (!scene) return;
+    const layout = scene.layout;
+    if (!layout || layout.tileSize <= 0) return;
+    const p = scene.getContainerProp(propId);
+    if (!p || !p.opened) return;
+    if (!this.containerInRange(conn, p, layout.tileSize)) return;
+    const result = scene.takeFromContainer(propId, slot, conn.inventory);
+    if (!result.ok) return;
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+    scene.shipContainerInventory(propId, characterId);
+  }
+
+  // Range check for container interactions. Centre of the prop's
+  // tile footprint vs player position; ~2 tiles of slack so the
+  // player can interact from a comfortable standing distance.
+  private containerInRange(
+    conn: Connection,
+    p: { x: number; y: number },
+    _tileSize: number,
+  ): boolean {
+    const REACH = 96;
+    const dx = conn.x - p.x;
+    const dy = conn.y - p.y;
+    return dx * dx + dy * dy <= REACH * REACH;
+  }
+
   // Player spends artifacts at an artifact_uplink to learn a blueprint.
   // Validates: player is on the surface, within range of an uplink, has
   // enough artifacts, and doesn't already know it. Consumes the artifacts

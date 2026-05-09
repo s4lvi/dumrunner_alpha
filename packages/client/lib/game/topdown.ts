@@ -555,6 +555,10 @@ export function runTopdownGame(
       props.delete(id);
       requestRepaint();
     },
+    changeProp: (p) => {
+      props.set(p.id, p);
+      requestRepaint();
+    },
     setBuildMode: () => {
       /* no build mode in topdown */
     },

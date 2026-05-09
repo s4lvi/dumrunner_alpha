@@ -8,27 +8,30 @@
 // that target enemies and buildings.
 
 import { loadProps } from '@dumrunner/shared/content/loader';
-import type { PropDef } from '@dumrunner/shared';
+import type { PropDef, PropVisual, Inventory } from '@dumrunner/shared';
 
 export const PROPS: Record<string, PropDef> = {};
 
 // Wire-shaped subset of PropDef.visual for the welcome message.
 // Mirrors the enemyVisuals + biomes pattern so the FPS renderer
 // has per-prop billboard scale + ground anchor at session start.
-export function getPropVisualsForWire(): Record<
-  string,
-  { tint?: string; spriteSize?: number; spriteGroundOffset?: number }
-> {
-  const out: Record<
-    string,
-    { tint?: string; spriteSize?: number; spriteGroundOffset?: number }
-  > = {};
+// Container props also carry the cube-render hints so the FPS
+// raycaster knows to switch into cube mode for those kinds.
+export function getPropVisualsForWire(): Record<string, PropVisual> {
+  const out: Record<string, PropVisual> = {};
   for (const id of Object.keys(PROPS)) {
-    const v = PROPS[id].visual;
+    const def = PROPS[id];
+    const v = def.visual;
     out[id] = {
       tint: v.tint,
       spriteSize: v.spriteSize,
       spriteGroundOffset: v.spriteGroundOffset,
+      ...(def.container
+        ? {
+            isContainer: true,
+            containerHeightMult: def.container.heightMult,
+          }
+        : {}),
     };
   }
   return out;
@@ -66,4 +69,16 @@ export type PropRuntime = {
   hp: number;
   maxHp: number;
   alive: boolean;
+  // Container-only state (PropDef.container present). Tile-snapped
+  // footprint, cube height, persistent inventory, and an
+  // open/closed flag for the visual swap. Inventory is rolled at
+  // spawn; once `opened` flips no further rolls happen — items
+  // remaining are pure "pick up what's left" semantics.
+  tileX?: number;
+  tileY?: number;
+  tileWidth?: number;
+  tileDepth?: number;
+  heightMult?: number;
+  opened?: boolean;
+  inventory?: Inventory;
 };

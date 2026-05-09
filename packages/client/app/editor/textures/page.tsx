@@ -198,6 +198,24 @@ export default function EditorPage() {
             <TextureRow key={`prop-${id}`} category="prop" id={id} />
           ))}
         </Section>
+        <Section title="Decorators (open)">
+          <p className="text-[10px] text-zinc-500 px-2 mb-2">
+            Container props (E5) swap to these textures once the
+            player opens them. Front +{' '}
+            <code className="text-zinc-300">prop_open_top</code> top
+            both fall back to the closed variants when absent.
+          </p>
+          {propIds.map((id) => (
+            <TextureRow key={`prop_open-${id}`} category="prop_open" id={id} />
+          ))}
+          {propIds.map((id) => (
+            <TextureRow
+              key={`prop_open_top-${id}`}
+              category="prop_open_top"
+              id={id}
+            />
+          ))}
+        </Section>
         <Section title="Decorators (top)">
           {propIds.map((id) => (
             <TextureRow

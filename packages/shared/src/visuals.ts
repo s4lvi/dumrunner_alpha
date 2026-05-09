@@ -56,6 +56,13 @@ export type PropVisual = {
   tint?: string;
   spriteSize?: number;        // FPS world-units; 1.0 = one wall height.
   spriteGroundOffset?: number; // 0..1 — 0 = floor-anchored, 1 = ceiling.
+  // Container props (E5) render as raycast cubes, not billboards.
+  // These mirror PropDef.container so the renderer knows how to
+  // draw a particular kind without holding the full PropDef.
+  // Presence of `isContainer = true` flips the renderer into the
+  // cube path. Absent for non-container props.
+  isContainer?: boolean;
+  containerHeightMult?: number; // 0.1..1 — fraction of a wall height.
 };
 
 export const PROP_VISUALS: Record<string, PropVisual> = {};

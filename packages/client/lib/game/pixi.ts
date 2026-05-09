@@ -82,6 +82,9 @@ export type GameInit = {
     // dungeon `door` kind (always closed when present).
     nearestDoorOpen: boolean;
     nearestChestId: string | null;
+    // E5: nearest container prop in interact range, or null. Drives
+    // the "Open — Container" prompt and the E-key target route.
+    nearestContainerId: string | null;
     // Highest-tier weapon bench in range. 0 if no bench in range.
     // Mirrors the server's nearestWeaponBenchTier check so the
     // assembly UI can grey out weapons above this tier.
@@ -168,6 +171,10 @@ export type GameHandle = {
   spawnProp(p: PropState): void;
   setPropHp(id: string, hp: number, maxHp: number): void;
   removeProp(id: string): void;
+  // E5: prop_changed updates an existing prop's wire state
+  // (typically opened/hasItems for container props). Topdown +
+  // pixi renderers stub this; FPS reindexes the tile lookup.
+  changeProp(p: PropState): void;
   // Pass a BuildingKind to enter build mode placing that kind, or null to
   // exit. Build mode also requires the current scene to be the surface;
   // pixi enforces that via the layout.tileSize > 0 + sceneId check.
@@ -1691,6 +1698,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
           nearestDoorKind: null,
           nearestDoorOpen: false,
           nearestChestId: null,
+          nearestContainerId: null,
           weaponBenchTier: 0,
           weaponBenches: [],
         });
@@ -1784,6 +1792,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         nearestDoorKind,
         nearestDoorOpen,
         nearestChestId,
+        // Top-down renderer doesn't model container props yet; the
+        // FPS path is what matters for E5. Surface this as null.
+        nearestContainerId: null,
         weaponBenchTier,
         weaponBenches,
       });
@@ -2542,6 +2553,21 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       lootLayer.removeChild(rp.container);
       rp.container.destroy({ children: true });
       props.delete(id);
+    },
+    changeProp(p: PropState) {
+      // Top-down renderer treats prop_changed like a respawn —
+      // simplest correct behaviour for footprint / opened state
+      // updates without bespoke wiring. Cheap; container props
+      // change rarely.
+      ifReady(() => {
+        const rp = props.get(p.id);
+        if (rp) {
+          lootLayer.removeChild(rp.container);
+          rp.container.destroy({ children: true });
+          props.delete(p.id);
+        }
+        addProp(p);
+      });
     },
     setBuildMode(kind: BuildingKind | null) {
       buildKind = kind;

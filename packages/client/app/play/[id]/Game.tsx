@@ -251,6 +251,29 @@ export function Game({ serverId }: { serverId: string }) {
   // Open chest modal target. Null when not viewing any chest.
   const [chestModalId, setChestModalId] = useState<string | null>(null);
   const chestModalIdRef = useRef<string | null>(null);
+  // E5: container prop loot modal. Tracks the currently-open prop
+  // and its inventory contents shipped privately by the server.
+  // Closing clears both.
+  const [nearestContainerId, setNearestContainerId] = useState<string | null>(
+    null
+  );
+  const nearestContainerIdRef = useRef<string | null>(null);
+  const [containerModal, setContainerModal] = useState<{
+    propId: string;
+    inventory: import('@dumrunner/shared').InventorySlot[];
+  } | null>(null);
+  const containerModalRef = useRef<{
+    propId: string;
+    inventory: import('@dumrunner/shared').InventorySlot[];
+  } | null>(null);
+  function setContainerInventory(msg: {
+    propId: string;
+    inventory: import('@dumrunner/shared').InventorySlot[];
+  }) {
+    const next = { propId: msg.propId, inventory: msg.inventory };
+    containerModalRef.current = next;
+    setContainerModal(next);
+  }
   const [showTradeModal, setShowTradeModal] = useState(false);
   // Refs mirror the modal flags so the global keydown effect (set up with
   // [] deps) reads live values without needing exhaustive deps.
@@ -326,6 +349,7 @@ export function Game({ serverId }: { serverId: string }) {
       nearestDoorKind: 'door' | 'wall_door' | null;
       nearestDoorOpen: boolean;
       nearestChestId: string | null;
+      nearestContainerId: string | null;
       weaponBenchTier: number;
       weaponBenches: { id: string; tier: number }[];
     }) => void;
@@ -572,6 +596,7 @@ export function Game({ serverId }: { serverId: string }) {
             nearestDoorKind,
             nearestDoorOpen,
             nearestChestId,
+            nearestContainerId,
             weaponBenchTier,
             weaponBenches,
           }) => {
@@ -586,6 +611,8 @@ export function Game({ serverId }: { serverId: string }) {
             setNearestDoorOpen(nearestDoorOpen);
             nearestChestIdRef.current = nearestChestId;
             setNearestChestId(nearestChestId);
+            nearestContainerIdRef.current = nearestContainerId;
+            setNearestContainerId(nearestContainerId);
             setWeaponBenchTier(weaponBenchTier);
             setWeaponBenches(weaponBenches);
           },
@@ -876,6 +903,17 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'prop_destroyed':
         gameRef.current?.removeProp(msg.id);
+        break;
+      case 'prop_changed':
+        // E5: container open/close + hasItems updates. Renderer
+        // re-indexes the tile lookup so the cube swaps to its
+        // open-variant textures.
+        gameRef.current?.changeProp(msg.prop);
+        break;
+      case 'prop_inventory':
+        // Private to the player who has the container open. Routed
+        // into the modal state below.
+        setContainerInventory(msg);
         break;
       case 'world_clock':
         setWorldClock({
@@ -1259,6 +1297,12 @@ export function Game({ serverId }: { serverId: string }) {
         setChestModalId(null);
         return;
       }
+      if (e.key === 'Escape' && containerModalRef.current) {
+        e.preventDefault();
+        containerModalRef.current = null;
+        setContainerModal(null);
+        return;
+      }
       if (e.key === 'Escape') {
         setShowInventory(false);
         setShowTradeModal(false);
@@ -1305,6 +1349,13 @@ export function Game({ serverId }: { serverId: string }) {
         const doorId = nearestDoorIdRef.current;
         if (doorId) {
           sendOnLiveWs({ type: 'open_door', buildingId: doorId });
+          return;
+        }
+        // E5: container prop fallback. Routes after doors so a
+        // door right next to a container resolves to the door first.
+        const containerId = nearestContainerIdRef.current;
+        if (containerId) {
+          sendOnLiveWs({ type: 'open_container', propId: containerId });
           return;
         }
         return;
@@ -1467,6 +1518,12 @@ export function Game({ serverId }: { serverId: string }) {
             }
           />
         )}
+        {!nearInteractable &&
+          nearestStation === null &&
+          !nearestDoorId &&
+          nearestContainerId && (
+            <InteractPrompt label="Loot Container" />
+          )}
         <ControlsHint mode={rendererMode} />
         {toast && <Toast message={toast.message} keyId={toast.key} />}
         {linkSeveredAt !== null && <LinkSeveredOverlay />}
@@ -1602,6 +1659,30 @@ export function Game({ serverId }: { serverId: string }) {
                     fromIdx,
                     toKind,
                     toIdx,
+                  })
+                }
+              />
+            );
+          })()}
+
+        {containerModal &&
+          (() => {
+            // Auto-close when the container moves out of interact
+            // range (player walked away). The server already gates
+            // takes server-side; this just hides the UI.
+            if (nearestContainerId !== containerModal.propId) {
+              setContainerModal(null);
+              return null;
+            }
+            return (
+              <ContainerLootModal
+                inventory={containerModal.inventory}
+                onClose={() => setContainerModal(null)}
+                onTake={(slot) =>
+                  sendOnLiveWs({
+                    type: 'container_take',
+                    propId: containerModal.propId,
+                    slot,
                   })
                 }
               />
@@ -6585,5 +6666,76 @@ function ItemIcon({
     <svg width={size} height={size} viewBox="0 0 24 24">
       <polygon points="12,4 20,12 12,20 4,12" fill="#cbd5e1" stroke="#0b0d10" strokeWidth={stroke} />
     </svg>
+  );
+}
+
+// E5: container prop loot modal. Compact pop-up that lists the
+// container's rolled inventory; clicking a slot sends container_take
+// to the server, which moves the slot into the player's inventory
+// and re-ships the updated contents. Closes on Escape, click-out,
+// or the player walking out of range (handled at the call site).
+function ContainerLootModal({
+  inventory,
+  onClose,
+  onTake,
+}: {
+  inventory: InventorySlot[];
+  onClose: () => void;
+  onTake: (slot: number) => void;
+}) {
+  const filled = inventory.filter((s) => s.kind !== 'empty');
+  return (
+    <Modal onClose={onClose} width="min(420px, 92vw)">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 bg-zinc-900/70">
+        <h2 className="text-sm font-semibold tracking-wide text-zinc-200">
+          Container
+        </h2>
+        <button
+          className="text-zinc-400 hover:text-zinc-100 text-xs"
+          onClick={onClose}
+        >
+          [esc]
+        </button>
+      </div>
+      <div className="p-3">
+        {filled.length === 0 ? (
+          <div className="text-[12px] text-zinc-500 italic">empty</div>
+        ) : (
+          <div className="grid grid-cols-4 gap-2">
+            {inventory.map((slot, i) =>
+              slot.kind === 'empty' ? (
+                <div
+                  key={i}
+                  className="aspect-square bg-zinc-900/50 border border-zinc-800 rounded"
+                />
+              ) : (
+                <button
+                  key={i}
+                  className="aspect-square bg-zinc-900/80 border border-zinc-700 hover:border-amber-400 rounded flex flex-col items-center justify-center text-[10px] text-zinc-300"
+                  onClick={() => onTake(i)}
+                  title="Click to take"
+                >
+                  {slot.kind === 'material' ? (
+                    <>
+                      <ItemIcon kind="material" subkind={slot.materialId} />
+                      <div className="mt-1">×{slot.count}</div>
+                    </>
+                  ) : (
+                    // Defensive: container lootTable only emits
+                    // materials today, but if a future content
+                    // change drops a non-material the button still
+                    // shows a generic placeholder + count.
+                    <div className="text-[10px]">{slot.kind}</div>
+                  )}
+                </button>
+              )
+            )}
+          </div>
+        )}
+        <p className="text-[10px] text-zinc-500 mt-3">
+          Click a slot to take it.
+        </p>
+      </div>
+    </Modal>
   );
 }

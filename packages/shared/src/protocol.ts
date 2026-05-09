@@ -399,6 +399,21 @@ export type PropState = {
   y: number;
   hp: number;
   maxHp: number;
+  // Container-only fields (PropDef.container). Tile-aligned
+  // footprint is the cell rect the cube occupies; heightMult is
+  // the vertical extent (0..1 of a wall). `opened` flips when
+  // the player E-interacts; renderer swaps to the open-variant
+  // textures. Absent on non-container props.
+  tileX?: number;
+  tileY?: number;
+  tileWidth?: number;
+  tileDepth?: number;
+  heightMult?: number;
+  opened?: boolean;
+  // True when the container has at least one item left. Drives
+  // the closed-vs-empty visual swap independently of opened —
+  // an opened-then-emptied container reads as empty.
+  hasItems?: boolean;
 };
 
 export type ProjectileOwnerKind = 'player' | 'enemy';
@@ -565,6 +580,26 @@ export const PickupStationOutputsMsgSchema = z.object({
 export const OpenDoorMsgSchema = z.object({
   type: z.literal('open_door'),
   buildingId: z.string().min(1).max(64),
+});
+
+// E5: open a container prop. Server validates range, flips
+// prop.opened (broadcast), and ships the prop's inventory privately
+// to the opener via prop_inventory_changed.
+export const OpenContainerMsgSchema = z.object({
+  type: z.literal('open_container'),
+  propId: z.string().min(1).max(64),
+});
+
+// Take a single inventory slot from a container into the player's
+// own inventory. Server validates range + that prop.opened is true;
+// stack-merges into the player's grid and re-ships the container
+// inventory to the player.
+export const ContainerTakeMsgSchema = z.object({
+  type: z.literal('container_take'),
+  propId: z.string().min(1).max(64),
+  // Container grids are small (8 slots) but bound generously so
+  // future variants don't require a protocol bump.
+  slot: z.number().int().min(0).max(63),
 });
 
 // ---------- weapon bench actions ----------
@@ -857,6 +892,8 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   PurchaseKeyMsgSchema,
   PickupStationOutputsMsgSchema,
   OpenDoorMsgSchema,
+  OpenContainerMsgSchema,
+  ContainerTakeMsgSchema,
   AttachWeaponAffixMsgSchema,
   DetachWeaponAffixMsgSchema,
   AttachWeaponModMsgSchema,
@@ -994,6 +1031,16 @@ export type ServerMessage =
   | { type: 'prop_spawned'; prop: PropState }
   | { type: 'prop_damaged'; id: string; hp: number; maxHp: number }
   | { type: 'prop_destroyed'; id: string }
+  // Container open/close + take state (E5). prop_changed is broadcast
+  // so every client refreshes the cube visuals; prop_inventory is
+  // sent only to the player who has the container open so contents
+  // stay private until interacted with.
+  | { type: 'prop_changed'; prop: PropState }
+  | {
+      type: 'prop_inventory';
+      propId: string;
+      inventory: InventorySlot[];
+    }
   | {
       // Periodic world-clock broadcast. cycle = current cycle index
       // (1-based). secondsToPerihelion = real seconds until the next horde

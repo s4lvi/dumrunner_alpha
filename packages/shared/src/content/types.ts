@@ -590,6 +590,29 @@ const propExplodeSchema = z
   })
   .strict();
 
+// Container props are interactable raycast cubes (a la workstation
+// buildings) — player presses E to open a modal of rolled contents.
+// `tileWidth/Depth` set the footprint in tiles; `heightMult` scales
+// the cube height (0..1 of a wall). Loot rolls from `lootTable` once
+// per container instance at scene init. Distinct from
+// onDestroy='drop_loot' which drops items only when the prop is
+// broken — a container yields its contents on E-interact and
+// persists as an open shell after.
+const propContainerSchema = z
+  .object({
+    tileWidth: z.number().int().min(1).max(8).default(1),
+    tileDepth: z.number().int().min(1).max(8).default(1),
+    heightMult: z.number().min(0.1).max(1).default(0.5),
+    // How many distinct loot rolls to attempt at spawn. Each roll
+    // walks the lootTable and adds entries that pass their chance
+    // — same shape as biome.lootBias / prop.loot. Empty
+    // lootTable + rollCount > 0 produces an empty container shell.
+    rollCount: z.number().int().min(0).max(32).default(3),
+    lootTable: z.array(LootDropSchema),
+  })
+  .strict();
+export type PropContainerDef = z.infer<typeof propContainerSchema>;
+
 // ---------- RoomTemplate ----------
 //
 // A hand-authored room layout. Procgen picks templates from each
@@ -748,6 +771,14 @@ export const PropDefSchema = z
     onDestroy: z.enum(['nothing', 'drop_loot', 'explode']),
     explode: propExplodeSchema.optional(),
     loot: z.array(LootDropSchema).optional(),
+    // Container props (E5): when present, the prop renders as a
+    // tile-snapped raycast cube and the player can E-interact to
+    // open it and pull rolled loot from a chest-style modal.
+    // Mutually compatible with onDestroy — a container that's
+    // broken before being opened spills its contents like any
+    // drop_loot prop. Renderer swaps to ('prop_open', id) +
+    // ('prop_open_top', id) textures once opened.
+    container: propContainerSchema.optional(),
     visual: propVisualSchema,
   })
   .strict()

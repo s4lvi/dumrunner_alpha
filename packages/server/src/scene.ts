@@ -228,6 +228,12 @@ const STATION_OUTPUT_SLOTS = 8;
 // Storage chests get a bigger grid since they're meant to hold a
 // crew's stockpile across cycles.
 const STORAGE_CHEST_SLOTS = 16;
+// Container props (E5) — small per-instance grids. Sized for one
+// or two stacks of loot; the player either takes everything in
+// one E-interact or moves on. Distinct from STORAGE_CHEST_SLOTS
+// since chests are persistent player infrastructure and these
+// are world-loot pickups.
+const CONTAINER_PROP_SLOTS = 8;
 
 function emptyOutputBuffer(): import('@dumrunner/shared').InventorySlot[] {
   return Array.from({ length: STATION_OUTPUT_SLOTS }, () => ({ kind: 'empty' as const }));
@@ -237,6 +243,33 @@ function emptyChestBuffer(): import('@dumrunner/shared').InventorySlot[] {
   return Array.from({ length: STORAGE_CHEST_SLOTS }, () => ({
     kind: 'empty' as const,
   }));
+}
+
+function emptyContainerInventory(): import('@dumrunner/shared').Inventory {
+  return Array.from({ length: CONTAINER_PROP_SLOTS }, () => ({
+    kind: 'empty' as const,
+  }));
+}
+
+// Roll a container's starting inventory from its lootTable. The
+// table is walked `rollCount` times — each pass adds entries that
+// pass their per-drop chance, with stack count rolled in
+// [min, max]. Stack-merges via addMaterial so duplicates collapse.
+function rollContainerInventory(
+  table: import('@dumrunner/shared').LootDrop[],
+  rollCount: number,
+): import('@dumrunner/shared').Inventory {
+  const inv = emptyContainerInventory();
+  for (let pass = 0; pass < rollCount; pass++) {
+    for (const drop of table) {
+      if (Math.random() > drop.chance) continue;
+      const count =
+        drop.min + Math.floor(Math.random() * (drop.max - drop.min + 1));
+      if (count <= 0) continue;
+      addMaterial(inv, drop.materialId as MaterialKind, count);
+    }
+  }
+  return inv;
 }
 
 function emptyBufferForKind(
@@ -416,7 +449,7 @@ export class Scene {
       const def = PROPS[s.kind];
       if (!def) continue;
       const id = `prop_${this.nextPropId++}`;
-      this.props.set(id, {
+      const runtime: PropRuntime = {
         id,
         kind: s.kind,
         x: s.x,
@@ -424,8 +457,38 @@ export class Scene {
         hp: def.hp,
         maxHp: def.hp,
         alive: true,
-      });
+      };
+      this.applyContainerInit(runtime, def);
+      this.props.set(id, runtime);
     }
+  }
+
+  // Promote a freshly-spawned prop into a container if its def
+  // carries a `container` block: snap (x, y) to the centre of its
+  // tile footprint, record cube fields for the wire payload, and
+  // roll initial inventory. No-op for non-container props.
+  private applyContainerInit(
+    runtime: PropRuntime,
+    def: import('@dumrunner/shared').PropDef,
+  ): void {
+    if (!def.container) return;
+    const tileSize = this.layout?.tileSize ?? 32;
+    const c = def.container;
+    // Snap so the prop lands cleanly on the tile grid the
+    // raycaster reads. Tile coords = floor(centre / tileSize),
+    // world centre is back-computed so wide containers sit
+    // symmetrically over their footprint.
+    const tileX = Math.floor(runtime.x / tileSize);
+    const tileY = Math.floor(runtime.y / tileSize);
+    runtime.tileX = tileX;
+    runtime.tileY = tileY;
+    runtime.tileWidth = c.tileWidth;
+    runtime.tileDepth = c.tileDepth;
+    runtime.heightMult = c.heightMult;
+    runtime.opened = false;
+    runtime.inventory = rollContainerInventory(c.lootTable, c.rollCount);
+    runtime.x = (tileX + c.tileWidth / 2) * tileSize;
+    runtime.y = (tileY + c.tileDepth / 2) * tileSize;
   }
 
   private populateDoors(doors: InitialDoor[]): void {
@@ -2841,6 +2904,80 @@ export class Scene {
     return true;
   }
 
+  // E5: look up a container prop by id. Returns null when the
+  // prop doesn't exist OR isn't a container (caller validates).
+  getContainerProp(propId: string): PropRuntime | null {
+    const p = this.props.get(propId);
+    if (!p || !p.alive) return null;
+    if (!p.inventory) return null;
+    return p;
+  }
+
+  // Flip a container's `opened` flag and broadcast the new state.
+  // Idempotent — already-opened containers just rebroadcast (cheap).
+  openContainerProp(propId: string): PropRuntime | null {
+    const p = this.getContainerProp(propId);
+    if (!p) return null;
+    p.opened = true;
+    this.broadcast({ type: 'prop_changed', prop: toPropState(p) });
+    return p;
+  }
+
+  // Move a single inventory slot from a container into the target
+  // inventory (player). Stack-merges via addInventorySlot. Returns
+  // true on success; rebroadcasts prop_changed so other clients
+  // refresh hasItems for the visual swap.
+  takeFromContainer(
+    propId: string,
+    slot: number,
+    target: import('@dumrunner/shared').Inventory,
+  ): { ok: boolean; remaining?: import('@dumrunner/shared').InventorySlot } {
+    const p = this.getContainerProp(propId);
+    if (!p || !p.inventory) return { ok: false };
+    if (slot < 0 || slot >= p.inventory.length) return { ok: false };
+    const src = p.inventory[slot];
+    if (src.kind === 'empty') return { ok: false };
+    const remaining = this.routeSlotIntoInventory(src, target);
+    p.inventory[slot] =
+      remaining ?? ({ kind: 'empty' } as import('@dumrunner/shared').InventorySlot);
+    this.broadcast({ type: 'prop_changed', prop: toPropState(p) });
+    return { ok: true, remaining: remaining ?? undefined };
+  }
+
+  // Send the container's full inventory to a single connection
+  // (the opener). Mirrors the chest open flow but uses the
+  // prop_inventory message type so the client routes it to the
+  // container modal.
+  shipContainerInventory(propId: string, characterId: string): void {
+    const p = this.getContainerProp(propId);
+    if (!p || !p.inventory) return;
+    this.bindings.send(characterId, {
+      type: 'prop_inventory',
+      propId: p.id,
+      inventory: p.inventory.map((s) => ({ ...s })),
+    });
+  }
+
+  // Helper: route a single InventorySlot into an Inventory using
+  // the per-kind add helpers. Returns the leftover slot when the
+  // target couldn't accept the full count (stack overflow);
+  // returns null when fully consumed.
+  private routeSlotIntoInventory(
+    s: import('@dumrunner/shared').InventorySlot,
+    inv: import('@dumrunner/shared').Inventory,
+  ): import('@dumrunner/shared').InventorySlot | null {
+    if (s.kind === 'empty') return null;
+    if (s.kind === 'material') {
+      const left = addMaterial(inv, s.materialId, s.count);
+      return left > 0 ? { kind: 'material', materialId: s.materialId, count: left } : null;
+    }
+    // For non-material types we'd need parallel add helpers; for
+    // now containers are material-only (matches the lootTable
+    // schema). Fall through to "couldn't route" so the caller
+    // leaves the slot in the container.
+    return s;
+  }
+
   // Toggle a player-built wall_door's open state. Unlike openDoor,
   // the building persists — only the `open` flag flips, and the new
   // state is re-broadcast as building_placed so each client refreshes
@@ -2967,7 +3104,7 @@ export class Scene {
       const def = PROPS[chosen.id];
       if (!def) continue;
       const id = `prop_${this.nextPropId++}`;
-      this.props.set(id, {
+      const runtime: PropRuntime = {
         id,
         kind: chosen.id,
         x,
@@ -2975,8 +3112,47 @@ export class Scene {
         hp: def.hp,
         maxHp: def.hp,
         alive: true,
-      });
+      };
+      this.applyContainerInit(runtime, def);
+      // Container collision: skip placement if the snapped tile
+      // footprint overlaps another container or the spawn-clear
+      // zone. Cheap O(N) check; container counts stay low.
+      if (def.container && this.containerOverlaps(runtime)) continue;
+      this.props.set(id, runtime);
     }
+  }
+
+  // True when the container's tile footprint overlaps any other
+  // existing container or building — used during scatter to keep
+  // placements from stacking on the same tiles.
+  private containerOverlaps(c: PropRuntime): boolean {
+    if (c.tileX === undefined || c.tileY === undefined) return false;
+    const w = c.tileWidth ?? 1;
+    const d = c.tileDepth ?? 1;
+    for (const other of this.props.values()) {
+      if (other.tileX === undefined || other.tileY === undefined) continue;
+      const ow = other.tileWidth ?? 1;
+      const od = other.tileDepth ?? 1;
+      if (
+        c.tileX < other.tileX + ow &&
+        c.tileX + w > other.tileX &&
+        c.tileY < other.tileY + od &&
+        c.tileY + d > other.tileY
+      ) {
+        return true;
+      }
+    }
+    for (const b of this.buildings.values()) {
+      if (
+        c.tileX < b.tileX + b.width &&
+        c.tileX + w > b.tileX &&
+        c.tileY < b.tileY + b.height &&
+        c.tileY + d > b.tileY
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private populateFromSpawns(spawns: InitialEnemySpawn[]): void {
@@ -3181,6 +3357,13 @@ function toCorpseState(c: CorpseRuntime): CorpseState {
 }
 
 function toPropState(p: PropRuntime): PropState {
+  // Container props ship their footprint + open flag every tick
+  // (cheap — handful of integers). Inventory contents are NOT
+  // broadcast — only sent privately to the player who has the
+  // container open via prop_inventory_changed.
+  const hasItems = p.inventory
+    ? p.inventory.some((s) => s.kind !== 'empty')
+    : false;
   return {
     id: p.id,
     kind: p.kind,
@@ -3188,6 +3371,13 @@ function toPropState(p: PropRuntime): PropState {
     y: p.y,
     hp: p.hp,
     maxHp: p.maxHp,
+    ...(p.tileX !== undefined ? { tileX: p.tileX } : {}),
+    ...(p.tileY !== undefined ? { tileY: p.tileY } : {}),
+    ...(p.tileWidth !== undefined ? { tileWidth: p.tileWidth } : {}),
+    ...(p.tileDepth !== undefined ? { tileDepth: p.tileDepth } : {}),
+    ...(p.heightMult !== undefined ? { heightMult: p.heightMult } : {}),
+    ...(p.opened !== undefined ? { opened: p.opened } : {}),
+    ...(p.inventory ? { hasItems } : {}),
   };
 }
 
