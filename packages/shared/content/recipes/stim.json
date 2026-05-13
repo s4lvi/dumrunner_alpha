@@ -1,0 +1,24 @@
+{
+  "id": "stim",
+  "name": "Stim (1)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "biotic",
+      "count": 3
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "consumable",
+    "consumableId": "stim",
+    "count": 1
+  },
+  "workstation": "electronics_bench",
+  "blueprintId": null,
+  "craftTimeMs": 10000
+}

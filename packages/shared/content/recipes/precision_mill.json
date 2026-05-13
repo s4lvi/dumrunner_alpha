@@ -1,0 +1,29 @@
+{
+  "id": "precision_mill",
+  "name": "Precision Machining Mill",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 30
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 8
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "precision_mill",
+    "count": 1
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 35000
+}

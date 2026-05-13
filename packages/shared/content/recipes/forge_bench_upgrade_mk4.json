@@ -1,0 +1,29 @@
+{
+  "id": "forge_bench_upgrade_mk4",
+  "name": "Weapon Bench Mk4 Upgrade",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy_mk4",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "artifact",
+      "count": 2
+    }
+  ],
+  "output": {
+    "kind": "upgrade",
+    "upgradeId": "weapon_bench_mk4",
+    "count": 1
+  },
+  "workstation": "forge",
+  "blueprintId": null,
+  "craftTimeMs": 120000
+}

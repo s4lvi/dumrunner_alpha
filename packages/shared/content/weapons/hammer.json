@@ -1,0 +1,15 @@
+{
+  "id": "hammer",
+  "label": "Hammer",
+  "family": "melee",
+  "color": 16347926,
+  "description": "Slow, devastating, AoE-feeling cone. Pulps brutes in two hits.",
+  "craftingStation": "workbench",
+  "melee": {
+    "damage": 140,
+    "swingIntervalMs": 850,
+    "range": 80,
+    "arcRad": 1.2,
+    "color": 16347926
+  }
+}

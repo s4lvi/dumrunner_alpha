@@ -1,0 +1,34 @@
+{
+  "id": "turret_shotgun",
+  "name": "Shotgun Turret",
+  "inputs": [
+    {
+      "kind": "weapon",
+      "weaponId": "shotgun",
+      "count": 1
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "turret_shotgun",
+    "count": 1
+  },
+  "workstation": "electronics_bench",
+  "blueprintId": "bp_turret_shotgun",
+  "craftTimeMs": 60000
+}

@@ -1,0 +1,8 @@
+{
+  "id": "bp_mod_high_velocity",
+  "recipeId": "craft_mod_high_velocity",
+  "displayName": "High-Velocity Barrel",
+  "description": "+500 px/sec projectile speed. Slots into any mod slot.",
+  "cost": 5,
+  "tier": "uncommon"
+}

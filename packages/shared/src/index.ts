@@ -17,3 +17,8 @@ export * from './weaponStats';
 // Zod validators). Foundation for E3.0 — every editor downstream
 // imports from here.
 export * from './content/types';
+// Animation runtime — pure state-machine controller used by the
+// FPS view-model, enemy / prop / projectile sprites, and the
+// biome ambient tile loop. Phase B engine; no Pixi imports so the
+// server-side tooling can share it.
+export * from './animation';

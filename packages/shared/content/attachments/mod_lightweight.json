@@ -1,0 +1,22 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_lightweight",
+  "displayName": "Lightweight Frame",
+  "description": "+10% fire rate, -10% damage. Faster trigger, weaker rounds.",
+  "adjective": "Whisper",
+  "family": null,
+  "effect": {
+    "fireIntervalMult": 0.9,
+    "damageMult": 0.9
+  },
+  "rolls": {
+    "fireIntervalMultBonus": [
+      -0.06,
+      0.05
+    ],
+    "damageMultBonus": [
+      -0.05,
+      0.05
+    ]
+  }
+}

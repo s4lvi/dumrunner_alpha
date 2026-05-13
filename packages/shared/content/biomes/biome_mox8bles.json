@@ -43,6 +43,10 @@
     {
       "id": "prop_mox9mxbs",
       "weight": 0.5
+    },
+    {
+      "id": "prop_grass",
+      "weight": 2
     }
   ],
   "lootBias": [],

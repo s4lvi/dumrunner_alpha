@@ -1,0 +1,11 @@
+{
+  "id": "bp_aff_firerate_25",
+  "recipeId": "craft_aff_firerate_25",
+  "displayName": "Lightweight Grip",
+  "description": "25% faster cadence. Slots into a weapon grip.",
+  "cost": 6,
+  "tier": "rare",
+  "prerequisites": [
+    "bp_mod_lightweight"
+  ]
+}

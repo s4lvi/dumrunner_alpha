@@ -1,0 +1,11 @@
+{
+  "id": "bp_energy_blade",
+  "recipeId": "energy_blade",
+  "displayName": "Energy Blade",
+  "description": "Fast, high-damage, narrow arc. Pairs well with imbue mods — every cut chills, burns, or poisons. Crafted at the Weapon Bench.",
+  "cost": 10,
+  "tier": "rare",
+  "prerequisites": [
+    "bp_hammer"
+  ]
+}

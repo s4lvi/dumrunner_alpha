@@ -1,0 +1,11 @@
+{
+  "id": "bp_mod_armor_piercer",
+  "recipeId": "craft_mod_armor_piercer",
+  "displayName": "AP Core",
+  "description": "+18% damage. Engineered for armoured targets.",
+  "cost": 8,
+  "tier": "rare",
+  "prerequisites": [
+    "bp_aff_damage_15"
+  ]
+}

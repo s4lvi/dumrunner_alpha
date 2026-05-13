@@ -1,0 +1,24 @@
+{
+  "id": "craft_mod_foregrip",
+  "name": "Foregrip Mod",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "attachment",
+    "defId": "mod_foregrip",
+    "count": 1
+  },
+  "workstation": "weapon_bench",
+  "blueprintId": "bp_mod_foregrip",
+  "craftTimeMs": 25000
+}

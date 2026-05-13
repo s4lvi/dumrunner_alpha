@@ -1,0 +1,29 @@
+{
+  "id": "rifle_rounds",
+  "name": "Rifle Rounds (30)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 1
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "ammo",
+    "ammoId": "rifle_rounds",
+    "count": 30
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 10000
+}

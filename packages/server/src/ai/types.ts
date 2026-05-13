@@ -14,6 +14,7 @@ export type EnemyVisual = {
   shape: 'square' | 'circle' | 'triangle';
   color: number;       // 0xRRGGBB
   size: number;        // half-extent in world units
+  animationId?: string; // library reference; FPS renderer drives if set
 };
 
 // How an enemy moves while it has a target (or while idle, depending on FSM).

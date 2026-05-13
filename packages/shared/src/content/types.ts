@@ -407,6 +407,22 @@ export const BiomeDefSchema = z
     // E3.4 Phase 1: per-tile registry. Optional — biomes without a
     // tileSet keep the legacy palette-only render path.
     tileSet: biomeTileSetSchema.optional(),
+    // FPS-renderer wall + ceiling height, in tiles (1 tile =
+    // TILE_SIZE world units, square-feeling at default 1.0). 1.0
+    // is the floor — going below 1 would clip standard sprites
+    // (enemies / props ~1 tile tall) through the ceiling. Higher
+    // values open up the room (Sun-Bleached plazas, Alien Core
+    // resonant chambers). Camera/player eye level stays fixed at
+    // half a standard tile — only the ceiling rises.
+    // Defaults to 1.0 when omitted.
+    wallHeightTiles: z.number().min(1).max(8).optional(),
+    // Library references — ambient looping animations for biome
+    // walls / floors / ceilings. The FPS column raycaster + floor
+    // strip use these to drive the active frame. Empty = static
+    // texture only.
+    wallAnimationId: idSchema.optional(),
+    floorAnimationId: idSchema.optional(),
+    ceilingAnimationId: idSchema.optional(),
     // Only meaningful when kind === 'overworld'. Ignored otherwise.
     overworld: overworldParamsSchema.optional(),
   })
@@ -545,6 +561,10 @@ export const EnemyDefSchema = z
     stunDurationOnHitMs: z.number().nonnegative(),
     visual: enemyVisualSchema,
     lootTable: z.array(LootDropSchema),
+    // Library reference. Empty = use the static enemy/<id> texture
+    // override only. When set, the FPS renderer plays the named
+    // animation's idle/walk/attack/hit/death states.
+    animationId: idSchema.optional(),
   })
   .strict()
   .superRefine((def, ctx) => {
@@ -780,6 +800,8 @@ export const PropDefSchema = z
     // ('prop_open_top', id) textures once opened.
     container: propContainerSchema.optional(),
     visual: propVisualSchema,
+    // Library reference for the prop's idle/destroy animation.
+    animationId: idSchema.optional(),
   })
   .strict()
   // Cross-field sanity: behaviour kind matches its required block.
@@ -795,3 +817,566 @@ export const PropDefSchema = z
     },
   );
 export type PropDef = z.infer<typeof PropDefSchema>;
+
+// ---------- BlueprintDef ----------
+//
+// Mirrors the runtime BlueprintCatalogEntry shape (shared/crafting.ts)
+// 1:1. Authoring lives here so the editor + server boot read the
+// same JSON. Cross-area validation (recipeId exists, prerequisites
+// resolve, DAG acyclic) runs at the API save boundary — per-file
+// Zod parse only enforces shape.
+
+export const BlueprintTierSchema = z.enum([
+  'common',
+  'uncommon',
+  'rare',
+  'legendary',
+]);
+export type BlueprintTier = z.infer<typeof BlueprintTierSchema>;
+
+export const BlueprintDefSchema = z
+  .object({
+    id: idSchema,
+    // Recipe this blueprint unlocks. Cross-checked against the
+    // RECIPES table at save time.
+    recipeId: z.string().min(1),
+    displayName: z.string().min(1),
+    description: z.string(),
+    cost: z.number().int().nonnegative(),
+    tier: BlueprintTierSchema,
+    // Hidden blueprints don't appear in the uplink shop or the
+    // crafting modals but stay resolvable by id (legacy grants,
+    // orphan-station migration). Optional — default false.
+    hidden: z.boolean().optional(),
+    // Other blueprint ids that must be in the player's known set
+    // before this one becomes purchasable. Empty / omitted = root
+    // node. Cross-validated for existence + acyclicity at save.
+    prerequisites: z.array(idSchema).optional(),
+  })
+  .strict();
+export type BlueprintDef = z.infer<typeof BlueprintDefSchema>;
+
+// ---------- Sprite fit helpers ----------
+//
+// Both the editor (inline warnings) and the API route (save-time
+// rejection) need to know how tall a sprite renders relative to a
+// biome's ceiling. The conversions:
+//
+//   enemy: rendered world-height = visual.size * 2
+//   prop:  rendered world-height = WALL_HEIGHT_WORLD * (spriteSize ?? 22/32)
+//
+// Expressed in "tile heights" (1 tile = TILE_SIZE = 32 world
+// units, matching SceneLayout.tileSize), this becomes
+// visual.size/16 for enemies and spriteSize for props.
+//
+// The biome's wallHeightTiles is also in tile heights, so the
+// comparison is direct: sprite ≤ wallHeightTiles fits.
+
+const TILE_SIZE = 32;
+const PROP_DEFAULT_SPRITE_SIZE = 22 / TILE_SIZE;
+
+export function enemySpriteHeightTiles(def: EnemyDef): number {
+  return (def.visual.size * 2) / TILE_SIZE;
+}
+
+export function propSpriteHeightTiles(def: PropDef): number {
+  return def.visual.spriteSize ?? PROP_DEFAULT_SPRITE_SIZE;
+}
+
+export type SpriteFitOffender = {
+  kind: 'enemy' | 'prop';
+  id: string;
+  spriteTiles: number;
+};
+
+// Returns the list of enemyRoster / propPalette entries whose
+// sprite is taller than the biome's wallHeightTiles (defaulting
+// to 1 when the biome doesn't set the field). Entries whose id
+// can't be resolved in the supplied registries are skipped — a
+// dangling id is a separate authoring issue and is surfaced by
+// the existing cross-reference validation, not by this check.
+export function findSpriteFitOffenders(
+  biome: BiomeDef,
+  enemies: ReadonlyMap<string, EnemyDef>,
+  props: ReadonlyMap<string, PropDef>,
+): SpriteFitOffender[] {
+  const wallH = biome.wallHeightTiles ?? 1;
+  const out: SpriteFitOffender[] = [];
+  for (const entry of biome.enemyRoster) {
+    const def = enemies.get(entry.id);
+    if (!def) continue;
+    const h = enemySpriteHeightTiles(def);
+    if (h > wallH) out.push({ kind: 'enemy', id: entry.id, spriteTiles: h });
+  }
+  for (const entry of biome.propPalette) {
+    const def = props.get(entry.id);
+    if (!def) continue;
+    const h = propSpriteHeightTiles(def);
+    if (h > wallH) out.push({ kind: 'prop', id: entry.id, spriteTiles: h });
+  }
+  return out;
+}
+
+// ---------- WeaponDef ----------
+//
+// Authored shape for one weapon kind. Captures both ranged and
+// melee in a single discriminated schema; the runtime registers
+// each entry into the right table (WEAPON_STATS / MELEE_STATS)
+// keyed by id. Tier scaling + tier-mismatch math stay code-side
+// (effectiveWeaponStats) — those are logic, not data.
+//
+// `family` is a fixed enum the runtime uses for ammo routing,
+// mod compatibility, and turret variants. New weapons must pick
+// an existing family; introducing a new family is a runtime
+// change, not a data change.
+
+export const WeaponFamilySchema = z.enum([
+  'pistol',
+  'smg',
+  'shotgun',
+  'rifle',
+  'sniper',
+  'heavy',
+  'energy',
+  'melee',
+]);
+export type WeaponFamilyKind = z.infer<typeof WeaponFamilySchema>;
+
+// Bullet shape. `single` is the default round; `pellets` is the
+// shotgun-style spread; `explosive` is reserved for the heavy-
+// projectile pass and is not yet wired in the projectile runtime
+// — authoring is allowed (the editor lights it up) but the
+// server falls back to `single` behaviour until support lands.
+export const ProjectileKindSchema = z.enum(['single', 'pellets', 'explosive']);
+export type ProjectileKind = z.infer<typeof ProjectileKindSchema>;
+
+const rangedStatsSchema = z
+  .object({
+    damage: z.number().positive(),
+    fireIntervalMs: z.number().positive(),
+    projectileSpeed: z.number().positive(),
+    projectileTtlMs: z.number().positive(),
+    projectileRadius: z.number().positive(),
+    pelletCount: z.number().int().positive(),
+    spreadRad: z.number().min(0),
+    // Packed 0xRRGGBB. Stored as a number for cheap renderer
+    // consumption; the editor offers a hex string picker that
+    // translates on save.
+    color: z.number().int().nonnegative(),
+    ammoKind: z.string().min(1),
+    accuracy: z.number().min(0).max(1),
+    magazineSize: z.number().int().positive(),
+    reloadMs: z.number().nonnegative(),
+    projectile: z
+      .object({
+        kind: ProjectileKindSchema,
+        // Explosive-only — radius/damage of the on-impact AoE.
+        // Runtime support pending; authoring already gated to
+        // explosive entries only.
+        explosionRadius: z.number().positive().optional(),
+        explosionDamage: z.number().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const meleeStatsSchema = z
+  .object({
+    damage: z.number().positive(),
+    swingIntervalMs: z.number().positive(),
+    // Reach in pixels from the player centre.
+    range: z.number().positive(),
+    // Half-arc of the cone in radians.
+    arcRad: z.number().positive(),
+    color: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const WeaponDefSchema = z
+  .object({
+    id: idSchema,
+    label: z.string().min(1),
+    family: WeaponFamilySchema,
+    // Renderer + tooltip use this; sidebar swatch reads it too.
+    color: z.number().int().nonnegative(),
+    // Designer notes / tooltip body. Optional; the runtime
+    // doesn't surface this anywhere player-facing today.
+    description: z.string().optional(),
+    // Where this weapon is crafted. Free string — must match a
+    // BuildingKind on the server; the editor offers a dropdown
+    // of known workstations.
+    craftingStation: z.string().optional(),
+    // Exactly one of these is required, gated by family. Melee
+    // families set `melee`; everything else sets `ranged`. The
+    // refine below enforces the pairing.
+    ranged: rangedStatsSchema.optional(),
+    melee: meleeStatsSchema.optional(),
+    // Library references — animations from /editor/animations.
+    //   viewAnimationId       FPS view-model (idle/fire/reload)
+    //   projectileAnimationId Per-weapon projectile sprite. Falls
+    //                         through to per-family fallback when
+    //                         omitted (resolved client-side).
+    viewAnimationId: idSchema.optional(),
+    projectileAnimationId: idSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (d) =>
+      d.family === 'melee' ? d.melee !== undefined : d.ranged !== undefined,
+    {
+      message:
+        "ranged weapons require a `ranged` stat block; melee weapons require a `melee` stat block",
+    },
+  )
+  .refine(
+    (d) =>
+      d.family === 'melee' ? d.ranged === undefined : d.melee === undefined,
+    {
+      message: "can't set both `ranged` and `melee` on the same weapon",
+    },
+  );
+export type WeaponDef = z.infer<typeof WeaponDefSchema>;
+
+// ---------- RecipeDef ----------
+//
+// Authored shape of one entry in the runtime RECIPES table. Inputs
+// and outputs are discriminated unions; kind ids stay as loose
+// strings here (MaterialKind / AmmoKind / WeaponKind / etc. are
+// runtime unions and validating against them in Zod would tie the
+// schema to a closed set we want to remain editable). The API
+// save layer cross-validates references against the live
+// registries before writing to disk.
+
+const recipeInputSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('material'),
+      materialId: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('ammo'),
+      ammoId: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('weapon'),
+      weaponId: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+]);
+
+const recipeOutputSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('placeable'),
+      buildingKind: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('ammo'),
+      ammoId: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('weapon'),
+      weaponId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('attachment'),
+      defId: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('consumable'),
+      consumableId: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('material'),
+      materialId: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('upgrade'),
+      upgradeId: z.string().min(1),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+]);
+
+export const RecipeDefSchema = z
+  .object({
+    id: idSchema,
+    name: z.string().min(1),
+    inputs: z.array(recipeInputSchema),
+    output: recipeOutputSchema,
+    // null = hand-craftable from inventory anywhere. Any string =
+    // requires the named workstation kind in range.
+    workstation: z.string().min(1).nullable(),
+    // null = always known. Set to a blueprint id to gate.
+    blueprintId: z.string().min(1).nullable(),
+    // Async craft duration in milliseconds. 0 / omitted = instant.
+    craftTimeMs: z.number().int().nonnegative().optional(),
+    // Bench-tier requirement (1..4). Omitted = no gate.
+    stationTier: z.number().int().min(1).max(4).optional(),
+  })
+  .strict();
+export type RecipeDef = z.infer<typeof RecipeDefSchema>;
+
+// ---------- AttachmentDef ----------
+//
+// Authored shape for one attachment class — these are the
+// `weapon_mod` / `weapon_affix` / `suit_affix` entries that
+// live in the runtime ATTACHMENT_DEFS table plus the matching
+// ATTACHMENT_STAT_RANGES row. Folded into one JSON shape with
+// an optional `rolls` field so a single file owns each class's
+// base effect + roll variance.
+
+const weaponEffectSchema = z
+  .object({
+    damageMult: z.number().optional(),
+    fireIntervalMult: z.number().optional(),
+    spreadMult: z.number().optional(),
+    projectileSpeedAdd: z.number().optional(),
+  })
+  .strict();
+
+const suitEffectSchema = z
+  .object({
+    hpBonus: z.number().optional(),
+    shieldBonus: z.number().optional(),
+    staminaMaxBonus: z.number().optional(),
+    staminaRegenBonus: z.number().optional(),
+    moveSpeedMult: z.number().optional(),
+  })
+  .strict();
+
+// Symmetric [lo, hi] roll range. Both bounds required so the
+// loader doesn't have to guess. lo > hi is allowed (the rng
+// uniform handles either ordering).
+const rollRange = z.tuple([z.number(), z.number()]);
+
+const attachmentRollRangesSchema = z
+  .object({
+    damageMultBonus: rollRange.optional(),
+    fireIntervalMultBonus: rollRange.optional(),
+    spreadMultBonus: rollRange.optional(),
+    projectileSpeedAddBonus: rollRange.optional(),
+    hpBonusAdd: rollRange.optional(),
+    shieldBonusAdd: rollRange.optional(),
+    staminaMaxBonusAdd: rollRange.optional(),
+    staminaRegenBonusAdd: rollRange.optional(),
+    moveSpeedMultBonus: rollRange.optional(),
+  })
+  .strict();
+
+const weaponFamilyOrAny = z
+  .union([WeaponFamilySchema, z.null()])
+  .describe('null = applies to any ranged family');
+
+const weaponPieceKindSchema = z.enum([
+  'frame',
+  'grip',
+  'magazine',
+  'barrel',
+]);
+
+const suitSlotKindSchema = z.enum([
+  'chassis',
+  'plating',
+  'life_support',
+  'utility_mod',
+  'cargo_grid',
+]);
+
+const imbueKindSchema = z.enum([
+  'burn_dps',
+  'poison_dps',
+  'slow_pct',
+]);
+
+const weaponModImbueSchema = z
+  .object({
+    kind: imbueKindSchema,
+    magnitude: z.number().positive(),
+    durationMs: z.number().int().positive(),
+    label: z.string().min(1),
+  })
+  .strict();
+
+export const AttachmentDefSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('weapon_mod'),
+      id: idSchema,
+      displayName: z.string().min(1),
+      description: z.string(),
+      adjective: z.string().min(1),
+      family: weaponFamilyOrAny,
+      effect: weaponEffectSchema,
+      imbue: weaponModImbueSchema.optional(),
+      rolls: attachmentRollRangesSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('weapon_affix'),
+      id: idSchema,
+      displayName: z.string().min(1),
+      description: z.string(),
+      adjective: z.string().min(1),
+      pieceKind: weaponPieceKindSchema,
+      family: weaponFamilyOrAny,
+      effect: weaponEffectSchema,
+      value: z.number(),
+      rolls: attachmentRollRangesSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('suit_affix'),
+      id: idSchema,
+      displayName: z.string().min(1),
+      description: z.string(),
+      adjective: z.string().min(1),
+      slotKind: suitSlotKindSchema,
+      effect: suitEffectSchema,
+      value: z.number(),
+      rolls: attachmentRollRangesSchema.optional(),
+    })
+    .strict(),
+]);
+export type AttachmentDefData = z.infer<typeof AttachmentDefSchema>;
+
+// ---------- AnimationDef ----------
+//
+// Library-style animation manifest. Each manifest is a named
+// asset that an entity can REFERENCE by id. The category gates
+// which state names are legal — `enemy` animations carry
+// idle/walk/attack/hit/death, `weapon_view` animations carry
+// idle/fire/reload, etc. Authors can't type a bad state name;
+// the renderer can't request one that wasn't authored.
+//
+// Storage: spritesheet PNGs live under `public/textures/anim/
+// <animationId>/<state>.<ext>` (sheet mode) or
+// `public/textures/anim/<animationId>/<state>/<frameIndex>.<ext>`
+// (frames mode). Animations own their textures; entities don't.
+//
+// `id` is a free slug — the author chooses it. Same slug must
+// equal the JSON filename (the loader enforces).
+
+export const ANIMATION_CATEGORIES = [
+  'enemy',
+  'prop',
+  'weapon_view',
+  'projectile',
+  'biome_wall',
+  'biome_floor',
+  'biome_ceiling',
+] as const;
+export const AnimationCategorySchema = z.enum(ANIMATION_CATEGORIES);
+export type AnimationCategory = z.infer<typeof AnimationCategorySchema>;
+
+// Per-category state-name allowlist. The animation editor renders
+// state names as a dropdown sourced from this map, and the
+// AnimationDef schema's superRefine rejects manifests with state
+// keys outside the allowed set for their category. Adding a new
+// state name = one entry here plus a renderer code path that
+// triggers it; nothing in the editor or manifest format needs to
+// learn about it explicitly.
+export const STATES_BY_CATEGORY = {
+  enemy: ['idle', 'walk', 'attack', 'hit', 'death'],
+  prop: ['idle', 'destroy'],
+  weapon_view: ['idle', 'fire', 'reload'],
+  projectile: ['idle'],
+  biome_wall: ['idle'],
+  biome_floor: ['idle'],
+  biome_ceiling: ['idle'],
+} as const satisfies Record<AnimationCategory, readonly string[]>;
+
+export function allowedStatesFor(category: AnimationCategory): readonly string[] {
+  return STATES_BY_CATEGORY[category];
+}
+
+export const AnimationStateSchema = z
+  .object({
+    // Number of frames in this state.
+    //   source = 'sheet'  → frame width = sheet.width / frames
+    //   source = 'frames' → one file per frame, indexed 0..frames-1
+    frames: z.number().int().positive(),
+    // Effective playback rate. The editor's speed slider sets
+    // this directly — no separate base × multiplier so the value
+    // on disk is exactly what runs.
+    fps: z.number().positive().max(120),
+    // true = restart at frame 0 when the last frame ends;
+    // false = stop at the last frame (or transition via `next`).
+    loop: z.boolean(),
+    // What to do when a non-looping animation finishes:
+    //   - omitted / null      stay on the last frame (e.g. death)
+    //   - 'previous'          fall back to whichever state was
+    //                         playing before this one was triggered
+    //                         (useful for hit / reload overlays)
+    //   - <stateName>         transition to that state
+    next: z.string().nullable().optional(),
+    // How the per-state textures are stored on disk:
+    //   - 'sheet'  (default): one PNG at <category>/<id>/<state>.<ext>,
+    //                         horizontally sliced into `frames` frames.
+    //   - 'frames':           one PNG per frame at
+    //                         <category>/<id>/<state>/<frameIndex>.<ext>.
+    //                         Use this when authoring individual cels
+    //                         (asset_gen one-shot, hand-painted, etc.).
+    // Omitted = 'sheet' so existing manifests keep working.
+    source: z.enum(['sheet', 'frames']).optional(),
+  })
+  .strict();
+export type AnimationState = z.infer<typeof AnimationStateSchema>;
+
+export const AnimationDefSchema = z
+  .object({
+    // Author-chosen slug. Must match the JSON filename.
+    id: idSchema,
+    // Player-facing / editor-facing display label. Picker
+    // dropdowns on entity editors show this, not the raw id.
+    name: z.string().min(1),
+    // Which renderer category this animation drives. Gates the
+    // allowed state names via STATES_BY_CATEGORY.
+    category: AnimationCategorySchema,
+    // Authored states. Keys are restricted by category — see
+    // `superRefine` below. Sparse coverage is fine (you can
+    // author idle alone and skip hit/death).
+    states: z.record(z.string().min(1), AnimationStateSchema),
+  })
+  .strict()
+  .superRefine((d, ctx) => {
+    const allowed = STATES_BY_CATEGORY[d.category];
+    const allowedSet = new Set<string>(allowed);
+    for (const state of Object.keys(d.states)) {
+      if (!allowedSet.has(state)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `state "${state}" not allowed for category "${d.category}" (allowed: ${allowed.join(', ')})`,
+          path: ['states', state],
+        });
+      }
+    }
+  });
+export type AnimationDef = z.infer<typeof AnimationDefSchema>;

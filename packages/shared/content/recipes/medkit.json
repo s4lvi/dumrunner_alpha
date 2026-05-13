@@ -1,0 +1,24 @@
+{
+  "id": "medkit",
+  "name": "Medkit (1)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "biotic",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "consumable",
+    "consumableId": "medkit",
+    "count": 1
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 8000
+}

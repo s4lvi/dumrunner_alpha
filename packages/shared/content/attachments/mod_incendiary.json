@@ -1,0 +1,15 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_incendiary",
+  "displayName": "Incendiary Core",
+  "description": "Hits ignite the target — 8 dps burn for 4s.",
+  "adjective": "Pyro",
+  "family": null,
+  "effect": {},
+  "imbue": {
+    "kind": "burn_dps",
+    "magnitude": 8,
+    "durationMs": 4000,
+    "label": "Burning"
+  }
+}

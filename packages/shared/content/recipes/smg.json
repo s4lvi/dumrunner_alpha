@@ -1,0 +1,28 @@
+{
+  "id": "smg",
+  "name": "SMG",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 18
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 2
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "smg"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_smg",
+  "craftTimeMs": 45000
+}

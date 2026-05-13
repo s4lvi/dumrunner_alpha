@@ -1,0 +1,24 @@
+{
+  "id": "craft_mod_high_velocity",
+  "name": "High-Velocity Barrel Mod",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 5
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 3
+    }
+  ],
+  "output": {
+    "kind": "attachment",
+    "defId": "mod_high_velocity",
+    "count": 1
+  },
+  "workstation": "weapon_bench",
+  "blueprintId": "bp_mod_high_velocity",
+  "craftTimeMs": 25000
+}

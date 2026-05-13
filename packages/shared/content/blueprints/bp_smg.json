@@ -1,0 +1,8 @@
+{
+  "id": "bp_smg",
+  "recipeId": "smg",
+  "displayName": "SMG",
+  "description": "High rate of fire, low damage per shot. Hose down packs. Crafted at the Workbench.",
+  "cost": 4,
+  "tier": "uncommon"
+}

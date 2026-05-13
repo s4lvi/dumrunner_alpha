@@ -1,0 +1,8 @@
+{
+  "id": "bp_pistol",
+  "recipeId": "pistol",
+  "displayName": "Pistol",
+  "description": "Balanced sidearm. Crafted at the Workbench. Granted at the start of every cycle.",
+  "cost": 0,
+  "tier": "common"
+}

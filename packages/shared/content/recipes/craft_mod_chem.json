@@ -1,0 +1,30 @@
+{
+  "id": "craft_mod_chem",
+  "name": "Chem Injector",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "biotic",
+      "count": 5
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "attachment",
+    "defId": "mod_chem",
+    "count": 1
+  },
+  "workstation": "weapon_bench",
+  "blueprintId": "bp_mod_chem",
+  "craftTimeMs": 50000,
+  "stationTier": 4
+}

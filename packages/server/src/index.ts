@@ -23,9 +23,13 @@ import { supabase } from './supabase.js';
 import { registry } from './registry.js';
 import { initTemplates } from './ai/templates.js';
 import { initBiomes } from './biomes.js';
+import { initBlueprints } from './blueprints.js';
 import { initProps } from './props.js';
 import { initRooms } from './rooms.js';
 import { initCorridors } from './corridors.js';
+import { initWeapons } from './weapons.js';
+import { initRecipes } from './recipes.js';
+import { initAttachments } from './attachments.js';
 import { SandboxWorld } from './sandbox.js';
 import { startContentWatch } from './contentWatch.js';
 import type { World } from './world.js';
@@ -39,6 +43,10 @@ await initBiomes();
 await initProps();
 await initRooms();
 await initCorridors();
+await initBlueprints();
+await initWeapons();
+await initRecipes();
+await initAttachments();
 
 // Hot-reload content registries on file changes so editor saves
 // land in the running sandbox without a server restart. Reload is
@@ -50,6 +58,10 @@ startContentWatch({
   props: initProps,
   rooms: initRooms,
   corridors: initCorridors,
+  blueprints: initBlueprints,
+  weapons: initWeapons,
+  recipes: initRecipes,
+  attachments: initAttachments,
 });
 
 // Typed dispatch map for inbound client messages. Each key is a

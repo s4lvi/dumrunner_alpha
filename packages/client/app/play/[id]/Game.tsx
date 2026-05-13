@@ -42,9 +42,13 @@ import {
   categoryAt,
   effectiveHazardDps,
   resistFor,
+  setAttachmentRegistry,
   setBiomePalettes,
+  setBlueprintCatalog,
   setEnemyVisuals,
   setPropVisuals,
+  setRecipes,
+  setWeaponRegistry,
   SUIT_ATTACHMENT_SLOTS,
   SUIT_SLOT_KINDS,
   type BuildingKind,
@@ -537,6 +541,20 @@ export function Game({ serverId }: { serverId: string }) {
         setBiomePalettes(msg.biomes);
         // Per-prop sprite size + ground offset live here.
         setPropVisuals(msg.propVisuals);
+        // Blueprint catalog — populated from JSON content on the
+        // server. The editor at /editor/blueprints writes those
+        // JSON files; client picks up changes on next welcome.
+        setBlueprintCatalog(msg.blueprints);
+        // Weapon registry — same flow. Populates WEAPON_STATS /
+        // MELEE_STATS / WEAPON_FAMILY so effectiveWeaponStats and
+        // tooltips see authored data without a redeploy.
+        setWeaponRegistry(msg.weapons);
+        // Recipe registry — drives the craft modals + recipe-id
+        // pickers in the blueprint editor.
+        setRecipes(msg.recipes);
+        // Attachment classes — populates both ATTACHMENT_DEFS and
+        // ATTACHMENT_STAT_RANGES via one wire payload.
+        setAttachmentRegistry(msg.attachments);
         setInventory(msg.inventory);
         setEquipment(msg.equipment);
         setHotbarSelection(msg.hotbarSelection);
@@ -769,6 +787,9 @@ export function Game({ serverId }: { serverId: string }) {
           // Placeholder reload SFX — collect-scrap roughly evokes the
           // mechanical clank we want until a real reload sample lands.
           audio.playSfx('collect-scrap');
+          // Drive the FPS view-model's reload animation. No-op in
+          // other renderers (handle method is a stub).
+          gameRef.current?.notifyReloadStarted(msg.durationMs);
         }
         break;
       case 'weapon_reloaded':

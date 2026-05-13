@@ -1,0 +1,25 @@
+{
+  "id": "anim_mp4nc2dr",
+  "name": "pistol_basic",
+  "category": "weapon_view",
+  "states": {
+    "idle": {
+      "frames": 1,
+      "fps": 6,
+      "loop": true
+    },
+    "fire": {
+      "frames": 1,
+      "fps": 6,
+      "loop": false,
+      "next": "idle"
+    },
+    "reload": {
+      "frames": 2,
+      "fps": 2.75,
+      "loop": false,
+      "next": "idle",
+      "source": "frames"
+    }
+  }
+}

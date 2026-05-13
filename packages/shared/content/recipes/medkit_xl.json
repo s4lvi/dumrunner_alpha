@@ -1,0 +1,29 @@
+{
+  "id": "medkit_xl",
+  "name": "Medkit XL (1)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "biotic",
+      "count": 8
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "consumable",
+    "consumableId": "medkit_xl",
+    "count": 1
+  },
+  "workstation": "electronics_bench",
+  "blueprintId": null,
+  "craftTimeMs": 18000
+}

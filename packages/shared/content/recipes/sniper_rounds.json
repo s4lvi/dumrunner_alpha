@@ -1,0 +1,24 @@
+{
+  "id": "sniper_rounds",
+  "name": "Sniper Rounds (10)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "ammo",
+    "ammoId": "sniper_rounds",
+    "count": 10
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 12000
+}

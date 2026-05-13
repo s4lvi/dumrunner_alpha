@@ -1,0 +1,17 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_compensator",
+  "displayName": "Compensator",
+  "description": "-50% spread. Tighter than a Foregrip, but louder.",
+  "adjective": "Vented",
+  "family": null,
+  "effect": {
+    "spreadMult": 0.5
+  },
+  "rolls": {
+    "spreadMultBonus": [
+      -0.1,
+      0.05
+    ]
+  }
+}

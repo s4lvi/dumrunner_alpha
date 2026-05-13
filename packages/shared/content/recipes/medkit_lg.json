@@ -1,0 +1,24 @@
+{
+  "id": "medkit_lg",
+  "name": "Medkit Large (1)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "biotic",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "consumable",
+    "consumableId": "medkit_lg",
+    "count": 1
+  },
+  "workstation": "electronics_bench",
+  "blueprintId": null,
+  "craftTimeMs": 12000
+}

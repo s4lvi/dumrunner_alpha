@@ -28,9 +28,13 @@ import type { ServerMessage } from '@dumrunner/shared';
 import {
   decodeTileGrid,
   isWalkableTileId,
-  setEnemyVisuals,
+  setAttachmentRegistry,
   setBiomePalettes,
+  setBlueprintCatalog,
+  setEnemyVisuals,
   setPropVisuals,
+  setRecipes,
+  setWeaponRegistry,
   tileIdAt,
 } from '@dumrunner/shared';
 import { runFpsGame } from '@/lib/game/fps';
@@ -388,14 +392,20 @@ export const SandboxPreview = forwardRef<
   );
 });
 
-// The renderer reads enemy visuals + biome palettes from shared
-// global registries (setEnemyVisuals / setBiomePalettes). Live
-// game's welcome handler does this; sandbox does the same so
-// custom-authored enemies / biomes paint correctly.
+// The renderer reads enemy visuals + biome palettes + the
+// weapon / blueprint / recipe / attachment registries from
+// shared global state. Live game's welcome handler populates all
+// of them; sandbox does the same so authored content (including
+// animation references on weapons / enemies / props / biomes)
+// renders identically here.
 function applyWelcomeRegistries(msg: WelcomeMsg): void {
   if (msg.enemyVisuals) setEnemyVisuals(msg.enemyVisuals);
   if (msg.biomes) setBiomePalettes(msg.biomes);
   if (msg.propVisuals) setPropVisuals(msg.propVisuals);
+  if (msg.weapons) setWeaponRegistry(msg.weapons);
+  if (msg.blueprints) setBlueprintCatalog(msg.blueprints);
+  if (msg.recipes) setRecipes(msg.recipes);
+  if (msg.attachments) setAttachmentRegistry(msg.attachments);
 }
 
 // Re-export of the welcome msg shape so consumers can opt into a

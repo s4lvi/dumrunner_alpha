@@ -36,6 +36,7 @@ import {
 } from '../_components/Form';
 import { IsoPreview } from '../_components/IsoPreview';
 import { TextureRow } from '../_components/TextureRow';
+import { AnimationPicker } from '../_components/AnimationPicker';
 
 const FACTIONS: readonly Faction[] = [
   'catacombs',
@@ -353,6 +354,16 @@ function EnemyEditorBody() {
                 <code className="text-zinc-300">{draft.id}</code>.
               </p>
               <TextureRow category="enemy" id={draft.id} hideLabel />
+            </FormSection>
+
+            <FormSection title="Animation">
+              <AnimationPicker
+                label="animation"
+                category="enemy"
+                value={draft.animationId}
+                onChange={(v) => setDraft({ ...draft, animationId: v })}
+                hint="Drives the enemy's idle / walk / attack / hit / death states. Empty = static sprite only."
+              />
             </FormSection>
 
             <ListField

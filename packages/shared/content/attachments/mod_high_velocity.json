@@ -1,0 +1,17 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_high_velocity",
+  "displayName": "High-Velocity Barrel",
+  "description": "+500 px/sec projectile speed. Better tracking at range.",
+  "adjective": "Hyper",
+  "family": null,
+  "effect": {
+    "projectileSpeedAdd": 500
+  },
+  "rolls": {
+    "projectileSpeedAddBonus": [
+      -100,
+      300
+    ]
+  }
+}

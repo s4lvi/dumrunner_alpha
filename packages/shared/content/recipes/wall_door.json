@@ -1,0 +1,23 @@
+{
+  "id": "wall_door",
+  "name": "Door",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 8
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 2
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "wall_door",
+    "count": 1
+  },
+  "workstation": null,
+  "blueprintId": null
+}

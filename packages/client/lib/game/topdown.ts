@@ -571,6 +571,9 @@ export function runTopdownGame(
     setHordeActive: () => {
       /* topdown has no sky */
     },
+    notifyReloadStarted: () => {
+      /* topdown has no view-model */
+    },
     swapScene: (state: SceneState) => {
       players.clear();
       for (const p of state.players) players.set(p.characterId, p);

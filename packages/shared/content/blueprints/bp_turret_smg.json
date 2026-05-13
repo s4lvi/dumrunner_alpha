@@ -1,0 +1,12 @@
+{
+  "id": "bp_turret_smg",
+  "recipeId": "turret_smg",
+  "displayName": "SMG Turret",
+  "description": "High-RoF turret. Consumes a built SMG. Crafted at an Electronics Bench.",
+  "cost": 6,
+  "tier": "uncommon",
+  "prerequisites": [
+    "bp_turret",
+    "bp_smg"
+  ]
+}

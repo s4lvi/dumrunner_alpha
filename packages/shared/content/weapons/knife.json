@@ -1,0 +1,14 @@
+{
+  "id": "knife",
+  "label": "Knife",
+  "family": "melee",
+  "color": 14870768,
+  "description": "Low-floor starter tool. Quick, narrow, weak. Hand-craftable from scrap.",
+  "melee": {
+    "damage": 35,
+    "swingIntervalMs": 350,
+    "range": 60,
+    "arcRad": 0.7,
+    "color": 14870768
+  }
+}

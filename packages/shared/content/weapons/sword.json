@@ -1,0 +1,15 @@
+{
+  "id": "sword",
+  "label": "Sword",
+  "family": "melee",
+  "color": 16638023,
+  "description": "Wide-arc melee — clears a chaser cleanly, carries through a swarmer cluster.",
+  "craftingStation": "workbench",
+  "melee": {
+    "damage": 70,
+    "swingIntervalMs": 450,
+    "range": 90,
+    "arcRad": 0.9,
+    "color": 16638023
+  }
+}

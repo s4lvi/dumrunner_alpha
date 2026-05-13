@@ -1,0 +1,17 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_foregrip",
+  "displayName": "Foregrip",
+  "description": "-30% spread. Best on shotguns and SMGs.",
+  "adjective": "Steady",
+  "family": null,
+  "effect": {
+    "spreadMult": 0.7
+  },
+  "rolls": {
+    "spreadMultBonus": [
+      -0.1,
+      0.05
+    ]
+  }
+}

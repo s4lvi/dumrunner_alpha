@@ -1,0 +1,29 @@
+{
+  "id": "weapon_bench",
+  "name": "Weapon Bench",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 25
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 10
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 6
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "weapon_bench",
+    "count": 1
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 30000
+}

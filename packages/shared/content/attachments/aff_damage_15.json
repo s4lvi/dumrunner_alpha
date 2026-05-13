@@ -1,0 +1,19 @@
+{
+  "kind": "weapon_affix",
+  "id": "aff_damage_15",
+  "displayName": "Reinforced Frame",
+  "description": "+15% damage on every shot. Slots into a weapon frame.",
+  "adjective": "Brutal",
+  "pieceKind": "frame",
+  "family": null,
+  "effect": {
+    "damageMult": 1.15
+  },
+  "value": 0.15,
+  "rolls": {
+    "damageMultBonus": [
+      -0.05,
+      0.1
+    ]
+  }
+}

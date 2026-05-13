@@ -27,6 +27,15 @@ const ALLOWED_CATEGORIES = new Set([
   'biome_skybox',
   'biome_wall',
   'player',
+  // Animation Phase A — projectile sprite (per weapon id, falls
+  // through to weapon family) and the first-person view-model
+  // sprite shown anchored bottom-centre in the FPS renderer.
+  'projectile',
+  'weapon_view',
+  // Library-model animations (post-refactor). All animation
+  // textures — spritesheets or per-frame PNGs — live under this
+  // single category, keyed by animation id rather than entity id.
+  'anim',
 ]);
 const SAFE_ID = /^[a-z0-9_-]+$/i;
 const ALLOWED_EXTS = ['png', 'webp', 'jpg'] as const;
@@ -36,9 +45,25 @@ function safe(category: string, id: string): boolean {
   return ALLOWED_CATEGORIES.has(category) && SAFE_ID.test(id);
 }
 
+// Phase B/D: an asset can ship its per-state textures three
+// different ways:
+//   1. Legacy single PNG at <category>/<id>.<ext>
+//   2. Spritesheet per state at <category>/<id>/<state>.<ext>
+//   3. Per-frame PNGs at <category>/<id>/<state>/<frameIndex>.<ext>
+// GET returns all three shapes; entries carry `state` / `frame`
+// fields where relevant so the client cache keys them
+// independently.
+type TextureEntry = {
+  category: string;
+  id: string;
+  state?: string;
+  frame?: number;
+  url: string;
+};
+
 export async function GET() {
   await fs.mkdir(TEXTURES_DIR, { recursive: true });
-  const entries: { category: string; id: string; url: string }[] = [];
+  const entries: TextureEntry[] = [];
   let cats: string[] = [];
   try {
     cats = await fs.readdir(TEXTURES_DIR);
@@ -62,6 +87,78 @@ export async function GET() {
       continue;
     }
     for (const f of files) {
+      const childPath = path.join(catPath, f);
+      let childStat: Awaited<ReturnType<typeof fs.stat>> | null = null;
+      try {
+        childStat = await fs.stat(childPath);
+      } catch {
+        continue;
+      }
+      if (childStat.isDirectory()) {
+        // Per-state subfolder. Each file is <state>.<ext> for a
+        // spritesheet, OR a deeper <state>/<frameIndex>.<ext>
+        // when source = 'frames' authoring is used.
+        const id = f;
+        if (!SAFE_ID.test(id)) continue;
+        let stateFiles: string[] = [];
+        try {
+          stateFiles = await fs.readdir(childPath);
+        } catch {
+          continue;
+        }
+        for (const sf of stateFiles) {
+          const sfPath = path.join(childPath, sf);
+          let sfStat: Awaited<ReturnType<typeof fs.stat>> | null = null;
+          try {
+            sfStat = await fs.stat(sfPath);
+          } catch {
+            continue;
+          }
+          if (sfStat.isDirectory()) {
+            // Per-frame folder for source='frames' authoring.
+            const state = sf;
+            if (!SAFE_ID.test(state)) continue;
+            let frameFiles: string[] = [];
+            try {
+              frameFiles = await fs.readdir(sfPath);
+            } catch {
+              continue;
+            }
+            for (const ff of frameFiles) {
+              const dot = ff.lastIndexOf('.');
+              if (dot < 0) continue;
+              const fname = ff.slice(0, dot);
+              const ext = ff.slice(dot + 1).toLowerCase();
+              if (!/^\d+$/.test(fname)) continue;
+              const frame = parseInt(fname, 10);
+              if (!(ALLOWED_EXTS as readonly string[]).includes(ext)) continue;
+              entries.push({
+                category: cat,
+                id,
+                state,
+                frame,
+                url: `/textures/${cat}/${id}/${state}/${ff}`,
+              });
+            }
+            continue;
+          }
+          // Spritesheet at <state>.<ext>.
+          const dot = sf.lastIndexOf('.');
+          if (dot < 0) continue;
+          const state = sf.slice(0, dot);
+          const ext = sf.slice(dot + 1).toLowerCase();
+          if (!SAFE_ID.test(state)) continue;
+          if (!(ALLOWED_EXTS as readonly string[]).includes(ext)) continue;
+          entries.push({
+            category: cat,
+            id,
+            state,
+            url: `/textures/${cat}/${id}/${sf}`,
+          });
+        }
+        continue;
+      }
+      // Legacy single-PNG asset.
       const dot = f.lastIndexOf('.');
       if (dot < 0) continue;
       const id = f.slice(0, dot);
@@ -79,7 +176,10 @@ export async function POST(req: NextRequest) {
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
   }
-  const { category, id, dataUrl } = body as Record<string, unknown>;
+  const { category, id, dataUrl, state, frame } = body as Record<
+    string,
+    unknown
+  >;
   if (
     typeof category !== 'string' ||
     typeof id !== 'string' ||
@@ -87,6 +187,20 @@ export async function POST(req: NextRequest) {
     !safe(category, id)
   ) {
     return NextResponse.json({ error: 'invalid' }, { status: 400 });
+  }
+  const stateName = typeof state === 'string' && state.length > 0 ? state : null;
+  if (stateName !== null && !SAFE_ID.test(stateName)) {
+    return NextResponse.json({ error: 'invalid state' }, { status: 400 });
+  }
+  const frameIndex =
+    typeof frame === 'number' && Number.isInteger(frame) && frame >= 0
+      ? frame
+      : null;
+  if (frameIndex !== null && stateName === null) {
+    return NextResponse.json(
+      { error: 'frame requires state' },
+      { status: 400 },
+    );
   }
   const m = /^data:image\/(png|webp|jpe?g);base64,([A-Za-z0-9+/=]+)$/.exec(
     dataUrl,
@@ -99,6 +213,39 @@ export async function POST(req: NextRequest) {
   if (buf.length > MAX_BYTES) {
     return NextResponse.json({ error: 'too large' }, { status: 413 });
   }
+  if (frameIndex !== null && stateName !== null) {
+    // Per-frame PNG: <category>/<id>/<state>/<frameIndex>.<ext>.
+    const dir = path.join(TEXTURES_DIR, category, id, stateName);
+    await fs.mkdir(dir, { recursive: true });
+    for (const e of ALLOWED_EXTS) {
+      if (e === ext) continue;
+      await fs
+        .rm(path.join(dir, `${frameIndex}.${e}`), { force: true })
+        .catch(() => {});
+    }
+    const file = path.join(dir, `${frameIndex}.${ext}`);
+    await fs.writeFile(file, buf);
+    return NextResponse.json({
+      url: `/textures/${category}/${id}/${stateName}/${frameIndex}.${ext}?v=${Date.now()}`,
+    });
+  }
+  if (stateName !== null) {
+    // Per-state spritesheet: <category>/<id>/<state>.<ext>.
+    const dir = path.join(TEXTURES_DIR, category, id);
+    await fs.mkdir(dir, { recursive: true });
+    for (const e of ALLOWED_EXTS) {
+      if (e === ext) continue;
+      await fs
+        .rm(path.join(dir, `${stateName}.${e}`), { force: true })
+        .catch(() => {});
+    }
+    const file = path.join(dir, `${stateName}.${ext}`);
+    await fs.writeFile(file, buf);
+    return NextResponse.json({
+      url: `/textures/${category}/${id}/${stateName}.${ext}?v=${Date.now()}`,
+    });
+  }
+  // Legacy single-PNG asset: <category>/<id>.<ext>.
   const dir = path.join(TEXTURES_DIR, category);
   await fs.mkdir(dir, { recursive: true });
   // One file per id. If a previous upload used a different
@@ -110,8 +257,6 @@ export async function POST(req: NextRequest) {
   }
   const file = path.join(dir, `${id}.${ext}`);
   await fs.writeFile(file, buf);
-  // Cache-buster query so the browser swaps in the new image
-  // even when replacing the same path immediately.
   return NextResponse.json({
     url: `/textures/${category}/${id}.${ext}?v=${Date.now()}`,
   });
@@ -122,9 +267,38 @@ export async function DELETE(req: NextRequest) {
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
   }
-  const { category, id } = body as Record<string, unknown>;
+  const { category, id, state, frame } = body as Record<string, unknown>;
   if (typeof category !== 'string' || typeof id !== 'string' || !safe(category, id)) {
     return NextResponse.json({ error: 'invalid' }, { status: 400 });
+  }
+  const stateName = typeof state === 'string' && state.length > 0 ? state : null;
+  const frameIndex =
+    typeof frame === 'number' && Number.isInteger(frame) && frame >= 0
+      ? frame
+      : null;
+  if (frameIndex !== null && stateName !== null) {
+    if (!SAFE_ID.test(stateName)) {
+      return NextResponse.json({ error: 'invalid state' }, { status: 400 });
+    }
+    const dir = path.join(TEXTURES_DIR, category, id, stateName);
+    for (const e of ALLOWED_EXTS) {
+      await fs
+        .rm(path.join(dir, `${frameIndex}.${e}`), { force: true })
+        .catch(() => {});
+    }
+    return NextResponse.json({});
+  }
+  if (stateName !== null) {
+    if (!SAFE_ID.test(stateName)) {
+      return NextResponse.json({ error: 'invalid state' }, { status: 400 });
+    }
+    const dir = path.join(TEXTURES_DIR, category, id);
+    for (const e of ALLOWED_EXTS) {
+      await fs
+        .rm(path.join(dir, `${stateName}.${e}`), { force: true })
+        .catch(() => {});
+    }
+    return NextResponse.json({});
   }
   const dir = path.join(TEXTURES_DIR, category);
   for (const e of ALLOWED_EXTS) {

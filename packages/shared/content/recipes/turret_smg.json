@@ -1,0 +1,34 @@
+{
+  "id": "turret_smg",
+  "name": "SMG Turret",
+  "inputs": [
+    {
+      "kind": "weapon",
+      "weaponId": "smg",
+      "count": 1
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "turret_smg",
+    "count": 1
+  },
+  "workstation": "electronics_bench",
+  "blueprintId": "bp_turret_smg",
+  "craftTimeMs": 60000
+}

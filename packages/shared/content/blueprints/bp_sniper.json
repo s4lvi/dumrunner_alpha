@@ -1,0 +1,11 @@
+{
+  "id": "bp_sniper",
+  "recipeId": "sniper",
+  "displayName": "Sniper Rifle",
+  "description": "Pinpoint accuracy, devastating per-shot damage, four-round mag. Crafted at the Weapon Bench.",
+  "cost": 10,
+  "tier": "rare",
+  "prerequisites": [
+    "bp_rifle"
+  ]
+}

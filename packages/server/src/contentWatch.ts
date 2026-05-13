@@ -23,21 +23,29 @@ const AREAS = [
   'props',
   'rooms',
   'corridors',
+  'blueprints',
+  'weapons',
+  'recipes',
+  'attachments',
 ] as const;
 const DEBOUNCE_MS = 250;
 
 export type ContentReloader = {
   // Reload the area's registry. Implementations call the matching
   // init helper (initBiomes / initRooms / initProps / initTemplates
-  // / initCorridors). Some areas (enemies) have downstream effects —
-  // when an EnemyDef changes, both the shared visuals registry AND
-  // the server-side AI templates need to refresh. The implementation
-  // owns ordering.
+  // / initCorridors / initBlueprints). Some areas (enemies) have
+  // downstream effects — when an EnemyDef changes, both the shared
+  // visuals registry AND the server-side AI templates need to
+  // refresh. The implementation owns ordering.
   biomes(): Promise<void>;
   enemies(): Promise<void>;
   props(): Promise<void>;
   rooms(): Promise<void>;
   corridors(): Promise<void>;
+  blueprints(): Promise<void>;
+  weapons(): Promise<void>;
+  recipes(): Promise<void>;
+  attachments(): Promise<void>;
 };
 
 export function startContentWatch(reloader: ContentReloader): () => void {

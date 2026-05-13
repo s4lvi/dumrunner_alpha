@@ -1,0 +1,25 @@
+{
+  "id": "smg",
+  "label": "SMG",
+  "family": "smg",
+  "color": 16769126,
+  "description": "High rate of fire, low damage per shot. Hose down packs.",
+  "craftingStation": "workbench",
+  "ranged": {
+    "damage": 12,
+    "fireIntervalMs": 90,
+    "projectileSpeed": 2200,
+    "projectileTtlMs": 700,
+    "projectileRadius": 3,
+    "pelletCount": 1,
+    "spreadRad": 0.07,
+    "color": 16769126,
+    "ammoKind": "smg_basic",
+    "accuracy": 0.55,
+    "magazineSize": 30,
+    "reloadMs": 1700,
+    "projectile": {
+      "kind": "single"
+    }
+  }
+}

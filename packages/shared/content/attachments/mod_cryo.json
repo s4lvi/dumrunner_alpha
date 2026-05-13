@@ -1,0 +1,15 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_cryo",
+  "displayName": "Cryo Coil",
+  "description": "Hits chill the target — 35% slow for 3s.",
+  "adjective": "Frost",
+  "family": null,
+  "effect": {},
+  "imbue": {
+    "kind": "slow_pct",
+    "magnitude": 0.35,
+    "durationMs": 3000,
+    "label": "Chilled"
+  }
+}

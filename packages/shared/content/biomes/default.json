@@ -1,6 +1,7 @@
 {
   "id": "default",
   "label": "Default",
+  "kind": "dungeon",
   "dominantHazard": "none",
   "palette": {
     "floor": "#1f242c",
@@ -8,16 +9,16 @@
     "accent": "#94a3b8"
   },
   "generation": {
-    "roomCountMin": 12,
+    "roomCountMin": 20,
     "roomCountMax": 32,
     "roomSizeMin": 4,
     "roomSizeMax": 18,
     "corridorWidth": 1,
     "lockCorridorWidth": true,
     "branching": 0.59,
-    "roomTemplateChance": 0.25,
+    "roomTemplateChance": 0,
     "tunnelerCount": 1,
-    "tunnelerStepBudget": 5000,
+    "tunnelerStepBudget": 10000,
     "turnChance": 0.28,
     "roomChance": 0.32,
     "widthChangeChance": 0.052,
@@ -25,7 +26,7 @@
     "enemyDensity": 0.05,
     "lootDensity": 0.4,
     "hazardIntensity": 0,
-    "safeRoomChance": 1,
+    "safeRoomChance": 0,
     "extremeRoomChance": 0
   },
   "enemyRoster": [
@@ -85,5 +86,6 @@
         "blocksProjectiles": true
       }
     ]
-  }
+  },
+  "wallHeightTiles": 1.2
 }

@@ -1,0 +1,25 @@
+{
+  "id": "sniper",
+  "label": "Sniper Rifle",
+  "family": "sniper",
+  "color": 16638023,
+  "description": "Pinpoint accuracy, devastating per-shot damage, four-round mag.",
+  "craftingStation": "workbench",
+  "ranged": {
+    "damage": 140,
+    "fireIntervalMs": 1400,
+    "projectileSpeed": 3600,
+    "projectileTtlMs": 1800,
+    "projectileRadius": 4,
+    "pelletCount": 1,
+    "spreadRad": 0,
+    "color": 16638023,
+    "ammoKind": "sniper_rounds",
+    "accuracy": 0.99,
+    "magazineSize": 4,
+    "reloadMs": 2400,
+    "projectile": {
+      "kind": "single"
+    }
+  }
+}

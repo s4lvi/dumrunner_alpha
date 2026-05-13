@@ -34,7 +34,7 @@ export function FieldRow({
   children,
 }: {
   label: string;
-  hint?: string;
+  hint?: ReactNode;
   children: ReactNode;
 }) {
   return (

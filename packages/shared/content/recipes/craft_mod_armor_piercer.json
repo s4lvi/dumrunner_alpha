@@ -1,0 +1,25 @@
+{
+  "id": "craft_mod_armor_piercer",
+  "name": "AP Core Mod",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 7
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "attachment",
+    "defId": "mod_armor_piercer",
+    "count": 1
+  },
+  "workstation": "weapon_bench",
+  "blueprintId": "bp_mod_armor_piercer",
+  "craftTimeMs": 40000,
+  "stationTier": 3
+}

@@ -29,6 +29,7 @@ import {
   Graphics,
   Mesh,
   MeshGeometry,
+  Sprite,
   Text,
   TilingSprite,
   type Texture,
@@ -49,7 +50,12 @@ import type {
 } from '@dumrunner/shared';
 import {
   BUILDING_REGISTRY,
+  WEAPON_FAMILY,
+  WEAPON_PROJECTILE_ANIM,
+  WEAPON_VIEW_ANIM,
+  biomePaletteFor,
   biomeTileVariantsFor,
+  biomeWallHeightTilesFor,
   decodeTileGrid,
   enemyVisualFor,
   propVisualFor,
@@ -62,6 +68,31 @@ import {
 } from '@dumrunner/shared';
 import type { GameHandle, GameInit, SceneState } from './pixi';
 import { buildingsToMinimapList, type MinimapSnapshot } from './minimap';
+import {
+  dropEntityAnim,
+  getAnimationFrame,
+  playEntityState,
+} from '../entityAnimations';
+import { getBiomeTileTexture } from '../biomeAnimations';
+
+const ENEMY_DEATH_ANIM_MS = 2000;
+function enemyAnimKey(id: string): string {
+  return `enemy::${id}`;
+}
+function propAnimKey(id: string): string {
+  return `prop::${id}`;
+}
+function projectileAnimKey(id: string): string {
+  return `projectile::${id}`;
+}
+
+// Per-equipped-weapon view-model controller key. Reusing the
+// same key for every session-equip of the same weapon means the
+// idle loop's phase carries — minor visual artefact at most, and
+// avoids creating + destroying a controller every hotbar switch.
+function viewModelKey(weaponId: string): string {
+  return `view_model::${weaponId}`;
+}
 
 // ---------- tuning ----------
 // VERTICAL field of view. Horizontal FOV is derived per frame
@@ -277,6 +308,18 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   let selfLastDamageAt = 0;
   let selfLastHp = init.self.hp;
   const enemyHitAt = new Map<string, number>();
+  // Animation Phase C: enemies whose death animation is playing
+  // out. removeEnemy enqueues them here (with the trigger time)
+  // instead of deleting; the render loop continues to draw them
+  // running the 'death' state, and the periodic sweep below drops
+  // them after ENEMY_DEATH_ANIM_MS elapses. Enemies without an
+  // animation manifest skip this and delete immediately.
+  const dyingEnemies = new Map<string, number>();
+  // Same deferred-removal pattern for props that just hit 0 HP /
+  // got prop_destroyed. The destroy animation gets ~600ms to play
+  // out (shorter than enemy death — props pop, not pose).
+  const PROP_DESTROY_ANIM_MS = 600;
+  const dyingProps = new Map<string, number>();
   // Build mode: kind to place, or null when not building. Pending action is
   // resolved during the next render so a click reads the latest target tile.
   let buildKind: import('@dumrunner/shared').BuildingKind | null = null;
@@ -324,6 +367,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // it sits at the right depth; kept in its own Graphics so it
   // doesn't share state with the per-sprite container.
   const buildGhostLayer = new Graphics();
+  // First-person weapon view-model. Static sprite anchored bottom-
+  // centre of the canvas. Texture comes from getFpsOverrideTexture
+  // ('weapon_view', equippedWeapon); hidden when the player has
+  // nothing equipped or no sprite is authored. Animation states
+  // (fire / reload / idle bob) ship in Phase C.
+  const viewModelSprite = new Sprite();
+  viewModelSprite.anchor.set(0.5, 1);
+  viewModelSprite.visible = false;
   const hudLayer = new Graphics();
 
   // Texture cache for the FPS wall pass. Mirrors the iso renderer's
@@ -444,6 +495,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   root.addChild(wallCapLayer);
   root.addChild(spritesContainer);
   root.addChild(buildGhostLayer);
+  // View-model sits above the world but below the HUD overlays
+  // (damage flash, pause tint) so a red full-screen flash still
+  // tints the gun.
+  root.addChild(viewModelSprite);
   root.addChild(hudLayer);
   root.addChild(hpText);
   root.addChild(staminaText);
@@ -885,10 +940,31 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // surface skybox under the literal id 'surface'. Keep reading
       // it so existing uploads survive the migration.
       (isSurface ? getFpsOverrideTexture('biome_skybox', 'surface') : null);
+    // Single timestamp used by all Phase D biome animation
+    // lookups this frame — floor / ceiling strips share it with
+    // the per-column wall sampler below so cells advance in
+    // lockstep when their offsets agree.
+    const nowMs = performance.now();
+    // Phase D: animated frame wins, static override is the
+    // fallback. For floor/ceiling the cellSeed is 0 — the strip
+    // mesh draws ONE texture across many cells, so we can't roll
+    // per-cell offsets without subdividing the mesh. Different
+    // variant ids (if authored) drift relative to each other
+    // because each variant has its own manifest. Per-cell flicker
+    // on floor/ceiling is a follow-up that needs per-cell mesh
+    // subdivision — flagged but out of Phase D scope.
+    // Biome animation-id lookups for the floor/ceiling strips.
+    // Animations are per-biome (single id), not per-variant, so
+    // there's one lookup per surface — the renderer doesn't try
+    // to roll per-cell offsets on the strip mesh.
+    const biomePalette = biomePaletteFor(biomeId);
     const floorTex =
+      getBiomeTileTexture(biomePalette.floorAnimationId, nowMs, 0) ??
       getFpsOverrideTexture('biome_floor', biomeId) ??
       (isSurface ? getFpsOverrideTexture('biome_floor', 'surface') : null);
-    const ceilTex = getFpsOverrideTexture('biome_ceiling', biomeId);
+    const ceilTex =
+      getBiomeTileTexture(biomePalette.ceilingAnimationId, nowMs, 0) ??
+      getFpsOverrideTexture('biome_ceiling', biomeId);
     // Skip the gradient when a biome texture covers that region.
     // Sky gradient is hidden by either a skybox texture OR a ceiling
     // texture (both occupy the above-horizon area). Floor gradient
@@ -964,7 +1040,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       spr.tilePosition.y = horizonY - (texH / 2) * tileScaleY;
       skyboxLayer.addChild(spr);
     }
+    // Camera/eye level is a fixed half-tile up — the player's
+    // physical size doesn't change per biome. Only the room
+    // (walls + ceiling) scales via biomeWallHeightTilesFor.
     const camHeight = WALL_HEIGHT_WORLD / 2;
+    const wallH = WALL_HEIGHT_WORLD * biomeWallHeightTilesFor(biomeId);
+    // Distance from the camera to the ceiling in world units.
+    // = camHeight when wallH = WALL_HEIGHT_WORLD (default 1× biome);
+    // grows when the biome authors a taller ceiling. Used by the
+    // ceiling strip + fog overlay so the perspective stays correct.
+    const ceilHeight = Math.max(1, wallH - camHeight);
     const floorTile = layout?.tileSize ?? 32;
 
     // Per-column raycast. Uses camera-plane rays (Lode-style) rather than
@@ -1014,7 +1099,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         W, H,
         selfX, selfY,
         dirX, dirY, planeX, planeY,
-        camHeight, horizonY,
+        // Ceiling sits `ceilHeight` above the camera (asymmetric
+        // when the biome's wallHeightTiles ≠ 1). The strip routine
+        // takes "distance from camera to the surface" — feed it
+        // the right value per surface.
+        ceilHeight, horizonY,
         floorTile,
         ceilTex,
         ceilingLayer,
@@ -1033,7 +1122,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     }
     if (ceilTex && horizonY > 0) {
       paintFloorOrCeilingFogOverlay(
-        'ceiling', wallLayer, W, H, camHeight, horizonY, palette.fog,
+        'ceiling', wallLayer, W, H, ceilHeight, horizonY, palette.fog,
       );
     }
 
@@ -1061,10 +1150,20 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         const zPerp = zHit.dist * (ux * dirX + uy * dirY);
         if (zPerp > 0.0001) {
           zBuffer[i] = zPerp;
-          const fullWallH = (WALL_HEIGHT_WORLD * H) / zPerp;
           const heightMult = stationHeightMultFor(zHit);
-          const lineH = fullWallH * heightMult;
-          const groundY = horizonY + fullWallH / 2;
+          // Floor anchor uses the (biome-independent) camera-to-
+          // floor distance. Two cases above the floor:
+          //   heightMult >= 1 → room-spanning wall, top reaches the
+          //     biome's ceiling (asymmetric when wallH ≠ 2*camHeight).
+          //   heightMult <  1 → short physical obstacle (station,
+          //     waist-high prop). Stays at its TILE_SIZE-relative
+          //     size; biome ceiling doesn't affect it.
+          const belowH = (camHeight * H) / zPerp;
+          const groundY = horizonY + belowH;
+          const lineH =
+            heightMult >= 1
+              ? belowH + (ceilHeight * H) / zPerp
+              : (WALL_HEIGHT_WORLD * heightMult * H) / zPerp;
           wallTopBuf[i] = groundY - lineH;
         }
       }
@@ -1078,9 +1177,15 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         const perp = hit.dist * (ux * dirX + uy * dirY);
         if (perp <= 0.0001) continue;
         const heightMult = stationHeightMultFor(hit);
-        const fullWallH = (WALL_HEIGHT_WORLD * H) / perp;
-        const lineH = fullWallH * heightMult;
-        const groundY = horizonY + fullWallH / 2;
+        // Same split as the z-buffer pass above: room walls take
+        // the biome's asymmetric ceiling; short obstacles stay at
+        // their TILE_SIZE-relative height.
+        const belowH = (camHeight * H) / perp;
+        const groundY = horizonY + belowH;
+        const lineH =
+          heightMult >= 1
+            ? belowH + (ceilHeight * H) / perp
+            : (WALL_HEIGHT_WORLD * heightMult * H) / perp;
         const top = groundY - lineH;
 
         // Building hits use the per-kind override (`building/<kind>`).
@@ -1105,6 +1210,31 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         } else if (hit.isBuilding) {
           tex = getFpsOverrideTexture('building', hit.buildingKind ?? 'wall');
         } else {
+          // Phase D: per-cell phase offset for biome wall
+          // animations. Each cell rolls its own time offset
+          // (decision #3) so flickering walls don't pulse in
+          // unison. Reuses pickCellVariant's hash with a wide
+          // variantCount so the offset distribution is even.
+          const cellSeed =
+            layout?.variantSeed !== undefined
+              ? pickCellVariant(
+                  layout.variantSeed,
+                  hit.cellX,
+                  hit.cellY,
+                  997,
+                )
+              : 0;
+          // The biome's wall animation (single id per biome) is
+          // shared across variants — variant textures still pick
+          // their own static fallback, but a single animation
+          // drives the frame across all of them. Per-variant
+          // animation would need its own model and isn't authored
+          // today.
+          const wallAnimTex = getBiomeTileTexture(
+            biomePalette.wallAnimationId,
+            nowMs,
+            cellSeed,
+          );
           const variants = biomeTileVariantsFor(biomeId, 'wall');
           let variantTex: Texture | null = null;
           if (variants.length > 0 && layout?.variantSeed !== undefined) {
@@ -1114,9 +1244,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
               hit.cellY,
               variants.length,
             );
-            variantTex = getFpsOverrideTexture('biome_wall', variants[idx]);
+            const variantId = variants[idx];
+            variantTex = getFpsOverrideTexture('biome_wall', variantId);
           }
           tex =
+            wallAnimTex ??
             variantTex ??
             getFpsOverrideTexture('biome_wall', biomeId) ??
             getFpsOverrideTexture('building', 'wall');
@@ -1293,8 +1425,49 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     }
 
     drawSprites(W, H, palette.fog, horizonY);
-    drawBuildGhost(W, H, palette.fog, horizonY);
+    drawBuildGhost(W, H, palette.fog, horizonY, camHeight, ceilHeight);
+    drawViewModel(W, H);
     drawHud(W, H);
+  }
+
+  // First-person view-model. Animation Phase C: prefer the
+  // controller-driven frame when a weapon_view manifest is
+  // authored — falls through to the legacy static sprite when
+  // no manifest exists. Scale to ~42% of canvas height for
+  // boomer-shooter framing.
+  const VIEW_MODEL_SCREEN_FRACTION = 0.42;
+  function drawViewModel(W: number, H: number) {
+    if (!equippedWeapon) {
+      viewModelSprite.visible = false;
+      return;
+    }
+    // Animated path. The controller idles by default; fire +
+    // reload are triggered via projectile_spawned and
+    // notifyReloadStarted respectively. Animation lookup goes
+    // via the weapon's viewAnimationId field — null = static
+    // sprite fallback only.
+    const now = performance.now();
+    const animId = WEAPON_VIEW_ANIM[equippedWeapon];
+    const animTex = getAnimationFrame(
+      animId,
+      viewModelKey(equippedWeapon),
+      now,
+      'idle',
+    );
+    const tex = animTex ?? getFpsOverrideTexture('weapon_view', equippedWeapon);
+    if (!tex || tex.width <= 0 || tex.height <= 0) {
+      viewModelSprite.visible = false;
+      return;
+    }
+    if (viewModelSprite.texture !== tex) {
+      viewModelSprite.texture = tex;
+    }
+    const targetH = H * VIEW_MODEL_SCREEN_FRACTION;
+    const scale = targetH / tex.height;
+    viewModelSprite.scale.set(scale);
+    viewModelSprite.x = W / 2;
+    viewModelSprite.y = H;
+    viewModelSprite.visible = true;
   }
 
   // ---------- build mode ----------
@@ -1302,7 +1475,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // there, and resolve any queued click. With no pitch, "the tile in
   // front of the player" is a fixed forward-distance pick — predictable
   // and matches the GDD's tile-grid placement semantics.
-  function drawBuildGhost(W: number, H: number, fogColor: number, horizonY: number) {
+  function drawBuildGhost(
+    W: number,
+    H: number,
+    fogColor: number,
+    horizonY: number,
+    camHeight: number,
+    ceilHeight: number,
+  ) {
     if (buildKind === null || !layout) {
       pendingBuildAction = null;
       return;
@@ -1321,7 +1501,6 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // since a horizontal ray never hits the ground.
     const dirX = Math.cos(yaw);
     const dirY = Math.sin(yaw);
-    const camHeight = WALL_HEIGHT_WORLD / 2;
     const maxReach = (BUILD_RADIUS_TILES + buildRadiusBonus + 0.5) * tileSize;
     let reach: number;
     if (pitch < -0.08) {
@@ -1399,8 +1578,13 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       if (perp <= 0.0001) continue; // camera inside the ghost
       if (perp >= zBuffer[i]) continue; // wall in front
 
-      const lineH = (WALL_HEIGHT_WORLD * H) / perp;
-      const top = horizonY - lineH / 2;
+      // Ghost cube fills the room — matches what an actual placed
+      // wall would look like in this biome. Asymmetric camera /
+      // ceiling height handled the same way as the main raycast
+      // loop's wall column.
+      const belowH = (camHeight * H) / perp;
+      const lineH = belowH + (ceilHeight * H) / perp;
+      const top = horizonY - (ceilHeight * H) / perp;
       const fogged = applyFog(baseColor, perp, fogColor);
       buildGhostLayer
         .rect(screenX, top, COLUMN_STEP_PX, lineH)
@@ -1560,8 +1744,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // the sprite renders as a textured billboard (per-column UV
     // strip with z-test); otherwise falls back to the flat-color
     // column path.
-    texCategory?: 'enemy' | 'building' | 'prop' | 'player' | 'material';
+    texCategory?: 'enemy' | 'building' | 'prop' | 'player' | 'material' | 'projectile';
     texId?: string;
+    // Animation Phase C: pre-resolved Texture used in place of
+    // the (texCategory, texId) lookup. Set by the per-entity
+    // animation controllers so the renderer doesn't need to know
+    // about manifests — it just takes the frame and draws it.
+    // Wins over the (texCategory, texId) lookup when both are set.
+    directTexture?: Texture;
     // When true, anchor the sprite's CENTRE at eye level (the
     // horizon line) rather than its bottom at the floor. Used for
     // projectiles so bullets fly through the air at the muzzle's
@@ -1583,6 +1773,32 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // above the solid-fill spriteLayer) so existing sprite code
   // can keep emitting solid columns underneath as a fallback.
 
+  // Resolve the texture-override id for a projectile sprite. Per-
+  // weapon-id wins; falls through to weapon family; returns
+  // undefined when neither is authored (procedural color path).
+  function resolveProjectileTexId(weaponId: string | undefined): string | undefined {
+    if (!weaponId) return undefined;
+    if (getFpsOverrideTexture('projectile', weaponId)) return weaponId;
+    const family = WEAPON_FAMILY[weaponId];
+    if (family && getFpsOverrideTexture('projectile', family)) return family;
+    return undefined;
+  }
+
+  // Animation-library version: resolve the animationId for a
+  // projectile. Per-weapon override on the weapon's WeaponDef
+  // wins; falls through to the family-default weapon's
+  // projectileAnimationId. The renderer's hot path calls this
+  // every projectile per frame so the helper stays O(1).
+  function resolveProjectileAnimId(weaponId: string | undefined): string | undefined {
+    if (!weaponId) return undefined;
+    const direct = WEAPON_PROJECTILE_ANIM[weaponId];
+    if (direct) return direct;
+    const family = WEAPON_FAMILY[weaponId];
+    if (family && WEAPON_PROJECTILE_ANIM[family]) {
+      return WEAPON_PROJECTILE_ANIM[family];
+    }
+    return undefined;
+  }
 
   function drawSprites(W: number, H: number, fogColor: number, horizonY: number) {
     spritesScratch.length = 0;
@@ -1619,22 +1835,57 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       );
     }
     const flashWindow = 90;
+    const nowMs = performance.now();
+    // Periodic sweep: drop dying enemies whose death-animation
+    // window expired. Cheap — usually empty. Doing it here keeps
+    // the cleanup attached to the render loop's clock so missed
+    // ticks (tabbed-away browser) don't strand entries forever.
+    for (const [id, startedAt] of dyingEnemies) {
+      if (nowMs - startedAt > ENEMY_DEATH_ANIM_MS) {
+        enemies.delete(id);
+        enemyHitAt.delete(id);
+        dyingEnemies.delete(id);
+        dropEntityAnim(enemyAnimKey(id));
+      }
+    }
     for (const e of enemies.values()) {
       // hp=0 enemies are pending an enemy_killed cleanup that
-      // can land a tick or two after enemy_damaged. Skip
-      // rendering them so a V-cycle in the meantime doesn't
-      // carry "dead but still on screen" sprites into FPS.
-      if (e.hp <= 0) continue;
+      // can land a tick or two after enemy_damaged. Dying
+      // enemies (death anim window) stay rendered; non-dying
+      // hp=0 enemies skip.
+      const dying = dyingEnemies.has(e.id);
+      if (e.hp <= 0 && !dying) continue;
       const v = enemyVisualFor(e.kind);
       // White hit-flash for ~90ms on damage. Sprite is the same shape; just
       // tinted toward white.
       const hitAt = enemyHitAt.get(e.id) ?? 0;
-      const hitT = Math.max(0, 1 - (performance.now() - hitAt) / flashWindow);
+      const hitT = Math.max(0, 1 - (nowMs - hitAt) / flashWindow);
       const color =
         hitT > 0
           ? blendColor(v.color, 0xffffff, hitT * 0.85)
           : v.color;
-      pushSprite(e.x, e.y, color, v.size * 2, 'enemy', e.kind);
+      // Animation Phase C: prefer controller-driven frame when a
+      // manifest is authored. Default state is 'idle'; the hit /
+      // death triggers from setEnemyHp / removeEnemy override that
+      // via playEntityState. Falls through to the static texture
+      // override when no animation is bound.
+      const animTex = getAnimationFrame(
+        v.animationId,
+        enemyAnimKey(e.id),
+        nowMs,
+        'idle',
+      );
+      pushSprite(
+        e.x,
+        e.y,
+        color,
+        v.size * 2,
+        'enemy',
+        e.kind,
+        false,
+        0,
+        animTex ?? undefined,
+      );
     }
     for (const c of corpses.values()) {
       pushSprite(c.x, c.y, CORPSE_COLOR, CORPSE_SIZE);
@@ -1647,10 +1898,20 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // it reads as solid fog colour.
     const PROP_DRAW_DIST_PX = 1536;
     const propMaxDsq = PROP_DRAW_DIST_PX * PROP_DRAW_DIST_PX;
+    // Sweep dying props past their anim window.
+    for (const [id, startedAt] of dyingProps) {
+      if (nowMs - startedAt > PROP_DESTROY_ANIM_MS) {
+        props.delete(id);
+        dyingProps.delete(id);
+        dropEntityAnim(propAnimKey(id));
+      }
+    }
     for (const p of props.values()) {
-      // hp=0 races: also defended in setPropHp, but safe-guard
-      // here in case a snapshot brings a dead one in.
-      if (p.hp <= 0) continue;
+      // Dying props (HP 0, destroy anim mid-play) stay rendered
+      // for the deferred window; everything else with hp<=0 is a
+      // race we skip.
+      const dying = dyingProps.has(p.id);
+      if (p.hp <= 0 && !dying) continue;
       // Container props (E5) render as raycast cubes via the wall
       // pass; skip them here so they don't double-render as a
       // billboard inside their own cube.
@@ -1664,6 +1925,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const visual = propVisualFor(p.kind);
       const propH =
         WALL_HEIGHT_WORLD * (visual.spriteSize ?? 22 / WALL_HEIGHT_WORLD);
+      const animTex = getAnimationFrame(
+        visual.animationId,
+        propAnimKey(p.id),
+        nowMs,
+        'idle',
+      );
       pushSprite(
         p.x,
         p.y,
@@ -1673,6 +1940,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         p.kind,
         false,
         visual.spriteGroundOffset ?? 0,
+        animTex ?? undefined,
       );
     }
     // Turrets — billboard sprites, not raycaster cubes. Position
@@ -1715,6 +1983,22 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const elapsed = (now - spawnedAt) / 1000;
       const px = pr.x + pr.vx * elapsed;
       const py = pr.y + pr.vy * elapsed;
+      // Resolve a projectile sprite override: per-weapon-id first,
+      // then family fallback. When neither is authored, texId is
+      // undefined and pushSprite uses the flat-color path.
+      const projTexId = resolveProjectileTexId(pr.weaponId);
+      // Animation lookup uses the per-weapon (then per-family)
+      // animationId from the WeaponDef. Single-state idle loop
+      // is the default authoring shape for bullets.
+      const projAnimId = resolveProjectileAnimId(pr.weaponId);
+      const animTex = projAnimId
+        ? getAnimationFrame(
+            projAnimId,
+            projectileAnimKey(pr.id),
+            now,
+            'idle',
+          )
+        : null;
       // Bullets fly at the shooter's chest height — anchor centre at
       // the horizon (camera/eye level) rather than bottom-on-floor.
       pushSprite(
@@ -1722,9 +2006,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         py,
         pr.color ?? PROJECTILE_DEFAULT_COLOR,
         8,
-        undefined,
-        undefined,
+        projTexId ? 'projectile' : undefined,
+        projTexId,
         true,
+        0,
+        animTex ?? undefined,
       );
     }
     // Interactables — stairs, extract pad. Rendered as tall, distinctive
@@ -1806,13 +2092,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       // recede instead of popping at full saturation.
       const fogged = applyFog(s.color, transformY, fogColor);
 
-      // Optional texture for this sprite. If present, each visible
-      // stripe gets a Mesh quad with a vertical UV slice; otherwise
-      // fall back to flat-color rects.
+      // Optional texture for this sprite. directTexture (set by
+      // animation controllers with the active frame's Texture)
+      // wins over the (texCategory, texId) override lookup. If
+      // present, each visible stripe gets a Mesh quad with a
+      // vertical UV slice; otherwise fall back to flat-color rects.
       const tex =
-        s.texCategory && s.texId
+        s.directTexture ??
+        (s.texCategory && s.texId
           ? getFpsOverrideTexture(s.texCategory, s.texId)
-          : null;
+          : null);
 
       // Per-column z-test. Iterate at the column step so we match the wall
       // pass; for each visible stripe, paint either a textured quad or
@@ -1944,10 +2233,17 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       y: number,
       color: number,
       height: number,
-      texCategory?: 'enemy' | 'building' | 'prop' | 'player' | 'material',
+      texCategory?:
+        | 'enemy'
+        | 'building'
+        | 'prop'
+        | 'player'
+        | 'material'
+        | 'projectile',
       texId?: string,
       floats: boolean = false,
       groundOffset: number = 0,
+      directTexture?: Texture,
     ) {
       const dx = x - selfX;
       const dy = y - selfY;
@@ -1961,6 +2257,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         texId,
         floats,
         groundOffset,
+        directTexture,
       });
     }
   }
@@ -2534,13 +2831,38 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       if (!e) return;
       // Hit flash if HP went down. Server can also send full updates, so
       // gate on a real decrease.
-      if (hp < e.hp) enemyHitAt.set(id, performance.now());
+      if (hp < e.hp) {
+        enemyHitAt.set(id, performance.now());
+        // Animation Phase C: trigger the 'hit' overlay. The
+        // controller's `next: previous` policy on the hit state
+        // returns to the previous state when the anim finishes —
+        // authors typically set this so hit reads as a brief
+        // flash on top of idle / walk.
+        const animId = enemyVisualFor(e.kind).animationId;
+        playEntityState(animId, enemyAnimKey(id), 'hit', { interrupt: true });
+      }
       e.hp = hp;
       e.maxHp = maxHp;
     },
     removeEnemy(id) {
-      enemies.delete(id);
-      enemyHitAt.delete(id);
+      const e = enemies.get(id);
+      // Animation Phase C: if an enemy manifest exists, play the
+      // death animation and defer actual removal so the death
+      // frames render (otherwise we'd cut to corpse instantly).
+      // The death anim's last frame becomes the visual the
+      // server's corpse appears to inherit, per the locked
+      // decision. Drop the controller after the deferral window.
+      if (e) {
+        const animId = enemyVisualFor(e.kind).animationId;
+        playEntityState(animId, enemyAnimKey(id), 'death', {
+          interrupt: true,
+        });
+        dyingEnemies.set(id, performance.now());
+      } else {
+        enemies.delete(id);
+        enemyHitAt.delete(id);
+        dropEntityAnim(enemyAnimKey(id));
+      }
     },
     spawnProjectile(p) {
       projectiles.set(p.id, p);
@@ -2554,11 +2876,23 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         p.ownerCharacterId === init.self.characterId
       ) {
         lastFireFlashAt = performance.now();
+        // View-model fire anim — server confirmed a real shot
+        // (this projectile_spawned came from us), so the visual
+        // matches what the player actually fired.
+        if (equippedWeapon) {
+          playEntityState(
+            WEAPON_VIEW_ANIM[equippedWeapon],
+            viewModelKey(equippedWeapon),
+            'fire',
+            { interrupt: true },
+          );
+        }
       }
     },
     despawnProjectile(id) {
       projectiles.delete(id);
       projectileSpawnedAt.delete(id);
+      dropEntityAnim(projectileAnimKey(id));
     },
     spawnLoot(l) {
       loot.set(l.id, l);
@@ -2597,15 +2931,35 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         p.hp = hp;
         p.maxHp = maxHp;
         if (hp <= 0) {
+          // Animation Phase C: play the destroy one-shot and
+          // defer cleanup. Walls/projectiles/etc. still happen
+          // server-side; this is purely a visual delay so the
+          // anim is allowed to render. Unindex eagerly so the
+          // prop stops occluding raycasts immediately.
           unindexProp(p);
-          props.delete(id);
+          const animId = propVisualFor(p.kind).animationId;
+          playEntityState(animId, propAnimKey(id), 'destroy', {
+            interrupt: true,
+          });
+          dyingProps.set(id, performance.now());
         }
       }
     },
     removeProp(id) {
       const p = props.get(id);
-      if (p) unindexProp(p);
-      props.delete(id);
+      if (p) {
+        unindexProp(p);
+        // Same defer pattern for server-fired prop_destroyed:
+        // play the destroy anim, leave the entry visible for the
+        // window, then clean up via the render-loop sweep.
+        const animId = propVisualFor(p.kind).animationId;
+        playEntityState(animId, propAnimKey(id), 'destroy', {
+          interrupt: true,
+        });
+        dyingProps.set(id, performance.now());
+      } else {
+        dropEntityAnim(propAnimKey(id));
+      }
     },
     changeProp(p) {
       // E5: prop_changed updates an existing prop's state
@@ -2632,6 +2986,20 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     setHordeActive(active: boolean) {
       hordeActive = active;
+    },
+    notifyReloadStarted() {
+      if (equippedWeapon) {
+        // View-model controller is keyed per weapon kind — every
+        // equipped weapon shares its slot's controller across
+        // sessions. interrupt: true so a chain-reload (rare) plays
+        // the animation from the top each time.
+        playEntityState(
+          WEAPON_VIEW_ANIM[equippedWeapon],
+          viewModelKey(equippedWeapon),
+          'reload',
+          { interrupt: true },
+        );
+      }
     },
     swapScene(state) {
       applySceneState(state);

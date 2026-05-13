@@ -6,6 +6,9 @@
 // the client trusts the server.
 
 import { z } from 'zod';
+import type { BlueprintCatalogEntry, Recipe } from './crafting';
+import type { WeaponDef } from './content/types';
+import type { AttachmentDef, AttachmentStatRanges } from './inventory';
 import type { Equipment, Inventory, InventorySlot, MaterialKind } from './inventory';
 
 // ---------- Parts (loot / inventory) ----------
@@ -428,6 +431,14 @@ export type ProjectileState = {
   vy: number;
   // Optional client-render hint (RGB int). Hardcoded white if omitted.
   color?: number;
+  // Which weapon spawned this projectile. Used by the client to
+  // resolve a sprite override for the projectile billboard:
+  //   1. ('projectile', weaponId)          — per-weapon override
+  //   2. ('projectile', WEAPON_FAMILY[id]) — family fallback
+  //   3. flat-color fill                   — procedural default
+  // Server populates this for player-fired projectiles; turrets +
+  // enemy fire leave it unset and fall through to the color path.
+  weaponId?: string;
 };
 
 // ---------- Client → Server ----------
@@ -942,13 +953,41 @@ export type ServerMessage =
       // Blueprint ids the player currently has access to (per-cycle +
       // persistent, merged). Used by the client to enable/disable recipes.
       knownBlueprints: string[];
+      // Full blueprint catalog (every entry, including hidden ones).
+      // Populated from packages/shared/content/blueprints/*.json at
+      // server boot. Client calls setBlueprintCatalog on receive so
+      // the UI / DAG view sees authored data without a redeploy.
+      blueprints: BlueprintCatalogEntry[];
+      // Full weapon registry. Populated from
+      // packages/shared/content/weapons/*.json at server boot.
+      // Client calls setWeaponRegistry on receive so WEAPON_STATS /
+      // MELEE_STATS / WEAPON_FAMILY agree across both halves.
+      weapons: WeaponDef[];
+      // Full recipe registry. Populated from
+      // packages/shared/content/recipes/*.json at server boot.
+      // Client calls setRecipes on receive so crafting modals + the
+      // blueprint editor pick up authored changes without a redeploy.
+      recipes: Recipe[];
+      // Attachment classes. Disk format folds def + roll ranges into
+      // one entry; clients call setAttachmentRegistry on receive
+      // which splits them back into ATTACHMENT_DEFS +
+      // ATTACHMENT_STAT_RANGES.
+      attachments: Array<AttachmentDef & { rolls?: AttachmentStatRanges }>;
       // Enemy visual registry derived from the JSON content
       // (packages/shared/content/enemies/*.json). Client
       // populates the runtime ENEMY_VISUALS map from this so a
       // newly-authored enemy renders without a deploy.
       enemyVisuals: Record<
         string,
-        { shape: 'square' | 'circle' | 'triangle'; color: number; size: number }
+        {
+          shape: 'square' | 'circle' | 'triangle';
+          color: number;
+          size: number;
+          // Library reference to an AnimationDef. When set, the
+          // FPS renderer plays this animation against the enemy's
+          // server-side state machine.
+          animationId?: string;
+        }
       >;
       // Per-prop visual fields the client renderer needs (FPS
       // billboard size + ground offset + tint fallback). Server
@@ -960,6 +999,7 @@ export type ServerMessage =
           tint?: string;
           spriteSize?: number;
           spriteGroundOffset?: number;
+          animationId?: string;
         }
       >;
       // Biome registry — per-id palette + hazard summary used by
@@ -987,6 +1027,15 @@ export type ServerMessage =
           // Empty arrays preserve the single-texture fallback.
           wallTextureIds: string[];
           floorTextureIds: string[];
+          // FPS-renderer wall + ceiling height, in tiles. Optional
+          // — falls back to 1.0 when omitted.
+          wallHeightTiles?: number;
+          // Library references for ambient looping animations on
+          // each of the biome's three surface types. Empty = static
+          // texture only.
+          wallAnimationId?: string;
+          floorAnimationId?: string;
+          ceilingAnimationId?: string;
         }
       >;
     }

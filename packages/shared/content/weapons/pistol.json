@@ -1,0 +1,26 @@
+{
+  "id": "pistol",
+  "label": "Pistol",
+  "family": "pistol",
+  "color": 16448250,
+  "description": "Balanced starter sidearm. Slow and drifty so mods/affixes/tier-up have something to fix.",
+  "craftingStation": "workbench",
+  "ranged": {
+    "damage": 22,
+    "fireIntervalMs": 380,
+    "projectileSpeed": 2200,
+    "projectileTtlMs": 800,
+    "projectileRadius": 4,
+    "pelletCount": 1,
+    "spreadRad": 0,
+    "color": 16448250,
+    "ammoKind": "pistol_basic",
+    "accuracy": 0.65,
+    "magazineSize": 12,
+    "reloadMs": 1400,
+    "projectile": {
+      "kind": "single"
+    }
+  },
+  "viewAnimationId": "anim_mp4nc2dr"
+}

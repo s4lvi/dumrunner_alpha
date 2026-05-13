@@ -1,0 +1,11 @@
+{
+  "id": "bp_rifle",
+  "recipeId": "rifle",
+  "displayName": "Rifle",
+  "description": "High-damage long-range slug. Slow rate of fire. Crafted at the Workbench.",
+  "cost": 6,
+  "tier": "rare",
+  "prerequisites": [
+    "bp_smg"
+  ]
+}

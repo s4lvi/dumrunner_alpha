@@ -1,0 +1,11 @@
+{
+  "id": "bp_heavy",
+  "recipeId": "heavy",
+  "displayName": "Heavy Slug Cannon",
+  "description": "Tank-buster slug. Slow projectile, slow cadence, ridiculous damage. Crafted at the Weapon Bench.",
+  "cost": 10,
+  "tier": "rare",
+  "prerequisites": [
+    "bp_rifle"
+  ]
+}

@@ -24,6 +24,25 @@ function k(category: string, id: string): string {
   return `${category}::${id}`;
 }
 
+// Per-state spritesheet key. Animation Phase B uploads land at
+// public/textures/<category>/<id>/<state>.<ext>; the API exposes
+// them in the GET listing with a `state` field which gets keyed
+// here so callers can fetch by (category, id, state).
+function ks(category: string, id: string, state: string): string {
+  return `${category}::${id}::${state}`;
+}
+
+// Per-frame key for source='frames' authoring. PNGs land at
+// public/textures/<category>/<id>/<state>/<frameIndex>.<ext>.
+function kf(
+  category: string,
+  id: string,
+  state: string,
+  frame: number,
+): string {
+  return `${category}::${id}::${state}::${frame}`;
+}
+
 async function loadCache(): Promise<void> {
   if (cacheLoaded) return;
   if (cacheLoading) return cacheLoading;
@@ -32,10 +51,22 @@ async function loadCache(): Promise<void> {
       const r = await fetch('/api/editor/textures');
       if (!r.ok) return;
       const payload = (await r.json()) as {
-        entries?: { category: string; id: string; url: string }[];
+        entries?: {
+          category: string;
+          id: string;
+          state?: string;
+          frame?: number;
+          url: string;
+        }[];
       };
       for (const e of payload.entries ?? []) {
-        cache.set(k(e.category, e.id), e.url);
+        if (e.state && typeof e.frame === 'number') {
+          cache.set(kf(e.category, e.id, e.state, e.frame), e.url);
+        } else if (e.state) {
+          cache.set(ks(e.category, e.id, e.state), e.url);
+        } else {
+          cache.set(k(e.category, e.id), e.url);
+        }
       }
     } catch {
       // No server / offline — leave cache empty. Renderers fall
@@ -57,6 +88,54 @@ export function getOverride(category: string, id: string): string | null {
     if (typeof window !== 'undefined') void loadCache();
   }
   return cache.get(k(category, id)) ?? null;
+}
+
+// Per-state lookup — returns the spritesheet URL for one
+// animation state, or null when the asset hasn't authored that
+// state. Same cache + subscribe model as getOverride.
+export function getStateOverride(
+  category: string,
+  id: string,
+  state: string,
+): string | null {
+  if (!cacheLoaded && !cacheLoading) {
+    if (typeof window !== 'undefined') void loadCache();
+  }
+  return cache.get(ks(category, id, state)) ?? null;
+}
+
+// Convenience: every authored (state, url) pair for a given
+// (category, id). Returned in arbitrary order; callers usually
+// resolve by name from a known state list rather than iterating.
+export function listStateOverrides(
+  category: string,
+  id: string,
+): { state: string; url: string }[] {
+  const prefix = `${category}::${id}::`;
+  const out: { state: string; url: string }[] = [];
+  for (const [key, url] of cache) {
+    if (!key.startsWith(prefix)) continue;
+    // Skip per-frame keys (which contain a second '::'); only
+    // surface the spritesheet-level entries here.
+    const tail = key.slice(prefix.length);
+    if (tail.includes('::')) continue;
+    out.push({ state: tail, url });
+  }
+  return out;
+}
+
+// Per-frame lookup. Returns null when the frame's PNG hasn't
+// been uploaded (or the asset uses source='sheet' instead).
+export function getFrameOverride(
+  category: string,
+  id: string,
+  state: string,
+  frame: number,
+): string | null {
+  if (!cacheLoaded && !cacheLoading) {
+    if (typeof window !== 'undefined') void loadCache();
+  }
+  return cache.get(kf(category, id, state, frame)) ?? null;
 }
 
 // POSTs the data URL to the API; the API decodes and writes the
@@ -83,6 +162,30 @@ export async function setOverride(
   notify();
 }
 
+// Per-state upload. Same wire shape as setOverride plus a `state`
+// field; writes to <category>/<id>/<state>.<ext> server-side.
+export async function setStateOverride(
+  category: string,
+  id: string,
+  state: string,
+  dataUrl: string,
+): Promise<void> {
+  const r = await fetch('/api/editor/textures', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ category, id, state, dataUrl }),
+  });
+  if (!r.ok) {
+    throw new Error(`save failed: ${r.status}`);
+  }
+  const payload = (await r.json()) as { url?: string };
+  if (typeof payload.url !== 'string') {
+    throw new Error('save response missing url');
+  }
+  cache.set(ks(category, id, state), payload.url);
+  notify();
+}
+
 export async function clearOverride(
   category: string,
   id: string,
@@ -93,6 +196,59 @@ export async function clearOverride(
     body: JSON.stringify({ category, id }),
   });
   cache.delete(k(category, id));
+  notify();
+}
+
+export async function clearStateOverride(
+  category: string,
+  id: string,
+  state: string,
+): Promise<void> {
+  await fetch('/api/editor/textures', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ category, id, state }),
+  });
+  cache.delete(ks(category, id, state));
+  notify();
+}
+
+// Per-frame upload. Writes to <category>/<id>/<state>/<frame>.<ext>.
+export async function setFrameOverride(
+  category: string,
+  id: string,
+  state: string,
+  frame: number,
+  dataUrl: string,
+): Promise<void> {
+  const r = await fetch('/api/editor/textures', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ category, id, state, frame, dataUrl }),
+  });
+  if (!r.ok) {
+    throw new Error(`save failed: ${r.status}`);
+  }
+  const payload = (await r.json()) as { url?: string };
+  if (typeof payload.url !== 'string') {
+    throw new Error('save response missing url');
+  }
+  cache.set(kf(category, id, state, frame), payload.url);
+  notify();
+}
+
+export async function clearFrameOverride(
+  category: string,
+  id: string,
+  state: string,
+  frame: number,
+): Promise<void> {
+  await fetch('/api/editor/textures', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ category, id, state, frame }),
+  });
+  cache.delete(kf(category, id, state, frame));
   notify();
 }
 

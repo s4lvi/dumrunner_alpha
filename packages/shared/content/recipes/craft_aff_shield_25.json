@@ -1,0 +1,29 @@
+{
+  "id": "craft_aff_shield_25",
+  "name": "Hardened Plating (+25 shield)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "attachment",
+    "defId": "aff_shield_25",
+    "count": 1
+  },
+  "workstation": "electronics_bench",
+  "blueprintId": "bp_aff_shield_25",
+  "craftTimeMs": 30000
+}

@@ -956,6 +956,9 @@ export class Scene {
         radius: stats.projectileRadius,
         color: stats.color,
         imbues: imbues.length > 0 ? imbues : undefined,
+        // Stamp the weapon id so the FPS client can swap to a
+        // per-weapon (or per-family) projectile sprite.
+        weaponId: slot.weapon.weaponId,
       });
     }
   }
@@ -3183,6 +3186,7 @@ export class Scene {
     radius: number;
     color: number;
     imbues?: ProjectileRuntime['imbues'];
+    weaponId?: string;
   }): void {
     const id = `p${this.nextProjectileId++}`;
     const proj: ProjectileRuntime = {
@@ -3198,6 +3202,7 @@ export class Scene {
       damage: args.damage,
       radius: args.radius,
       imbues: args.imbues,
+      weaponId: args.weaponId,
     };
     this.projectiles.set(id, proj);
     this.broadcast({ type: 'projectile_spawned', projectile: toProjectileState(proj) });
@@ -3415,5 +3420,6 @@ function toProjectileState(p: ProjectileRuntime): ProjectileState {
     vx: p.vx,
     vy: p.vy,
     color: p.color,
+    weaponId: p.weaponId,
   };
 }

@@ -1,0 +1,29 @@
+{
+  "id": "forge_alloy_mk4",
+  "name": "Precision Alloy (1)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy_mk3",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 1
+    },
+    {
+      "kind": "material",
+      "materialId": "artifact",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "material",
+    "materialId": "alloy_mk4",
+    "count": 1
+  },
+  "workstation": "forge",
+  "blueprintId": null,
+  "craftTimeMs": 60000
+}

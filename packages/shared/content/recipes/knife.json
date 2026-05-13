@@ -1,0 +1,17 @@
+{
+  "id": "knife",
+  "name": "Knife",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 6
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "knife"
+  },
+  "workstation": null,
+  "blueprintId": null
+}

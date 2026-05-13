@@ -1,0 +1,15 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_chem",
+  "displayName": "Chem Injector",
+  "description": "Hits coat the target in poison — 10 dps for 5s.",
+  "adjective": "Acid",
+  "family": null,
+  "effect": {},
+  "imbue": {
+    "kind": "poison_dps",
+    "magnitude": 10,
+    "durationMs": 5000,
+    "label": "Poisoned"
+  }
+}

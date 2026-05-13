@@ -1,0 +1,24 @@
+{
+  "id": "forge",
+  "name": "Forge",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 20
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 8
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "forge",
+    "count": 1
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 30000
+}

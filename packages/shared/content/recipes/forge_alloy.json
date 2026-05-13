@@ -1,0 +1,24 @@
+{
+  "id": "forge_alloy",
+  "name": "Alloy Plate (1)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 12
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "material",
+    "materialId": "alloy",
+    "count": 1
+  },
+  "workstation": "forge",
+  "blueprintId": null,
+  "craftTimeMs": 18000
+}

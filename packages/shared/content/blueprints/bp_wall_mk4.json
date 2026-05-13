@@ -1,0 +1,11 @@
+{
+  "id": "bp_wall_mk4",
+  "recipeId": "wall_mk4",
+  "displayName": "Reactive Wall",
+  "description": "8x wall HP. Alloy + circuit. Crafted at the Forge.",
+  "cost": 14,
+  "tier": "legendary",
+  "prerequisites": [
+    "bp_wall_mk3"
+  ]
+}

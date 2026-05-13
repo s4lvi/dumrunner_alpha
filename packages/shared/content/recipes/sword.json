@@ -1,0 +1,23 @@
+{
+  "id": "sword",
+  "name": "Sword",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 12
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "sword"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_sword",
+  "craftTimeMs": 35000
+}

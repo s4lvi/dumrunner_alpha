@@ -1,0 +1,25 @@
+{
+  "id": "heavy",
+  "label": "Heavy Slug Cannon",
+  "family": "heavy",
+  "color": 16486972,
+  "description": "Tank-buster slug. Slow projectile, slow cadence, ridiculous damage.",
+  "craftingStation": "workbench",
+  "ranged": {
+    "damage": 220,
+    "fireIntervalMs": 1600,
+    "projectileSpeed": 1700,
+    "projectileTtlMs": 700,
+    "projectileRadius": 7,
+    "pelletCount": 1,
+    "spreadRad": 0.04,
+    "color": 16486972,
+    "ammoKind": "heavy_slugs",
+    "accuracy": 0.85,
+    "magazineSize": 5,
+    "reloadMs": 3000,
+    "projectile": {
+      "kind": "single"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "shotgun",
+  "label": "Shotgun",
+  "family": "shotgun",
+  "color": 16747069,
+  "description": "Six-pellet burst. Devastating at point-blank.",
+  "craftingStation": "workbench",
+  "ranged": {
+    "damage": 14,
+    "fireIntervalMs": 700,
+    "projectileSpeed": 1900,
+    "projectileTtlMs": 350,
+    "projectileRadius": 4,
+    "pelletCount": 6,
+    "spreadRad": 0.35,
+    "color": 16747069,
+    "ammoKind": "shotgun_shells",
+    "accuracy": 0.85,
+    "magazineSize": 6,
+    "reloadMs": 2200,
+    "projectile": {
+      "kind": "pellets"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "workbench",
+  "name": "Workbench",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 30
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "workbench",
+    "count": 1
+  },
+  "workstation": null,
+  "blueprintId": null
+}

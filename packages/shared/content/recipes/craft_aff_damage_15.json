@@ -1,0 +1,30 @@
+{
+  "id": "craft_aff_damage_15",
+  "name": "Reinforced Frame (+15% dmg)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "attachment",
+    "defId": "aff_damage_15",
+    "count": 1
+  },
+  "workstation": "weapon_bench",
+  "blueprintId": "bp_aff_damage_15",
+  "craftTimeMs": 30000,
+  "stationTier": 2
+}

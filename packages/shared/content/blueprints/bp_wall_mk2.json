@@ -1,0 +1,8 @@
+{
+  "id": "bp_wall_mk2",
+  "recipeId": "wall_mk2",
+  "displayName": "Reinforced Wall",
+  "description": "2x wall HP. Scrap + alloy. Crafted at the Workbench.",
+  "cost": 4,
+  "tier": "uncommon"
+}

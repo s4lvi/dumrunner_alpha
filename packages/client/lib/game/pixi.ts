@@ -187,6 +187,13 @@ export type GameHandle = {
   // The currently-equipped weapon (selected hotbar slot if it's a weapon),
   // or null. Pixi gates fire/swing visuals + outbound fire messages on this.
   setEquippedWeapon(weaponId: import('@dumrunner/shared').WeaponKind | null): void;
+  // Animation Phase C: push reload-start into the renderer so it
+  // can drive the view-model's reload animation. Fire is handled
+  // locally in the FPS renderer via the projectile_spawned hook;
+  // reload-start lives at the Game.tsx ws layer (we receive the
+  // reload_started message there) and is forwarded through this
+  // method. Other renderers no-op.
+  notifyReloadStarted(durationMs: number): void;
   // Horde-active flag, driven by the world_clock subscription in Game.tsx.
   // FPS uses this to swap the surface skybox between normal and
   // perihelion variants. Other renderers can no-op.
@@ -2582,6 +2589,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     setHordeActive() {
       // Top-down renderer doesn't have a sky.
+    },
+    notifyReloadStarted() {
+      // Top-down renderer doesn't show a view-model.
     },
     swapScene(state: SceneState) {
       ifReady(() => {

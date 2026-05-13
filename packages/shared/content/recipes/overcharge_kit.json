@@ -1,0 +1,24 @@
+{
+  "id": "overcharge_kit",
+  "name": "Overcharge Kit (1)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 3
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "consumable",
+    "consumableId": "overcharge_kit",
+    "count": 1
+  },
+  "workstation": "electronics_bench",
+  "blueprintId": null,
+  "craftTimeMs": 15000
+}

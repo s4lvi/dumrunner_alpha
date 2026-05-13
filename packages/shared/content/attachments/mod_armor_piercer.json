@@ -1,0 +1,17 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_armor_piercer",
+  "displayName": "AP Core",
+  "description": "+18% damage. Engineered for armoured targets.",
+  "adjective": "Lance",
+  "family": null,
+  "effect": {
+    "damageMult": 1.18
+  },
+  "rolls": {
+    "damageMultBonus": [
+      -0.03,
+      0.12
+    ]
+  }
+}

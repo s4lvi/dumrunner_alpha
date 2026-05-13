@@ -1,0 +1,24 @@
+{
+  "id": "shotgun_shells",
+  "name": "Shotgun Shells (24)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "ammo",
+    "ammoId": "shotgun_shells",
+    "count": 24
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 10000
+}

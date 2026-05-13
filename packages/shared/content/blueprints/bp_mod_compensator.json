@@ -1,0 +1,11 @@
+{
+  "id": "bp_mod_compensator",
+  "recipeId": "craft_mod_compensator",
+  "displayName": "Compensator",
+  "description": "-50% spread. Tighter than a Foregrip.",
+  "cost": 6,
+  "tier": "uncommon",
+  "prerequisites": [
+    "bp_mod_foregrip"
+  ]
+}

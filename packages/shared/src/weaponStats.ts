@@ -12,10 +12,11 @@
 import {
   computeWeaponEffect,
   weaponFamily,
+  WEAPON_FAMILY,
   type AmmoKind,
-  type WeaponFamily,
   type WeaponItem,
 } from './inventory';
+import type { WeaponDef } from './content/types';
 
 export type RangedWeaponStats = {
   damage: number;
@@ -38,119 +39,12 @@ export type RangedWeaponStats = {
 // fringes of a starter pistol every shot drifts visibly.
 export const MAX_INACCURACY_RAD = 0.15;
 
-export const WEAPON_STATS: Record<
-  Exclude<WeaponFamily, 'melee'>,
-  RangedWeaponStats
-> = {
-  // The starter pistol is intentionally slow + drifty so mods,
-  // affixes, and tier-up have something to fix. Player can craft an
-  // SMG / shotgun / rifle once they earn blueprints.
-  pistol: {
-    damage: 22,
-    fireIntervalMs: 380,
-    projectileSpeed: 2200,
-    projectileTtlMs: 800,
-    projectileRadius: 4,
-    pelletCount: 1,
-    spreadRad: 0,
-    color: 0xfafafa,
-    ammoKind: 'pistol_basic',
-    accuracy: 0.65,
-    magazineSize: 12,
-    reloadMs: 1400,
-  },
-  smg: {
-    damage: 12,
-    fireIntervalMs: 90,
-    projectileSpeed: 2200,
-    projectileTtlMs: 700,
-    projectileRadius: 3,
-    pelletCount: 1,
-    spreadRad: 0.07,
-    color: 0xffe066,
-    ammoKind: 'smg_basic',
-    accuracy: 0.55,
-    magazineSize: 30,
-    reloadMs: 1700,
-  },
-  shotgun: {
-    damage: 14, // per pellet; 6 pellets ≈ 84 dmg burst at point-blank
-    fireIntervalMs: 700,
-    projectileSpeed: 1900,
-    projectileTtlMs: 350,
-    projectileRadius: 4,
-    pelletCount: 6,
-    spreadRad: 0.35,
-    color: 0xff8a3d,
-    ammoKind: 'shotgun_shells',
-    accuracy: 0.85,
-    magazineSize: 6,
-    reloadMs: 2200,
-  },
-  rifle: {
-    damage: 60,
-    fireIntervalMs: 700,
-    projectileSpeed: 2800,
-    projectileTtlMs: 1200,
-    projectileRadius: 4,
-    pelletCount: 1,
-    spreadRad: 0,
-    color: 0x7dd3fc,
-    ammoKind: 'rifle_rounds',
-    accuracy: 0.96,
-    magazineSize: 10,
-    reloadMs: 1800,
-  },
-  // Sniper: bigger numbers than rifle but worse cadence + smaller mag.
-  // Pinpoint accuracy, ridiculous projectile speed, the longest ttl
-  // so a single round reads across a whole room.
-  sniper: {
-    damage: 140,
-    fireIntervalMs: 1400,
-    projectileSpeed: 3600,
-    projectileTtlMs: 1800,
-    projectileRadius: 4,
-    pelletCount: 1,
-    spreadRad: 0,
-    color: 0xfde047,
-    ammoKind: 'sniper_rounds',
-    accuracy: 0.99,
-    magazineSize: 4,
-    reloadMs: 2400,
-  },
-  // Heavy: chunky AoE-feel slug. Slow as molasses, devastating per
-  // hit, modest range. The tank-buster.
-  heavy: {
-    damage: 220,
-    fireIntervalMs: 1600,
-    projectileSpeed: 1700,
-    projectileTtlMs: 700,
-    projectileRadius: 7,
-    pelletCount: 1,
-    spreadRad: 0.04,
-    color: 0xfb923c,
-    ammoKind: 'heavy_slugs',
-    accuracy: 0.85,
-    magazineSize: 5,
-    reloadMs: 3000,
-  },
-  // Energy: SMG-cadence laser feel. Lower per-hit damage, high
-  // projectile speed, distinct cyan tint. Sustained burst weapon.
-  energy: {
-    damage: 16,
-    fireIntervalMs: 110,
-    projectileSpeed: 3200,
-    projectileTtlMs: 800,
-    projectileRadius: 3,
-    pelletCount: 1,
-    spreadRad: 0.03,
-    color: 0x22d3ee,
-    ammoKind: 'energy_cells',
-    accuracy: 0.92,
-    magazineSize: 20,
-    reloadMs: 1900,
-  },
-};
+// Per-family ranged stats. Populated at server boot from
+// shared/content/weapons/*.json via setWeaponRegistry and shipped
+// to clients in the welcome message. Keyed by family so multiple
+// kinds in the same family share a stat sheet (today the mapping
+// is 1:1, but the structure preserves the option).
+export const WEAPON_STATS: Record<string, RangedWeaponStats> = {};
 
 // Per-weapon melee stats. Mirrors the ranged WEAPON_STATS table
 // shape but with the swing-specific knobs. Server reads this when
@@ -169,48 +63,49 @@ export type MeleeWeaponStats = {
   color: number;
 };
 
-export const MELEE_STATS: Record<
-  Extract<import('./inventory').WeaponKind, 'knife' | 'sword' | 'hammer' | 'energy_blade'>,
-  MeleeWeaponStats
-> = {
-  // Knife stays a low-floor tool for the starter loadout. Quick,
-  // narrow, weak. Reads as "stab the swarmer".
-  knife: {
-    damage: 35,
-    swingIntervalMs: 350,
-    range: 60,
-    arcRad: 0.7,
-    color: 0xe2e8f0,
-  },
-  // Sword: more reach + wider arc. The "real" melee weapon — clears
-  // a chaser cleanly, carries through a swarmer cluster.
-  sword: {
-    damage: 70,
-    swingIntervalMs: 450,
-    range: 90,
-    arcRad: 0.9,
-    color: 0xfde047,
-  },
-  // Hammer: heavy, slow, big damage, AoE-feeling cone. Caves brutes
-  // in two swings; whiffs against fast enemies.
-  hammer: {
-    damage: 140,
-    swingIntervalMs: 850,
-    range: 80,
-    arcRad: 1.2,
-    color: 0xf97316,
-  },
-  // Energy blade: fast, high damage, narrow. Premium late-tier
-  // option that pairs with imbue mods (the cone applies imbues to
-  // every enemy in arc).
-  energy_blade: {
-    damage: 95,
-    swingIntervalMs: 380,
-    range: 80,
-    arcRad: 0.8,
-    color: 0x22d3ee,
-  },
-};
+// Per-kind melee stats. Same population path as WEAPON_STATS —
+// populated at boot from JSON, shipped to clients via welcome.
+// Lookup against this should treat misses as 'unknown weapon';
+// callers typically fall back to MELEE_STATS.knife when present.
+export const MELEE_STATS: Record<string, MeleeWeaponStats> = {};
+
+// Per-weapon animation library references. Populated alongside
+// the stat tables in setWeaponRegistry; the FPS renderer reads
+// them to drive the view-model + projectile sprite.
+//   WEAPON_VIEW_ANIM[weaponId]       — FPS first-person view-model
+//   WEAPON_PROJECTILE_ANIM[weaponId] — per-weapon bullet sprite
+// Family fallback for projectile is handled by the renderer
+// helper (resolveProjectileAnimId), not stored here.
+export const WEAPON_VIEW_ANIM: Record<string, string | undefined> = {};
+export const WEAPON_PROJECTILE_ANIM: Record<string, string | undefined> = {};
+
+// Replaces every entry in the live weapon registries from a JSON
+// payload. Idempotent. Drops kinds not present in the new set —
+// hot-reload semantics: the JSON files are the full canonical set.
+export function setWeaponRegistry(weapons: ReadonlyArray<WeaponDef>): void {
+  for (const k of Object.keys(WEAPON_STATS)) delete WEAPON_STATS[k];
+  for (const k of Object.keys(MELEE_STATS)) delete MELEE_STATS[k];
+  for (const k of Object.keys(WEAPON_FAMILY)) delete WEAPON_FAMILY[k];
+  for (const k of Object.keys(WEAPON_VIEW_ANIM)) delete WEAPON_VIEW_ANIM[k];
+  for (const k of Object.keys(WEAPON_PROJECTILE_ANIM)) {
+    delete WEAPON_PROJECTILE_ANIM[k];
+  }
+  for (const w of weapons) {
+    WEAPON_FAMILY[w.id] = w.family;
+    if (w.viewAnimationId) WEAPON_VIEW_ANIM[w.id] = w.viewAnimationId;
+    if (w.projectileAnimationId) {
+      WEAPON_PROJECTILE_ANIM[w.id] = w.projectileAnimationId;
+    }
+    if (w.family === 'melee' && w.melee) {
+      MELEE_STATS[w.id] = { ...w.melee };
+    } else if (w.ranged) {
+      // Ranged is keyed by family; multiple weapon ids in the same
+      // family overwrite each other today (1:1 mapping in JSON).
+      const { projectile: _unused, ...stats } = w.ranged;
+      WEAPON_STATS[w.family] = stats as RangedWeaponStats;
+    }
+  }
+}
 
 // Effective stats after applying piece affixes + mods. Damage,
 // fireInterval, spread, and projectileSpeed scale per

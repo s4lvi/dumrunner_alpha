@@ -1,0 +1,18 @@
+{
+  "kind": "suit_affix",
+  "id": "aff_speed_5",
+  "displayName": "Servomotor Tune",
+  "description": "+5% movement speed. Slots into a suit utility mod.",
+  "adjective": "Servo",
+  "slotKind": "utility_mod",
+  "effect": {
+    "moveSpeedMult": 0.05
+  },
+  "value": 0.05,
+  "rolls": {
+    "moveSpeedMultBonus": [
+      -0.02,
+      0.05
+    ]
+  }
+}

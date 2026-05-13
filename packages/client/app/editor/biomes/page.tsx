@@ -6,13 +6,15 @@
 // the live procgen render lands with E3.4's per-tile sprite
 // support; stubbing the layout now keeps the form work decoupled).
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import type {
   BiomeDef,
+  EnemyDef,
   HazardKind,
   MaterialKind,
+  PropDef,
 } from '@dumrunner/shared';
-import { MATERIALS } from '@dumrunner/shared';
+import { findSpriteFitOffenders, MATERIALS } from '@dumrunner/shared';
 import { listEntities } from '@/lib/editorContentClient';
 import {
   Button,
@@ -26,6 +28,7 @@ import {
   TextField,
 } from '../_components/Form';
 import { TextureRow } from '../_components/TextureRow';
+import { AnimationPicker } from '../_components/AnimationPicker';
 import { useEntityEditor } from '../_components/useEntityEditor';
 import { EntityList } from '../_components/EntityList';
 import { BiomePreview as SandboxBiomePreview } from '../_components/BiomePreview';
@@ -124,6 +127,10 @@ function BiomeEditorBody() {
   // yet).
   const [enemyOptions, setEnemyOptions] = useState<string[]>([]);
   const [propOptions, setPropOptions] = useState<string[]>([]);
+  // Keep the full defs around so the FPS-fit warning can read
+  // each entry's sprite size — id-only would mean re-fetching.
+  const [enemyDefs, setEnemyDefs] = useState<EnemyDef[]>([]);
+  const [propDefs, setPropDefs] = useState<PropDef[]>([]);
   const materialOptions = Object.keys(MATERIALS) as MaterialKind[];
   useEffect(() => {
     void (async () => {
@@ -134,11 +141,23 @@ function BiomeEditorBody() {
         ]);
         setEnemyOptions(enemies.map((e) => e.id).sort());
         setPropOptions(props.map((p) => p.id).sort());
+        setEnemyDefs(enemies);
+        setPropDefs(props);
       } catch {
         // No content yet — dropdowns fall back to text entry.
       }
     })();
   }, []);
+
+  // Sprite-fit warning: any enemy/prop in this biome's roster
+  // whose render-height exceeds wallHeightTiles will clip the
+  // ceiling. Server-side save rejects the same condition.
+  const spriteFitOffenders = useMemo(() => {
+    if (!draft) return [];
+    const enemyMap = new Map(enemyDefs.map((e) => [e.id, e]));
+    const propMap = new Map(propDefs.map((p) => [p.id, p]));
+    return findSpriteFitOffenders(draft, enemyMap, propMap);
+  }, [draft, enemyDefs, propDefs]);
   const onSave = save;
   const onDelete = remove;
   const onNew = createNew;
@@ -197,7 +216,11 @@ function BiomeEditorBody() {
               <Button variant="danger" onClick={onDelete}>
                 Delete
               </Button>
-              <Button variant="primary" disabled={saving} onClick={onSave}>
+              <Button
+                variant="primary"
+                disabled={saving || spriteFitOffenders.length > 0}
+                onClick={onSave}
+              >
                 {saving ? 'Saving…' : 'Save'}
               </Button>
             </div>
@@ -373,6 +396,68 @@ function BiomeEditorBody() {
                   hideLabel
                 />
               </div>
+            </FormSection>
+
+            <FormSection title="FPS Geometry">
+              <SliderField
+                label="wall height (tiles)"
+                value={draft.wallHeightTiles ?? 1}
+                onChange={(v) =>
+                  setDraft({
+                    ...draft,
+                    wallHeightTiles: v === 1 ? undefined : v,
+                  })
+                }
+                min={1}
+                max={4}
+                step={0.05}
+                hint="FPS-only. 1.0 = square room (floor — going lower would clip standard sprites). > 1 opens up tall rooms (Sun-Bleached plazas, Alien Core resonant chambers). Camera height stays half a tile regardless — only the ceiling rises."
+              />
+              {spriteFitOffenders.length > 0 && (
+                <div className="mt-2 px-3 py-2 rounded bg-amber-950/40 border border-amber-900/80 text-amber-200 text-xs space-y-1">
+                  <div className="font-medium">
+                    {spriteFitOffenders.length} roster entr
+                    {spriteFitOffenders.length === 1 ? 'y' : 'ies'} won't fit under
+                    this ceiling ({(draft.wallHeightTiles ?? 1).toFixed(2)} tiles):
+                  </div>
+                  {spriteFitOffenders.map((o) => (
+                    <div key={`${o.kind}:${o.id}`}>
+                      • {o.kind} <code className="text-amber-100">{o.id}</code> is{' '}
+                      {o.spriteTiles.toFixed(2)} tiles tall
+                    </div>
+                  ))}
+                  <div className="text-amber-300/80 pt-1">
+                    Save will be rejected until you raise the wall height or
+                    remove these entries from this biome's roster / palette.
+                  </div>
+                </div>
+              )}
+            </FormSection>
+
+            <FormSection title="Ambient animations">
+              <div className="text-[10px] text-zinc-500 -mt-1 mb-2">
+                Looping animations for each FPS surface. Each cell
+                rolls its own phase offset, so authored sheets read
+                as organic flicker rather than synchronised pulse.
+              </div>
+              <AnimationPicker
+                label="wall"
+                category="biome_wall"
+                value={draft.wallAnimationId}
+                onChange={(v) => setDraft({ ...draft, wallAnimationId: v })}
+              />
+              <AnimationPicker
+                label="floor"
+                category="biome_floor"
+                value={draft.floorAnimationId}
+                onChange={(v) => setDraft({ ...draft, floorAnimationId: v })}
+              />
+              <AnimationPicker
+                label="ceiling"
+                category="biome_ceiling"
+                value={draft.ceilingAnimationId}
+                onChange={(v) => setDraft({ ...draft, ceilingAnimationId: v })}
+              />
             </FormSection>
 
             {(draft.kind ?? 'dungeon') === 'dungeon' && (

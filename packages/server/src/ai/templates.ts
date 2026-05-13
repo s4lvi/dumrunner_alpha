@@ -58,6 +58,7 @@ function defToTemplate(def: EnemyDef): EnemyTemplate {
       shape: def.visual.shape,
       color: hexToNumber(def.visual.color),
       size: def.visual.size,
+      animationId: def.animationId,
     },
   };
 }
@@ -83,6 +84,7 @@ export async function initTemplates(): Promise<void> {
       shape: def.visual.shape,
       color: hexToNumber(def.visual.color),
       size: def.visual.size,
+      animationId: def.animationId,
     };
   }
   setEnemyVisuals(visuals);

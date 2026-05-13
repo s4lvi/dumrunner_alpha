@@ -1,0 +1,28 @@
+{
+  "id": "energy_blade",
+  "name": "Energy Blade",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "energy_blade"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_energy_blade",
+  "craftTimeMs": 60000
+}

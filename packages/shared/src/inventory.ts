@@ -237,21 +237,36 @@ export const UPGRADES: Record<UpgradeKind, UpgradeDef> = {
   },
 };
 
-export type WeaponKind =
-  | 'pistol'
-  | 'smg'
-  | 'shotgun'
-  | 'rifle'
-  | 'sniper'
-  | 'heavy'
-  | 'energy'
-  | 'knife'
-  | 'sword'
-  | 'hammer'
-  | 'energy_blade';
+// Canonical built-in weapon ids. Used as the autocomplete surface
+// for the WeaponKind type (via const-tagged intersection below) and
+// as a fallback identity if WEAPON_FAMILY hasn't been populated yet.
+export const KNOWN_WEAPON_KINDS = [
+  'pistol',
+  'smg',
+  'shotgun',
+  'rifle',
+  'sniper',
+  'heavy',
+  'energy',
+  'knife',
+  'sword',
+  'hammer',
+  'energy_blade',
+] as const;
+export type KnownWeaponKind = (typeof KNOWN_WEAPON_KINDS)[number];
+
+// WeaponKind permits any string. The literal union keeps IDE
+// autocomplete for the built-ins while letting JSON-authored
+// entries flow through without a TS code change. Exhaustive
+// switches over WeaponKind are no longer safe — code paths that
+// need to branch on weapon kind should look it up against the
+// runtime registry instead.
+export type WeaponKind = KnownWeaponKind | (string & {});
 
 // Family groups weapons that share ammo, mod compatibility, and turret
 // variants. `melee` covers the knife (no ammo, no piece-affix slots).
+// This stays a closed enum because the runtime branches on family in
+// several places — adding a new family is a code change.
 export type WeaponFamily =
   | 'pistol'
   | 'smg'
@@ -261,19 +276,11 @@ export type WeaponFamily =
   | 'heavy'
   | 'energy'
   | 'melee';
-export const WEAPON_FAMILY: Record<WeaponKind, WeaponFamily> = {
-  pistol: 'pistol',
-  smg: 'smg',
-  shotgun: 'shotgun',
-  rifle: 'rifle',
-  sniper: 'sniper',
-  heavy: 'heavy',
-  energy: 'energy',
-  knife: 'melee',
-  sword: 'melee',
-  hammer: 'melee',
-  energy_blade: 'melee',
-};
+
+// Populated at server boot from WeaponDef JSON (setWeaponRegistry)
+// and shipped to clients in the welcome message. Starts empty;
+// consumers must read on use, not at import time.
+export const WEAPON_FAMILY: Record<string, WeaponFamily> = {};
 
 // Tiering controls slot count + crafting station gate. T1 craftable at
 // the Workbench; T2+ requires a Weapon Bench.
@@ -824,162 +831,7 @@ export type AttachmentDef =
       value: number;
     };
 
-export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {
-  // ---- weapon mods (slot into a weapon's mod list) ----
-  // Each `adjective` becomes part of the weapon's name when attached.
-  // E.g. a Standard Shotgun + Foregrip + Compensator + Calibrated frame
-  // reads as "Standard Steady Vented Brutal Shotgun".
-  mod_foregrip: {
-    kind: 'weapon_mod',
-    id: 'mod_foregrip',
-    displayName: 'Foregrip',
-    description: '-30% spread. Best on shotguns and SMGs.',
-    adjective: 'Steady',
-    family: null,
-    effect: { spreadMult: 0.7 },
-  },
-  mod_high_velocity: {
-    kind: 'weapon_mod',
-    id: 'mod_high_velocity',
-    displayName: 'High-Velocity Barrel',
-    description: '+500 px/sec projectile speed. Better tracking at range.',
-    adjective: 'Hyper',
-    family: null,
-    effect: { projectileSpeedAdd: 500 },
-  },
-  mod_compensator: {
-    kind: 'weapon_mod',
-    id: 'mod_compensator',
-    displayName: 'Compensator',
-    description: '-50% spread. Tighter than a Foregrip, but louder.',
-    adjective: 'Vented',
-    family: null,
-    effect: { spreadMult: 0.5 },
-  },
-  mod_stabilizer: {
-    kind: 'weapon_mod',
-    id: 'mod_stabilizer',
-    displayName: 'Recoil Stabilizer',
-    description: '+10% damage. Heavier action, harder hits.',
-    adjective: 'Calibrated',
-    family: null,
-    effect: { damageMult: 1.10 },
-  },
-  mod_overclock: {
-    kind: 'weapon_mod',
-    id: 'mod_overclock',
-    displayName: 'Overclock Module',
-    description: '+18% fire rate. Burns through ammo faster.',
-    adjective: 'Overclocked',
-    family: null,
-    effect: { fireIntervalMult: 0.85 },
-  },
-  mod_dampener: {
-    kind: 'weapon_mod',
-    id: 'mod_dampener',
-    displayName: 'Recoil Dampener',
-    description: '-25% spread, slight projectile speed bump.',
-    adjective: 'Damped',
-    family: null,
-    effect: { spreadMult: 0.75, projectileSpeedAdd: 150 },
-  },
-  mod_armor_piercer: {
-    kind: 'weapon_mod',
-    id: 'mod_armor_piercer',
-    displayName: 'AP Core',
-    description: '+18% damage. Engineered for armoured targets.',
-    adjective: 'Lance',
-    family: null,
-    effect: { damageMult: 1.18 },
-  },
-  mod_lightweight: {
-    kind: 'weapon_mod',
-    id: 'mod_lightweight',
-    displayName: 'Lightweight Frame',
-    description: '+10% fire rate, -10% damage. Faster trigger, weaker rounds.',
-    adjective: 'Whisper',
-    family: null,
-    effect: { fireIntervalMult: 0.9, damageMult: 0.9 },
-  },
-  // Imbue mods — every hit applies a status effect.
-  mod_incendiary: {
-    kind: 'weapon_mod',
-    id: 'mod_incendiary',
-    displayName: 'Incendiary Core',
-    description: 'Hits ignite the target — 8 dps burn for 4s.',
-    adjective: 'Pyro',
-    family: null,
-    effect: {},
-    imbue: { kind: 'burn_dps', magnitude: 8, durationMs: 4000, label: 'Burning' },
-  },
-  mod_chem: {
-    kind: 'weapon_mod',
-    id: 'mod_chem',
-    displayName: 'Chem Injector',
-    description: 'Hits coat the target in poison — 10 dps for 5s.',
-    adjective: 'Acid',
-    family: null,
-    effect: {},
-    imbue: { kind: 'poison_dps', magnitude: 10, durationMs: 5000, label: 'Poisoned' },
-  },
-  mod_cryo: {
-    kind: 'weapon_mod',
-    id: 'mod_cryo',
-    displayName: 'Cryo Coil',
-    description: 'Hits chill the target — 35% slow for 3s.',
-    adjective: 'Frost',
-    family: null,
-    effect: {},
-    imbue: { kind: 'slow_pct', magnitude: 0.35, durationMs: 3000, label: 'Chilled' },
-  },
-
-  // ---- weapon affixes (slot onto a weapon piece) ----
-  aff_damage_15: {
-    kind: 'weapon_affix',
-    id: 'aff_damage_15',
-    // Clean noun phrase. Mechanical effect lives in `description`.
-    displayName: 'Reinforced Frame',
-    description: '+15% damage on every shot. Slots into a weapon frame.',
-    adjective: 'Brutal',
-    pieceKind: 'frame',
-    family: null,
-    effect: { damageMult: 1.15 },
-    value: 0.15,
-  },
-  aff_firerate_25: {
-    kind: 'weapon_affix',
-    id: 'aff_firerate_25',
-    displayName: 'Lightweight Grip',
-    description: '25% faster cadence. Slots into a weapon grip.',
-    adjective: 'Auto',
-    pieceKind: 'grip',
-    family: null,
-    effect: { fireIntervalMult: 0.8 },
-    value: 0.25,
-  },
-
-  // ---- suit affixes (slot onto a suit slot) ----
-  aff_shield_25: {
-    kind: 'suit_affix',
-    id: 'aff_shield_25',
-    displayName: 'Hardened Plating',
-    description: '+25 max shield. Slots into a suit plating piece.',
-    adjective: 'Hardplate',
-    slotKind: 'plating',
-    effect: { shieldBonus: 25 },
-    value: 25,
-  },
-  aff_speed_5: {
-    kind: 'suit_affix',
-    id: 'aff_speed_5',
-    displayName: 'Servomotor Tune',
-    description: '+5% movement speed. Slots into a suit utility mod.',
-    adjective: 'Servo',
-    slotKind: 'utility_mod',
-    effect: { moveSpeedMult: 0.05 },
-    value: 0.05,
-  },
-};
+export const ATTACHMENT_DEFS: Record<string, AttachmentDef> = {};
 
 export function listAttachments(): AttachmentDef[] {
   return Object.values(ATTACHMENT_DEFS);
@@ -1022,26 +874,28 @@ export type AttachmentStatRanges = {
 // existing def has a roll path without us hand-tuning all 12
 // catalog entries up front — defaults are fine, only call out the
 // ones whose roll variance defines the class fantasy.
-export const ATTACHMENT_STAT_RANGES: Record<string, AttachmentStatRanges> = {
-  // Spread mods — main range knob is the spread cut.
-  mod_foregrip:    { spreadMultBonus: [-0.10, +0.05] },
-  mod_compensator: { spreadMultBonus: [-0.10, +0.05] },
-  mod_dampener:    { spreadMultBonus: [-0.08, +0.05], projectileSpeedAddBonus: [-50, +200] },
-  // Damage mods.
-  mod_stabilizer:    { damageMultBonus: [-0.03, +0.10] },
-  mod_armor_piercer: { damageMultBonus: [-0.03, +0.12] },
-  // Fire-rate mods.
-  mod_overclock:   { fireIntervalMultBonus: [-0.08, +0.05] },
-  mod_lightweight: { fireIntervalMultBonus: [-0.06, +0.05], damageMultBonus: [-0.05, +0.05] },
-  // Velocity.
-  mod_high_velocity: { projectileSpeedAddBonus: [-100, +300] },
-  // Weapon affixes.
-  aff_damage_15:   { damageMultBonus: [-0.05, +0.10] },
-  aff_firerate_25: { fireIntervalMultBonus: [-0.10, +0.05] },
-  // Suit affixes.
-  aff_shield_25: { shieldBonusAdd: [-5, +20] },
-  aff_speed_5:   { moveSpeedMultBonus: [-0.02, +0.05] },
-};
+export const ATTACHMENT_STAT_RANGES: Record<string, AttachmentStatRanges> = {};
+
+// Replaces every entry in both attachment registries from a list
+// of authored AttachmentDef-with-rolls JSON entries. The disk
+// format folds the def + its roll ranges into one shape; the
+// runtime splits them back into the two records consumers expect.
+// Mirrors setBlueprintCatalog / setWeaponRegistry / setRecipes.
+export function setAttachmentRegistry(
+  entries: ReadonlyArray<AttachmentDef & { rolls?: AttachmentStatRanges }>,
+): void {
+  for (const k of Object.keys(ATTACHMENT_DEFS)) delete ATTACHMENT_DEFS[k];
+  for (const k of Object.keys(ATTACHMENT_STAT_RANGES)) {
+    delete ATTACHMENT_STAT_RANGES[k];
+  }
+  for (const e of entries) {
+    const { rolls, ...def } = e;
+    ATTACHMENT_DEFS[def.id] = def as AttachmentDef;
+    if (rolls && Object.keys(rolls).length > 0) {
+      ATTACHMENT_STAT_RANGES[def.id] = rolls;
+    }
+  }
+}
 
 // One realised attachment instance. Lives directly inside inventory
 // slots, weapon piece slots, and suit-part appliedAttachments

@@ -1,0 +1,8 @@
+{
+  "id": "bp_turret",
+  "recipeId": "turret",
+  "displayName": "Auto-Turret",
+  "description": "Builds a self-targeting defence turret. Crafted at an Electronics Bench.",
+  "cost": 3,
+  "tier": "common"
+}

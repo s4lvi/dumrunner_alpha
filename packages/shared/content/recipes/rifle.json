@@ -1,0 +1,28 @@
+{
+  "id": "rifle",
+  "name": "Rifle",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 22
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 5
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "rifle"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_rifle",
+  "craftTimeMs": 60000
+}

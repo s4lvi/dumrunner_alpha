@@ -1,0 +1,29 @@
+{
+  "id": "forge_bench_upgrade_mk3",
+  "name": "Weapon Bench Mk3 Upgrade",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy_mk3",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "upgrade",
+    "upgradeId": "weapon_bench_mk3",
+    "count": 1
+  },
+  "workstation": "forge",
+  "blueprintId": null,
+  "craftTimeMs": 75000
+}

@@ -1,0 +1,24 @@
+{
+  "id": "forge_alloy_mk3",
+  "name": "Refined Alloy (1)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 2
+    }
+  ],
+  "output": {
+    "kind": "material",
+    "materialId": "alloy_mk3",
+    "count": 1
+  },
+  "workstation": "forge",
+  "blueprintId": null,
+  "craftTimeMs": 30000
+}

@@ -1,0 +1,24 @@
+{
+  "id": "wall_mk4",
+  "name": "Reactive Wall",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 2
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "wall_mk4",
+    "count": 1
+  },
+  "workstation": "forge",
+  "blueprintId": "bp_wall_mk4",
+  "craftTimeMs": 9000
+}

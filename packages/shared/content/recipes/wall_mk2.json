@@ -1,0 +1,24 @@
+{
+  "id": "wall_mk2",
+  "name": "Reinforced Wall",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 8
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 2
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "wall_mk2",
+    "count": 1
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_wall_mk2",
+  "craftTimeMs": 4000
+}

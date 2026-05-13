@@ -26,6 +26,7 @@ export function getPropVisualsForWire(): Record<string, PropVisual> {
       tint: v.tint,
       spriteSize: v.spriteSize,
       spriteGroundOffset: v.spriteGroundOffset,
+      animationId: def.animationId,
       ...(def.container
         ? {
             isContainer: true,

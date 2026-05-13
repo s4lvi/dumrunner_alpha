@@ -1,0 +1,23 @@
+{
+  "id": "hammer",
+  "name": "Hammer",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 18
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 8
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "hammer"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_hammer",
+  "craftTimeMs": 45000
+}

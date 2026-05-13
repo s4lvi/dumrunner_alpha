@@ -7,11 +7,16 @@
 'use client';
 
 import type {
+  AnimationDef,
+  AttachmentDefData,
   BiomeDef,
+  BlueprintDef,
   CorridorTemplate,
   EnemyDef,
   PropDef,
+  RecipeDef,
   RoomTemplate,
+  WeaponDef,
 } from '@dumrunner/shared';
 import type { EditorArea } from '@dumrunner/shared/content/loader';
 
@@ -24,6 +29,11 @@ type Schema = {
   props: PropDef;
   rooms: RoomTemplate;
   corridors: CorridorTemplate;
+  blueprints: BlueprintDef;
+  weapons: WeaponDef;
+  recipes: RecipeDef;
+  attachments: AttachmentDefData;
+  animations: AnimationDef;
 };
 type Area = EditorArea;
 

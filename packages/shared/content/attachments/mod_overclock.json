@@ -1,0 +1,17 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_overclock",
+  "displayName": "Overclock Module",
+  "description": "+18% fire rate. Burns through ammo faster.",
+  "adjective": "Overclocked",
+  "family": null,
+  "effect": {
+    "fireIntervalMult": 0.85
+  },
+  "rolls": {
+    "fireIntervalMultBonus": [
+      -0.08,
+      0.05
+    ]
+  }
+}

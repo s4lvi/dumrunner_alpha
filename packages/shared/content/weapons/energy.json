@@ -1,0 +1,25 @@
+{
+  "id": "energy",
+  "label": "Energy Carbine",
+  "family": "energy",
+  "color": 2282478,
+  "description": "High-cadence laser. Lower per-hit damage but blinding projectile speed.",
+  "craftingStation": "workbench",
+  "ranged": {
+    "damage": 16,
+    "fireIntervalMs": 110,
+    "projectileSpeed": 3200,
+    "projectileTtlMs": 800,
+    "projectileRadius": 3,
+    "pelletCount": 1,
+    "spreadRad": 0.03,
+    "color": 2282478,
+    "ammoKind": "energy_cells",
+    "accuracy": 0.92,
+    "magazineSize": 20,
+    "reloadMs": 1900,
+    "projectile": {
+      "kind": "single"
+    }
+  }
+}

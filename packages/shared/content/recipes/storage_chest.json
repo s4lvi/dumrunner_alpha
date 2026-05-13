@@ -1,0 +1,23 @@
+{
+  "id": "storage_chest",
+  "name": "Storage Chest",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 15
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 6
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "storage_chest",
+    "count": 1
+  },
+  "workstation": null,
+  "blueprintId": null
+}

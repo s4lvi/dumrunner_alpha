@@ -1,0 +1,15 @@
+{
+  "id": "energy_blade",
+  "label": "Energy Blade",
+  "family": "melee",
+  "color": 2282478,
+  "description": "Fast, high-damage, narrow arc. Pairs well with imbue mods.",
+  "craftingStation": "workbench",
+  "melee": {
+    "damage": 95,
+    "swingIntervalMs": 380,
+    "range": 80,
+    "arcRad": 0.8,
+    "color": 2282478
+  }
+}

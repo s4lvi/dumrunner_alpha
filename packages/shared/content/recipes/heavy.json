@@ -1,0 +1,28 @@
+{
+  "id": "heavy",
+  "name": "Heavy Slug Cannon",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 25
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 10
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 3
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "heavy"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_heavy",
+  "craftTimeMs": 80000
+}

@@ -72,17 +72,26 @@ export default function EditorPage() {
   const [enemyIds, setEnemyIds] = useState<string[]>([]);
   const [propIds, setPropIds] = useState<string[]>([]);
   const [biomeIds, setBiomeIds] = useState<string[]>([]);
+  const [weaponIds, setWeaponIds] = useState<string[]>([]);
+  // Distinct WeaponFamily values across the loaded weapons. Used
+  // for the projectile-sprite family-fallback row so a single
+  // upload covers every weapon in that family.
+  const [weaponFamilies, setWeaponFamilies] = useState<string[]>([]);
   useEffect(() => {
     void (async () => {
       try {
-        const [enemies, props, biomes] = await Promise.all([
+        const [enemies, props, biomes, weapons] = await Promise.all([
           listEntities('enemies'),
           listEntities('props'),
           listEntities('biomes'),
+          listEntities('weapons'),
         ]);
         setEnemyIds(enemies.map((e) => e.id));
         setPropIds(props.map((p) => p.id));
         setBiomeIds(biomes.map((b) => b.id));
+        setWeaponIds(weapons.map((w) => w.id));
+        const fams = Array.from(new Set(weapons.map((w) => w.family))).sort();
+        setWeaponFamilies(fams);
       } catch {
         // No content yet — leave the sections empty.
       }
@@ -222,6 +231,50 @@ export default function EditorPage() {
               key={`prop_top-${id}`}
               category="prop_top"
               id={id}
+            />
+          ))}
+        </Section>
+        <Section title="Weapons — first-person view">
+          <p className="text-[10px] text-zinc-500 px-2 mb-2">
+            Static sprite anchored bottom-centre in the FPS view.
+            Animations (fire / reload / idle bob) ship in Phase C.
+          </p>
+          {weaponIds.length === 0 && (
+            <p className="text-[10px] text-zinc-500 px-2">
+              No weapons authored yet. Add some at{' '}
+              <code className="text-zinc-300">/editor/weapons</code>.
+            </p>
+          )}
+          {weaponIds.map((id) => (
+            <TextureRow key={`weapon_view-${id}`} category="weapon_view" id={id} />
+          ))}
+        </Section>
+        <Section title="Weapons — projectile">
+          <p className="text-[10px] text-zinc-500 px-2 mb-2">
+            Per-weapon bullet sprite, falling back to a per-family
+            default when the weapon-specific override is absent.
+            Family rows below cover every weapon in that family
+            with one upload; weapon-id rows above let you author a
+            signature look for a single weapon.
+          </p>
+          <div className="text-[10px] text-zinc-500 px-2 mb-1">
+            Per weapon
+          </div>
+          {weaponIds.map((id) => (
+            <TextureRow
+              key={`projectile-${id}`}
+              category="projectile"
+              id={id}
+            />
+          ))}
+          <div className="text-[10px] text-zinc-500 px-2 mt-3 mb-1">
+            Per family (fallback)
+          </div>
+          {weaponFamilies.map((fam) => (
+            <TextureRow
+              key={`projectile-fam-${fam}`}
+              category="projectile"
+              id={fam}
             />
           ))}
         </Section>

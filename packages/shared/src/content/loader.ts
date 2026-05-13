@@ -18,17 +18,27 @@ import { basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import {
+  AnimationDefSchema,
+  AttachmentDefSchema,
   BiomeDefSchema,
+  BlueprintDefSchema,
   CorridorTemplateSchema,
   EnemyDefSchema,
   PropDefSchema,
+  RecipeDefSchema,
   RoomTemplateSchema,
+  WeaponDefSchema,
   WorldDefSchema,
+  type AnimationDef,
+  type AttachmentDefData,
   type BiomeDef,
+  type BlueprintDef,
   type CorridorTemplate,
   type EnemyDef,
   type PropDef,
+  type RecipeDef,
   type RoomTemplate,
+  type WeaponDef,
   type WorldDef,
 } from './types';
 
@@ -46,6 +56,11 @@ export const EDITOR_AREAS = [
   'props',
   'rooms',
   'corridors',
+  'blueprints',
+  'weapons',
+  'recipes',
+  'attachments',
+  'animations',
 ] as const;
 export type EditorArea = (typeof EDITOR_AREAS)[number];
 
@@ -117,6 +132,16 @@ export const loadRooms = (): Promise<RoomTemplate[]> =>
   loadArea('rooms', RoomTemplateSchema);
 export const loadCorridors = (): Promise<CorridorTemplate[]> =>
   loadArea('corridors', CorridorTemplateSchema);
+export const loadBlueprints = (): Promise<BlueprintDef[]> =>
+  loadArea('blueprints', BlueprintDefSchema);
+export const loadWeapons = (): Promise<WeaponDef[]> =>
+  loadArea('weapons', WeaponDefSchema);
+export const loadRecipes = (): Promise<RecipeDef[]> =>
+  loadArea('recipes', RecipeDefSchema);
+export const loadAttachments = (): Promise<AttachmentDefData[]> =>
+  loadArea('attachments', AttachmentDefSchema);
+export const loadAnimations = (): Promise<AnimationDef[]> =>
+  loadArea('animations', AnimationDefSchema);
 
 // Single-entity helpers. The editor's API route writes one file
 // at a time; the GET endpoint may want to fetch one without
@@ -160,6 +185,16 @@ export const loadRoom = (id: string) =>
   loadEntity('rooms', id, RoomTemplateSchema);
 export const loadCorridor = (id: string) =>
   loadEntity('corridors', id, CorridorTemplateSchema);
+export const loadBlueprint = (id: string) =>
+  loadEntity('blueprints', id, BlueprintDefSchema);
+export const loadWeapon = (id: string) =>
+  loadEntity('weapons', id, WeaponDefSchema);
+export const loadRecipe = (id: string) =>
+  loadEntity('recipes', id, RecipeDefSchema);
+export const loadAttachment = (id: string) =>
+  loadEntity('attachments', id, AttachmentDefSchema);
+export const loadAnimation = (id: string) =>
+  loadEntity('animations', id, AnimationDefSchema);
 
 // Save validates BEFORE writing — a malformed payload from the
 // editor's POST handler can never make it onto disk. The schema
@@ -193,6 +228,16 @@ export const saveRoom = (data: unknown) =>
   saveEntity('rooms', data, RoomTemplateSchema);
 export const saveCorridor = (data: unknown) =>
   saveEntity('corridors', data, CorridorTemplateSchema);
+export const saveBlueprint = (data: unknown) =>
+  saveEntity('blueprints', data, BlueprintDefSchema);
+export const saveWeapon = (data: unknown) =>
+  saveEntity('weapons', data, WeaponDefSchema);
+export const saveRecipe = (data: unknown) =>
+  saveEntity('recipes', data, RecipeDefSchema);
+export const saveAttachment = (data: unknown) =>
+  saveEntity('attachments', data, AttachmentDefSchema);
+export const saveAnimation = (data: unknown) =>
+  saveEntity('animations', data, AnimationDefSchema);
 
 // World config — single file, not file-per-entity. Read at
 // boot; absent / malformed = empty config (no overrides).

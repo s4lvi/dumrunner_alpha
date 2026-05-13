@@ -1,0 +1,24 @@
+{
+  "id": "smg_basic_ammo",
+  "name": "SMG Ammo (75)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 5
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 2
+    }
+  ],
+  "output": {
+    "kind": "ammo",
+    "ammoId": "smg_basic",
+    "count": 75
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 10000
+}

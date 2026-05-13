@@ -1,0 +1,11 @@
+{
+  "id": "bp_hammer",
+  "recipeId": "hammer",
+  "displayName": "Hammer",
+  "description": "Slow, devastating, AoE-feeling cone. Pulps brutes in two hits. Crafted at the Workbench.",
+  "cost": 6,
+  "tier": "rare",
+  "prerequisites": [
+    "bp_sword"
+  ]
+}

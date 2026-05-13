@@ -1,0 +1,28 @@
+{
+  "id": "energy",
+  "name": "Energy Carbine",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 8
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 2
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 6
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "energy"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_energy",
+  "craftTimeMs": 70000
+}

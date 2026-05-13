@@ -15,6 +15,10 @@ export type EnemyVisual = {
   shape: 'square' | 'circle' | 'triangle';
   color: number;
   size: number;
+  // Library reference. When set, the FPS renderer plays this
+  // animation (looked up via /editor/animations) for this enemy
+  // kind. Empty = static sprite only.
+  animationId?: string;
 };
 
 // Mutable enemy-visual registry. Populated at runtime from the
@@ -63,6 +67,8 @@ export type PropVisual = {
   // cube path. Absent for non-container props.
   isContainer?: boolean;
   containerHeightMult?: number; // 0.1..1 — fraction of a wall height.
+  // Library reference for the prop's idle/destroy animation.
+  animationId?: string;
 };
 
 export const PROP_VISUALS: Record<string, PropVisual> = {};
@@ -90,6 +96,13 @@ export type BiomePalette = {
   floor: string;
   wall: string;
   accent: string;
+  // Library references for ambient looping animations on each
+  // surface type. Set per biome; the FPS renderer's wall column
+  // sampler + floor/ceiling strip use these to drive the active
+  // frame.
+  wallAnimationId?: string;
+  floorAnimationId?: string;
+  ceilingAnimationId?: string;
 };
 
 // Hazard summary the client needs to drive the HUD indicator and
@@ -108,6 +121,11 @@ export type BiomeHazardInfo = {
 
 export const BIOMES: Record<string, BiomePalette> = {};
 export const BIOME_HAZARDS: Record<string, BiomeHazardInfo> = {};
+// Per-biome FPS room geometry. wallHeightTiles=1 means the
+// renderer's default "1 standard tile tall" — anything else
+// makes the room rise (>1) or compress (<1). Camera stays at
+// half a standard tile; only the ceiling moves.
+export const BIOME_WALL_HEIGHT_TILES: Record<string, number> = {};
 // Per-biome variant id lists derived from each biome's tileSet.
 // Renderers hash a per-cell variant index into these arrays to
 // pick a wall / floor texture override. Empty arrays mean
@@ -145,6 +163,16 @@ export function biomeTileVariantsFor(
   return role === 'wall' ? entry.wallTextureIds : entry.floorTextureIds;
 }
 
+// Wall height multiplier in tiles. Defaults to 1.0 when the
+// biome doesn't author the field or isn't registered.
+export function biomeWallHeightTilesFor(
+  biomeId: string | undefined | null,
+): number {
+  if (!biomeId) return 1;
+  const v = BIOME_WALL_HEIGHT_TILES[biomeId];
+  return v !== undefined && v > 0 ? v : 1;
+}
+
 export function setBiomePalettes(
   palettes: Record<
     string,
@@ -152,6 +180,10 @@ export function setBiomePalettes(
       Partial<BiomeHazardInfo> & {
         wallTextureIds?: string[];
         floorTextureIds?: string[];
+        wallHeightTiles?: number;
+        wallAnimationId?: string;
+        floorAnimationId?: string;
+        ceilingAnimationId?: string;
       }
   >,
 ): void {
@@ -160,12 +192,18 @@ export function setBiomePalettes(
   for (const k of Object.keys(BIOME_TILE_VARIANTS)) {
     delete BIOME_TILE_VARIANTS[k];
   }
+  for (const k of Object.keys(BIOME_WALL_HEIGHT_TILES)) {
+    delete BIOME_WALL_HEIGHT_TILES[k];
+  }
   for (const id of Object.keys(palettes)) {
     const entry = palettes[id];
     BIOMES[id] = {
       floor: entry.floor,
       wall: entry.wall,
       accent: entry.accent,
+      wallAnimationId: entry.wallAnimationId,
+      floorAnimationId: entry.floorAnimationId,
+      ceilingAnimationId: entry.ceilingAnimationId,
     };
     if (entry.dominantHazard !== undefined) {
       BIOME_HAZARDS[id] = {
@@ -178,6 +216,9 @@ export function setBiomePalettes(
       wallTextureIds: entry.wallTextureIds ?? [],
       floorTextureIds: entry.floorTextureIds ?? [],
     };
+    if (entry.wallHeightTiles !== undefined && entry.wallHeightTiles > 0) {
+      BIOME_WALL_HEIGHT_TILES[id] = entry.wallHeightTiles;
+    }
   }
 }
 

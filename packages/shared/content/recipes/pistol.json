@@ -1,0 +1,23 @@
+{
+  "id": "pistol",
+  "name": "Pistol",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 12
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "pistol"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_pistol",
+  "craftTimeMs": 30000
+}

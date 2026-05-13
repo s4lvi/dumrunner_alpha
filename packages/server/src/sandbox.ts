@@ -35,6 +35,10 @@ import {
 } from './scene.js';
 import { getEnemyVisualsForWire } from './ai/templates.js';
 import { getBiomesForWire } from './biomes.js';
+import { getBlueprintsForWire } from './blueprints.js';
+import { getWeaponsForWire } from './weapons.js';
+import { getRecipesForWire } from './recipes.js';
+import { getAttachmentsForWire } from './attachments.js';
 import { getPropVisualsForWire } from './props.js';
 import {
   generateFloorLayout,
@@ -472,6 +476,10 @@ export class SandboxWorld {
       hotbarSelection: this.conn.hotbarSelection,
       layout: this.scene.layout,
       knownBlueprints: [],
+      blueprints: getBlueprintsForWire(),
+      weapons: getWeaponsForWire(),
+      recipes: getRecipesForWire(),
+      attachments: getAttachmentsForWire(),
       enemyVisuals: getEnemyVisualsForWire(),
       biomes: getBiomesForWire(),
       propVisuals: getPropVisualsForWire(),

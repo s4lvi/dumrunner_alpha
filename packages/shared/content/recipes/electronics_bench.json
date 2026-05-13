@@ -1,0 +1,29 @@
+{
+  "id": "electronics_bench",
+  "name": "Electronics Bench",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 15
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 10
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "electronics_bench",
+    "count": 1
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 30000
+}

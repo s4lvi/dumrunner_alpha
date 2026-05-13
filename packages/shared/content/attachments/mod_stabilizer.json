@@ -1,0 +1,17 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_stabilizer",
+  "displayName": "Recoil Stabilizer",
+  "description": "+10% damage. Heavier action, harder hits.",
+  "adjective": "Calibrated",
+  "family": null,
+  "effect": {
+    "damageMult": 1.1
+  },
+  "rolls": {
+    "damageMultBonus": [
+      -0.03,
+      0.1
+    ]
+  }
+}

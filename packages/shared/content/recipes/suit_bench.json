@@ -1,0 +1,29 @@
+{
+  "id": "suit_bench",
+  "name": "Suit Assembly Bench",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 25
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 8
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "placeable",
+    "buildingKind": "suit_bench",
+    "count": 1
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 30000
+}

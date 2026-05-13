@@ -1,0 +1,28 @@
+{
+  "id": "shotgun",
+  "name": "Shotgun",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 20
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 4
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "shotgun"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_shotgun",
+  "craftTimeMs": 45000
+}

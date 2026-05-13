@@ -1,0 +1,9 @@
+{
+  "id": "bp_aff_shield_25",
+  "recipeId": "craft_aff_shield_25",
+  "displayName": "Hardened Plating",
+  "description": "+25 max shield (rolled). Slots into a suit plating piece via the Suit Assembly Bench.",
+  "cost": 5,
+  "tier": "uncommon",
+  "hidden": true
+}

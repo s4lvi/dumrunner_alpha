@@ -1,0 +1,13 @@
+{
+  "id": "prop_grass",
+  "label": "Alient Grass",
+  "biomeAffinity": [
+    "biome_mox8bles"
+  ],
+  "hp": 40,
+  "solid": true,
+  "onDestroy": "nothing",
+  "visual": {
+    "spriteSize": 0.55
+  }
+}

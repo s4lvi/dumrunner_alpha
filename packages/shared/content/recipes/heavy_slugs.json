@@ -1,0 +1,24 @@
+{
+  "id": "heavy_slugs",
+  "name": "Heavy Slugs (12)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "scrap",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 3
+    }
+  ],
+  "output": {
+    "kind": "ammo",
+    "ammoId": "heavy_slugs",
+    "count": 12
+  },
+  "workstation": "workbench",
+  "blueprintId": null,
+  "craftTimeMs": 12000
+}

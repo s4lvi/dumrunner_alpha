@@ -20,6 +20,7 @@ import {
   TextField,
 } from '../_components/Form';
 import { TextureRow } from '../_components/TextureRow';
+import { AnimationPicker } from '../_components/AnimationPicker';
 import { useEntityEditor } from '../_components/useEntityEditor';
 import { EntityList } from '../_components/EntityList';
 import { ReferencesPanel } from '../_components/ReferencesPanel';
@@ -458,6 +459,16 @@ function PropEditorBody() {
                   })
                 }
                 hint="0 = sits on the floor; 1 = hangs from the ceiling. Useful for floating debris / banners / lamps."
+              />
+            </FormSection>
+
+            <FormSection title="Animation">
+              <AnimationPicker
+                label="animation"
+                category="prop"
+                value={draft.animationId}
+                onChange={(v) => setDraft({ ...draft, animationId: v })}
+                hint="Drives this prop's idle + destroy states in the FPS renderer."
               />
             </FormSection>
           </div>

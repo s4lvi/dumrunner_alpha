@@ -88,6 +88,10 @@ import {
   getOverworldBiome,
 } from './biomes.js';
 import { getPropVisualsForWire } from './props.js';
+import { getBlueprintsForWire } from './blueprints.js';
+import { getWeaponsForWire } from './weapons.js';
+import { getRecipesForWire } from './recipes.js';
+import { getAttachmentsForWire } from './attachments.js';
 
 // Surface is an open scene (no walls) but ships a layout so the client knows
 // where the dungeon entrance is. Walkables are empty → collision is skipped.
@@ -611,6 +615,10 @@ export class World {
       hotbarSelection: conn.hotbarSelection,
       layout: scene.layout,
       knownBlueprints: mergedBlueprints(conn),
+      blueprints: getBlueprintsForWire(),
+      weapons: getWeaponsForWire(),
+      recipes: getRecipesForWire(),
+      attachments: getAttachmentsForWire(),
       enemyVisuals: getEnemyVisualsForWire(),
       biomes: getBiomesForWire(),
       propVisuals: getPropVisualsForWire(),

@@ -1,0 +1,28 @@
+{
+  "id": "sniper",
+  "name": "Sniper Rifle",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 6
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 4
+    },
+    {
+      "kind": "material",
+      "materialId": "crystal",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "weapon",
+    "weaponId": "sniper"
+  },
+  "workstation": "workbench",
+  "blueprintId": "bp_sniper",
+  "craftTimeMs": 75000
+}

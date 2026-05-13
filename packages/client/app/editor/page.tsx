@@ -14,9 +14,14 @@ export default function EditorIndex() {
         </p>
         <ul className="text-[12px] text-zinc-400 list-disc pl-5 space-y-1">
           <li>
-            <span className="text-zinc-300">Biomes / Rooms / Enemies / Props</span>
+            <span className="text-zinc-300">
+              Biomes / Rooms / Enemies / Props / Blueprints / Weapons
+            </span>
             {' '}— authored content stored as JSON under
             {' '}<code className="text-zinc-300">packages/shared/content/</code>.
+            The sidebar groups these by layer (World / Entities /
+            Items / Progression) so it stays scannable as more
+            areas land.
           </li>
           <li>
             <span className="text-zinc-300">Textures</span> — image uploads

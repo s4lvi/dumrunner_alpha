@@ -120,6 +120,10 @@ export type BiomeWireEntry = {
   hazardZoneIntensities?: BiomeDef['generation']['hazardZoneIntensities'];
   wallTextureIds: string[];
   floorTextureIds: string[];
+  wallHeightTiles?: number;
+  wallAnimationId?: string;
+  floorAnimationId?: string;
+  ceilingAnimationId?: string;
 };
 
 function tileVariantsForRole(
@@ -145,6 +149,10 @@ export function getBiomesForWire(): Record<string, BiomeWireEntry> {
       hazardZoneIntensities: def.generation.hazardZoneIntensities,
       wallTextureIds: tileVariantsForRole(def, 'wall'),
       floorTextureIds: tileVariantsForRole(def, 'floor'),
+      wallHeightTiles: def.wallHeightTiles,
+      wallAnimationId: def.wallAnimationId,
+      floorAnimationId: def.floorAnimationId,
+      ceilingAnimationId: def.ceilingAnimationId,
     };
   }
   return out;

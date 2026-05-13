@@ -1,0 +1,30 @@
+{
+  "id": "craft_aff_firerate_25",
+  "name": "Lightweight Grip (+25% RoF)",
+  "inputs": [
+    {
+      "kind": "material",
+      "materialId": "alloy",
+      "count": 3
+    },
+    {
+      "kind": "material",
+      "materialId": "wire",
+      "count": 5
+    },
+    {
+      "kind": "material",
+      "materialId": "circuit",
+      "count": 1
+    }
+  ],
+  "output": {
+    "kind": "attachment",
+    "defId": "aff_firerate_25",
+    "count": 1
+  },
+  "workstation": "weapon_bench",
+  "blueprintId": "bp_aff_firerate_25",
+  "craftTimeMs": 30000,
+  "stationTier": 2
+}

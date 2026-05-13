@@ -1,0 +1,22 @@
+{
+  "kind": "weapon_mod",
+  "id": "mod_dampener",
+  "displayName": "Recoil Dampener",
+  "description": "-25% spread, slight projectile speed bump.",
+  "adjective": "Damped",
+  "family": null,
+  "effect": {
+    "spreadMult": 0.75,
+    "projectileSpeedAdd": 150
+  },
+  "rolls": {
+    "spreadMultBonus": [
+      -0.08,
+      0.05
+    ],
+    "projectileSpeedAddBonus": [
+      -50,
+      200
+    ]
+  }
+}
