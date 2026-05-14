@@ -584,6 +584,9 @@ export function runTopdownGame(
     setFireHeld: () => {
       /* topdown fires per-click only */
     },
+    requestFire: () => {
+      /* not wired against topdown */
+    },
     swapScene: (state: SceneState) => {
       currentSceneId = state.sceneId;
       players.clear();

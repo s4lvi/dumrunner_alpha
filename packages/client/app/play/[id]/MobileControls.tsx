@@ -1,18 +1,18 @@
 // Touch-input overlay for the FPS renderer. Mounted only when
 // useIsTouchDevice() returns true so desktop sessions are
-// untouched. Lays four interactive regions on top of the canvas:
+// untouched. Four interactive regions on top of the canvas:
 //
-//   - Left bottom: virtual joystick → movement vector + sprint
-//   - Right half:  invisible look-pad → camera yaw / pitch deltas
-//   - Right edge:  combat column (Fire / Reload / Interact)
-//   - Top-right:   inventory toggle button
+//   - Left bottom:  virtual movement stick → forward/right vector
+//                   + sprint when pushed past the threshold.
+//   - Right bottom: virtual look stick → continuous yaw/pitch
+//                   while held. Quick tap (short hold, no drag)
+//                   fires one shot.
+//   - Right edge:   action column (Reload / Interact).
+//   - Top right:    inventory toggle.
 //
-// Pointer events are used throughout so the same code handles
-// finger and stylus input without an explicit touch fallback.
-// Each interactive region uses setPointerCapture on down so a
-// finger that drags off the region keeps emitting until it
-// lifts — important for the look-pad where the player will sweep
-// across boundaries.
+// Pointer events are used throughout — same code handles finger
+// and stylus input. Each region calls setPointerCapture on down
+// so dragging off the region keeps emitting until release.
 
 'use client';
 
@@ -20,30 +20,39 @@ import { useCallback, useEffect, useRef } from 'react';
 
 // Joystick geometry. Outer ring is the visible base; the thumb
 // can travel from centre out to (OUTER_RADIUS - THUMB_RADIUS) so
-// it never escapes the ring. Sprint engages when the thumb is
-// pushed past SPRINT_THRESHOLD of the travel range — same "push
-// the stick hard" pattern other mobile FPS games use, and avoids
-// adding a second UI control just to sprint.
+// it never escapes the ring. Both joysticks share the same look.
 const JOY_OUTER_RADIUS = 64;
 const JOY_THUMB_RADIUS = 28;
 const JOY_TRAVEL = JOY_OUTER_RADIUS - JOY_THUMB_RADIUS;
 const JOY_DEAD_ZONE = 0.12;
+
+// Left-stick sprint engages when the thumb is pushed past this
+// fraction of the travel range. "Push the stick hard" — saves a
+// dedicated sprint control on a tight touch surface.
 const JOY_SPRINT_THRESHOLD = 0.92;
 
-// Pixel multiplier applied to look-pad pointer deltas before they
-// hit applyLookDelta. The renderer's POINTER_SENSITIVITY is tuned
-// for mouse pixels (typically 1-pixel-per-pixel under pointer
-// lock); finger deltas are several pixels per visual unit of
-// rotation, so we scale up here so a quick swipe feels like a
-// half-turn rather than a head twitch.
-const LOOK_SENSITIVITY_X = 1.0;
-const LOOK_SENSITIVITY_Y = 1.0;
+// Right-stick look rate at max deflection. Expressed in pixels
+// per second so the renderer can keep using its existing
+// POINTER_SENSITIVITY (rad/px) without an extra knob. At 1200
+// px/s × 0.0025 rad/px = 3 rad/s ≈ 170°/s — fast enough to
+// 180-spin in about a second, slow enough that small corrections
+// aren't twitchy. Pitch uses a lower rate so vertical look isn't
+// punishingly sensitive (and pitch is already clamped at the
+// renderer side).
+const LOOK_RATE_PX_PER_SEC_X = 1200;
+const LOOK_RATE_PX_PER_SEC_Y = 600;
+
+// Tap detection on the look stick. A "tap" is a press + release
+// that completes quickly and never moves the thumb more than a
+// short distance from centre. Anything else is treated as a
+// look-only drag and doesn't fire.
+const TAP_MAX_DURATION_MS = 220;
+const TAP_MAX_MOVE_PX = 14;
 
 export function MobileControls({
   onMove,
   onLookDelta,
-  onFireDown,
-  onFireUp,
+  onFire,
   onReload,
   onInteract,
   onOpenInventory,
@@ -52,8 +61,11 @@ export function MobileControls({
 }: {
   onMove: (forward: number, right: number, sprint: boolean) => void;
   onLookDelta: (dx: number, dy: number) => void;
-  onFireDown: () => void;
-  onFireUp: () => void;
+  // Single-shot fire. Triggered by a tap on the look stick (touch
+  // down + release within TAP_MAX_DURATION_MS, total movement
+  // < TAP_MAX_MOVE_PX). The renderer's per-weapon fire interval
+  // handles redundant taps.
+  onFire: () => void;
   onReload: () => void;
   onInteract: () => void;
   onOpenInventory: () => void;
@@ -64,15 +76,13 @@ export function MobileControls({
     <div
       className="pointer-events-none absolute inset-0 z-20 select-none"
       // Block all touch gestures the browser might intercept
-      // (pinch-zoom, double-tap-zoom, swipe-back). The active
-      // regions re-enable pointer events selectively.
+      // (pinch-zoom, double-tap-zoom, swipe-back). Active regions
+      // re-enable pointer events selectively.
       style={{ touchAction: 'none' }}
     >
-      <Joystick onMove={onMove} />
-      <LookPad onLookDelta={onLookDelta} />
-      <CombatColumn
-        onFireDown={onFireDown}
-        onFireUp={onFireUp}
+      <MoveJoystick onMove={onMove} />
+      <LookJoystick onLookDelta={onLookDelta} onFire={onFire} />
+      <ActionColumn
         onReload={onReload}
         onInteract={onInteract}
         canInteract={canInteract}
@@ -83,9 +93,9 @@ export function MobileControls({
   );
 }
 
-// ---------- Joystick ----------
+// ---------- Move joystick (left) ----------
 
-function Joystick({
+function MoveJoystick({
   onMove,
 }: {
   onMove: (forward: number, right: number, sprint: boolean) => void;
@@ -99,9 +109,6 @@ function Joystick({
   const centerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const moveRef = useRef(onMove);
   moveRef.current = onMove;
-  // Latest dispatched vector — used to compare against the next
-  // frame's value so we only call onMove when something actually
-  // changed (cuts WS chatter when the finger sits still).
   const lastDispatchRef = useRef<{
     forward: number;
     right: number;
@@ -153,10 +160,6 @@ function Joystick({
       let dx = e.clientX - c.x;
       let dy = e.clientY - c.y;
       const mag = Math.hypot(dx, dy);
-      // Clamp the visible thumb to the ring; clamp the dispatched
-      // vector to 1.0 magnitude so the server still receives a
-      // unit-circle input even when the finger is dragged past
-      // the outer ring.
       if (mag > JOY_TRAVEL) {
         const scale = JOY_TRAVEL / mag;
         dx *= scale;
@@ -168,8 +171,6 @@ function Joystick({
         dispatch(0, 0, false);
         return;
       }
-      // Joystick visual deflection → input vector. Up is forward,
-      // so forward = -dy / TRAVEL (screen y grows downward).
       const forward = -dy / JOY_TRAVEL;
       const right = dx / JOY_TRAVEL;
       dispatch(
@@ -226,97 +227,197 @@ function Joystick({
   );
 }
 
-// ---------- Look-pad ----------
+// ---------- Look joystick (right) ----------
 //
-// Right half of the screen (minus the combat column) is a
-// transparent capture area. Each finger drag emits a delta in
-// pixels that the GameHandle translates into yaw / pitch rotation
-// using the same POINTER_SENSITIVITY constant the mouse path
-// uses. No persistent visual — keeps the FPS view as clean as
-// possible.
+// Mirrors the move joystick on the right side of the screen.
+// Deflection drives continuous look rotation via a per-frame rAF
+// loop that converts stick deflection into synthetic pointer
+// deltas — keeps the renderer's existing applyLookDelta API in
+// charge of POINTER_SENSITIVITY + pitch clamping.
+//
+// A press that completes quickly without dragging the thumb is
+// interpreted as a fire tap. The "drag mode" and "tap mode" are
+// resolved at release time: while the thumb is past TAP_MAX_MOVE,
+// or the press has lasted past TAP_MAX_DURATION_MS, this press is
+// committed to look-only and won't fire on release.
 
-function LookPad({
+function LookJoystick({
   onLookDelta,
+  onFire,
 }: {
   onLookDelta: (dx: number, dy: number) => void;
+  onFire: () => void;
 }): React.ReactElement {
-  const lastRef = useRef<{ id: number; x: number; y: number } | null>(null);
-  const deltaRef = useRef(onLookDelta);
-  deltaRef.current = onLookDelta;
+  const baseRef = useRef<HTMLDivElement | null>(null);
+  const thumbRef = useRef<HTMLDivElement | null>(null);
+  const touchIdRef = useRef<number | null>(null);
+  const centerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Live thumb deflection in pixels (clamped to ring). Read by
+  // the rAF loop to emit per-frame look deltas; mutated by
+  // pointer-move.
+  const deflectionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Press-time bookkeeping for tap detection. startedAt = 0 when
+  // no press is active; maxMagPx tracks the largest deflection
+  // the thumb reached during this press so a "drag-and-return"
+  // doesn't get misidentified as a tap.
+  const pressRef = useRef<{
+    startedAt: number;
+    maxMagPx: number;
+  }>({ startedAt: 0, maxMagPx: 0 });
+  // rAF handle so we can cancel on release and on unmount.
+  const rafRef = useRef<number | null>(null);
+  const lastFrameAtRef = useRef<number>(0);
+  const onLookRef = useRef(onLookDelta);
+  onLookRef.current = onLookDelta;
+  const onFireRef = useRef(onFire);
+  onFireRef.current = onFire;
+
+  const updateThumb = useCallback((dx: number, dy: number): void => {
+    const thumb = thumbRef.current;
+    if (!thumb) return;
+    thumb.style.transform = `translate(${dx}px, ${dy}px)`;
+  }, []);
+
+  const stopLoop = useCallback((): void => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    lastFrameAtRef.current = 0;
+  }, []);
+
+  const tick = useCallback((nowMs: number): void => {
+    if (touchIdRef.current === null) {
+      rafRef.current = null;
+      return;
+    }
+    const prev = lastFrameAtRef.current;
+    const dtSec = prev === 0 ? 1 / 60 : Math.min(0.1, (nowMs - prev) / 1000);
+    lastFrameAtRef.current = nowMs;
+    const def = deflectionRef.current;
+    // Normalize against travel range to a unit vector at max
+    // deflection. Anything inside the dead zone emits no rotation
+    // so a resting finger doesn't drift the view.
+    const normX = def.x / JOY_TRAVEL;
+    const normY = def.y / JOY_TRAVEL;
+    const mag = Math.hypot(normX, normY);
+    if (mag >= JOY_DEAD_ZONE) {
+      const dx = normX * LOOK_RATE_PX_PER_SEC_X * dtSec;
+      // y-down screen → pitch lookdown: feedforward dy directly;
+      // the renderer subtracts on its side (mouse-down = look-
+      // down behaviour the user already preferred).
+      const dy = normY * LOOK_RATE_PX_PER_SEC_Y * dtSec;
+      onLookRef.current(dx, dy);
+    }
+    rafRef.current = requestAnimationFrame(tick);
+  }, []);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>): void => {
-      // Only claim the first touch — second-touch is reserved for
-      // simultaneous fire/look multi-touch on the combat column.
-      if (lastRef.current !== null) return;
-      lastRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
-      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+      if (touchIdRef.current !== null) return;
+      const base = baseRef.current;
+      if (!base) return;
+      touchIdRef.current = e.pointerId;
+      base.setPointerCapture(e.pointerId);
+      const rect = base.getBoundingClientRect();
+      centerRef.current = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+      deflectionRef.current = { x: 0, y: 0 };
+      pressRef.current = { startedAt: performance.now(), maxMagPx: 0 };
+      if (rafRef.current === null) {
+        rafRef.current = requestAnimationFrame(tick);
+      }
     },
-    [],
+    [tick],
   );
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>): void => {
-      const last = lastRef.current;
-      if (!last || last.id !== e.pointerId) return;
-      const dx = (e.clientX - last.x) * LOOK_SENSITIVITY_X;
-      const dy = (e.clientY - last.y) * LOOK_SENSITIVITY_Y;
-      last.x = e.clientX;
-      last.y = e.clientY;
-      if (dx !== 0 || dy !== 0) deltaRef.current(dx, dy);
+      if (touchIdRef.current !== e.pointerId) return;
+      const c = centerRef.current;
+      let dx = e.clientX - c.x;
+      let dy = e.clientY - c.y;
+      const mag = Math.hypot(dx, dy);
+      if (mag > JOY_TRAVEL) {
+        const scale = JOY_TRAVEL / mag;
+        dx *= scale;
+        dy *= scale;
+      }
+      updateThumb(dx, dy);
+      deflectionRef.current = { x: dx, y: dy };
+      const press = pressRef.current;
+      const visibleMag = Math.hypot(dx, dy);
+      if (visibleMag > press.maxMagPx) press.maxMagPx = visibleMag;
     },
-    [],
+    [updateThumb],
   );
 
   const onPointerUp = useCallback(
     (e: React.PointerEvent<HTMLDivElement>): void => {
-      const last = lastRef.current;
-      if (!last || last.id !== e.pointerId) return;
-      lastRef.current = null;
-      const el = e.currentTarget as HTMLDivElement;
-      if (el.hasPointerCapture(e.pointerId)) {
-        el.releasePointerCapture(e.pointerId);
+      if (touchIdRef.current !== e.pointerId) return;
+      const press = pressRef.current;
+      const elapsed = performance.now() - press.startedAt;
+      const wasTap =
+        elapsed <= TAP_MAX_DURATION_MS && press.maxMagPx <= TAP_MAX_MOVE_PX;
+      touchIdRef.current = null;
+      const base = baseRef.current;
+      if (base?.hasPointerCapture(e.pointerId)) {
+        base.releasePointerCapture(e.pointerId);
       }
+      updateThumb(0, 0);
+      deflectionRef.current = { x: 0, y: 0 };
+      pressRef.current = { startedAt: 0, maxMagPx: 0 };
+      stopLoop();
+      if (wasTap) onFireRef.current();
     },
-    [],
+    [updateThumb, stopLoop],
   );
+
+  // Defensive cleanup. A renderer remount mid-press would
+  // otherwise leak the rAF callback.
+  useEffect(() => () => stopLoop(), [stopLoop]);
 
   return (
     <div
+      ref={baseRef}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      className="pointer-events-auto absolute"
+      className="pointer-events-auto absolute rounded-full bg-black/35 border border-white/15 backdrop-blur-sm"
       style={{
-        // Right ~55% of the screen, leaving room for the combat
-        // column. Vertical span clears the top inventory button.
-        right: 0,
-        top: 56,
-        bottom: 0,
-        // Width is roughly half-screen with a margin so a finger
-        // can rest on the right edge without hitting the combat
-        // column. The buttons sit ABOVE this layer via z-index,
-        // so a touch over a button still registers on the button.
-        width: 'calc(60vw - 96px)',
+        width: JOY_OUTER_RADIUS * 2,
+        height: JOY_OUTER_RADIUS * 2,
+        right: 24,
+        bottom: 24,
         touchAction: 'none',
       }}
-    />
+    >
+      <div
+        ref={thumbRef}
+        className="absolute rounded-full bg-red-400/55 border border-red-200/70"
+        style={{
+          width: JOY_THUMB_RADIUS * 2,
+          height: JOY_THUMB_RADIUS * 2,
+          left: JOY_OUTER_RADIUS - JOY_THUMB_RADIUS,
+          top: JOY_OUTER_RADIUS - JOY_THUMB_RADIUS,
+          willChange: 'transform',
+        }}
+      />
+    </div>
   );
 }
 
-// ---------- Combat column ----------
+// ---------- Action column (right edge, above the look stick) ----------
 
-function CombatColumn({
-  onFireDown,
-  onFireUp,
+function ActionColumn({
   onReload,
   onInteract,
   canInteract,
   canReload,
 }: {
-  onFireDown: () => void;
-  onFireUp: () => void;
   onReload: () => void;
   onInteract: () => void;
   canInteract: boolean;
@@ -324,85 +425,31 @@ function CombatColumn({
 }): React.ReactElement {
   return (
     <div
-      className="pointer-events-none absolute"
-      style={{ right: 16, bottom: 16, top: 64 }}
+      className="pointer-events-none absolute flex flex-col items-end gap-3"
+      // Sits above the look-joystick (24 + 128 = 152 from bottom)
+      // plus a small gap so a fingertip on the joystick can't
+      // graze a button.
+      style={{ right: 24, bottom: 168 }}
     >
-      <div className="absolute right-0 bottom-0 flex flex-col items-end gap-3">
-        {canInteract && (
-          <RoundButton
-            label="E"
-            sub="use"
-            onClick={onInteract}
-            color="bg-yellow-500/70 border-yellow-300/60"
-            size={64}
-          />
-        )}
-        {canReload && (
-          <RoundButton
-            label="R"
-            sub="reload"
-            onClick={onReload}
-            color="bg-zinc-700/70 border-zinc-400/60"
-            size={64}
-          />
-        )}
-        <FireButton onDown={onFireDown} onUp={onFireUp} />
-      </div>
+      {canInteract && (
+        <RoundButton
+          label="E"
+          sub="use"
+          onClick={onInteract}
+          color="bg-yellow-500/70 border-yellow-300/60"
+          size={64}
+        />
+      )}
+      {canReload && (
+        <RoundButton
+          label="R"
+          sub="reload"
+          onClick={onReload}
+          color="bg-zinc-700/70 border-zinc-400/60"
+          size={64}
+        />
+      )}
     </div>
-  );
-}
-
-function FireButton({
-  onDown,
-  onUp,
-}: {
-  onDown: () => void;
-  onUp: () => void;
-}): React.ReactElement {
-  const onDownRef = useRef(onDown);
-  onDownRef.current = onDown;
-  const onUpRef = useRef(onUp);
-  onUpRef.current = onUp;
-  const heldIdRef = useRef<number | null>(null);
-  const handleDown = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>): void => {
-      // Reject extra touches so a second finger landing on Fire
-      // while the first is still held doesn't double-trigger on
-      // release. The first finger owns the held state.
-      if (heldIdRef.current !== null) return;
-      heldIdRef.current = e.pointerId;
-      (e.currentTarget as HTMLButtonElement).setPointerCapture(e.pointerId);
-      onDownRef.current();
-    },
-    [],
-  );
-  const handleUp = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>): void => {
-      if (heldIdRef.current !== e.pointerId) return;
-      heldIdRef.current = null;
-      const el = e.currentTarget as HTMLButtonElement;
-      if (el.hasPointerCapture(e.pointerId)) {
-        el.releasePointerCapture(e.pointerId);
-      }
-      onUpRef.current();
-    },
-    [],
-  );
-  return (
-    <button
-      type="button"
-      onPointerDown={handleDown}
-      onPointerUp={handleUp}
-      onPointerCancel={handleUp}
-      className="pointer-events-auto rounded-full bg-red-600/70 border-2 border-red-300/60 text-white font-semibold shadow-lg active:bg-red-500/80"
-      style={{
-        width: 84,
-        height: 84,
-        touchAction: 'none',
-      }}
-    >
-      FIRE
-    </button>
   );
 }
 
@@ -419,8 +466,8 @@ function RoundButton({
   color: string;
   size: number;
 }): React.ReactElement {
-  // Tap-only buttons use onPointerUp instead of onClick so the
-  // action fires on the same touch that hit the element — no
+  // Tap-only buttons fire on onPointerUp instead of onClick so
+  // the action lands on the same touch that hit the element — no
   // 300ms click delay, no synthesized-event ordering surprises
   // inside the Discord iframe.
   const onTap = useCallback(
@@ -510,9 +557,6 @@ export function useLandscapeOrientationLock(active: boolean): void {
       } catch {
         /* ignore */
       }
-      // Reference released to keep the linter quiet about an
-      // assigned-but-unused local. Used as a flag in case future
-      // code wants to check whether unlock has run.
       void released;
     };
   }, [active]);

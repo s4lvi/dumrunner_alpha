@@ -1532,11 +1532,8 @@ export function Game({ serverId }: { serverId: string }) {
             onLookDelta={(dx, dy) => {
               gameRef.current?.applyLookDelta(dx, dy);
             }}
-            onFireDown={() => {
-              gameRef.current?.setFireHeld(true);
-            }}
-            onFireUp={() => {
-              gameRef.current?.setFireHeld(false);
+            onFire={() => {
+              gameRef.current?.requestFire();
             }}
             onReload={() => {
               sendOnLiveWs({ type: 'reload_weapon' });

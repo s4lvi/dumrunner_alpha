@@ -8,6 +8,11 @@ build/
 .next/
 out/
 *.tsbuildinfo
+# Build-time manifests emitted by packages/client/scripts/build-manifests.mjs.
+# Regenerated on every `next build`; committing would just mask drift between
+# the source content/ tree and what ships.
+packages/client/public/content-manifest.json
+packages/client/public/textures-manifest.json
 
 # Env
 .env

@@ -254,6 +254,12 @@ export type GameHandle = {
   // has none.
   setFireHeld(held: boolean): void;
 
+  // Fire a single shot in the current look direction. Used by
+  // tap-to-fire on the right look joystick — the touch UI doesn't
+  // hold the button, so a one-shot request is the cleaner shape.
+  // Server's per-weapon fire interval still gates redundant taps.
+  requestFire(): void;
+
   destroy(): void;
 };
 
@@ -2641,6 +2647,9 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     setFireHeld() {
       // Top-down fires on click only; no held-fire model yet.
+    },
+    requestFire() {
+      // No mobile fire path against the top-down renderer today.
     },
     swapScene(state: SceneState) {
       currentSceneId = state.sceneId;

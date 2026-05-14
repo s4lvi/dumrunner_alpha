@@ -13,6 +13,59 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 const TEXTURES_DIR = path.join(process.cwd(), 'public', 'textures');
+
+// ---------- Manifest-backed reads (production) ----------
+//
+// Mirrors the content route's manifest strategy. On Vercel the
+// function bundle's filesystem trace catches static files in
+// public/ (manifests, individual texture PNGs), but doesn't
+// reliably catch every entry written via the editor at build
+// time. The prebuild script
+// (packages/client/scripts/build-manifests.mjs) walks the
+// textures dir at build time and writes the same shape this
+// route's dev-mode GET emits. Module-level cache survives warm
+// invocations.
+
+type TextureManifest = {
+  entries: {
+    category: string;
+    id: string;
+    state?: string;
+    frame?: number;
+    url: string;
+  }[];
+};
+let cachedTextureManifest: TextureManifest | null = null;
+let cachedTextureManifestPromise: Promise<TextureManifest> | null = null;
+
+async function loadTextureManifest(): Promise<TextureManifest> {
+  if (cachedTextureManifest) return cachedTextureManifest;
+  if (cachedTextureManifestPromise) return cachedTextureManifestPromise;
+  cachedTextureManifestPromise = (async () => {
+    try {
+      const file = path.join(
+        process.cwd(),
+        'public',
+        'textures-manifest.json',
+      );
+      const raw = await fs.readFile(file, 'utf8');
+      cachedTextureManifest = JSON.parse(raw) as TextureManifest;
+    } catch (e) {
+      console.warn(
+        '[textures api] textures-manifest.json missing — falling back to empty registry',
+        e,
+      );
+      cachedTextureManifest = { entries: [] };
+    }
+    cachedTextureManifestPromise = null;
+    return cachedTextureManifest;
+  })();
+  return cachedTextureManifestPromise;
+}
+
+function isProd(): boolean {
+  return process.env.NODE_ENV === 'production';
+}
 const ALLOWED_CATEGORIES = new Set([
   'enemy',
   'building',
@@ -67,6 +120,14 @@ type TextureEntry = {
 };
 
 export async function GET() {
+  // Production: serve the prebuilt manifest. The dev-mode walk
+  // below depends on a writable / readable filesystem rooted at
+  // process.cwd()/public, which isn't reliably the case in a
+  // Vercel function bundle.
+  if (isProd()) {
+    const manifest = await loadTextureManifest();
+    return NextResponse.json(manifest);
+  }
   await fs.mkdir(TEXTURES_DIR, { recursive: true });
   const entries: TextureEntry[] = [];
   let cats: string[] = [];
@@ -177,6 +238,15 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (isProd()) {
+    return NextResponse.json(
+      {
+        error:
+          'texture uploads are disabled in production. Add the file locally and redeploy.',
+      },
+      { status: 403 },
+    );
+  }
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
@@ -268,6 +338,15 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  if (isProd()) {
+    return NextResponse.json(
+      {
+        error:
+          'texture deletes are disabled in production. Remove the file locally and redeploy.',
+      },
+      { status: 403 },
+    );
+  }
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });

@@ -11,6 +11,8 @@
 // area string.
 
 import { NextResponse, type NextRequest } from 'next/server';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import {
   ATTACHMENT_DEFS,
   BUILDING_REGISTRY,
@@ -68,6 +70,55 @@ function asArea(area: string): EditorArea | null {
   return isEditorArea(area) ? area : null;
 }
 
+// ---------- Manifest-backed reads (production) ----------
+//
+// In production the dev-time loaders can't see the on-disk
+// content/ tree — @dumrunner/shared is bundled into the Next
+// build via transpilePackages, and the loader's
+// `import.meta.url`-relative path no longer points at the source
+// directory after bundling. The prebuild script
+// (packages/client/scripts/build-manifests.mjs) walks the
+// authored content/ tree and emits public/content-manifest.json
+// which IS guaranteed to ship with the function bundle. Reads in
+// prod go through here; writes are blocked (the deploy is
+// immutable — author locally, commit, push).
+//
+// Cached at module scope so a warm function reuses the parse;
+// emptied on cold-start.
+
+type ContentManifest = Partial<Record<EditorArea, { id: string }[]>>;
+let cachedManifest: ContentManifest | null = null;
+let cachedManifestPromise: Promise<ContentManifest> | null = null;
+
+async function loadContentManifest(): Promise<ContentManifest> {
+  if (cachedManifest) return cachedManifest;
+  if (cachedManifestPromise) return cachedManifestPromise;
+  cachedManifestPromise = (async () => {
+    try {
+      const file = path.join(
+        process.cwd(),
+        'public',
+        'content-manifest.json',
+      );
+      const raw = await fs.readFile(file, 'utf8');
+      cachedManifest = JSON.parse(raw) as ContentManifest;
+    } catch (e) {
+      console.warn(
+        '[editor api] content-manifest.json missing — falling back to empty registry',
+        e,
+      );
+      cachedManifest = {};
+    }
+    cachedManifestPromise = null;
+    return cachedManifest;
+  })();
+  return cachedManifestPromise;
+}
+
+function isProd(): boolean {
+  return process.env.NODE_ENV === 'production';
+}
+
 const LIST: Record<EditorArea, () => Promise<unknown[]>> = {
   biomes: loadBiomes,
   enemies: loadEnemies,
@@ -118,6 +169,26 @@ export async function GET(
     return NextResponse.json({ error: 'unknown area' }, { status: 400 });
   }
   const id = req.nextUrl.searchParams.get('id');
+  // Production: manifest is the only source of truth. We never
+  // touch the dev-time filesystem loaders here — they can't see
+  // the content directory once Next bundles @dumrunner/shared.
+  if (isProd()) {
+    const manifest = await loadContentManifest();
+    const entries = manifest[area] ?? [];
+    if (id) {
+      if (!SAFE_ID.test(id)) {
+        return NextResponse.json({ error: 'invalid id' }, { status: 400 });
+      }
+      const entity = entries.find((e) => e.id === id);
+      if (!entity) {
+        return NextResponse.json({ error: 'not found' }, { status: 404 });
+      }
+      return NextResponse.json(entity);
+    }
+    return NextResponse.json({ entries });
+  }
+  // Dev: live filesystem reads so in-app edits show up
+  // immediately without a manifest rebuild.
   if (id) {
     if (!SAFE_ID.test(id)) {
       return NextResponse.json({ error: 'invalid id' }, { status: 400 });
@@ -150,6 +221,19 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ area: string }> },
 ) {
+  // Editing in production is a no-op — the deploy is immutable.
+  // Author content locally, commit, push; Vercel rebuilds the
+  // manifest on deploy. Returning 403 is louder than silently
+  // accepting writes that wouldn't persist.
+  if (isProd()) {
+    return NextResponse.json(
+      {
+        error:
+          'editor saves are disabled in production. Author locally and redeploy.',
+      },
+      { status: 403 },
+    );
+  }
   const { area: rawArea } = await ctx.params;
   const area = asArea(rawArea);
   if (!area) {
@@ -415,6 +499,15 @@ export async function DELETE(
   req: NextRequest,
   ctx: { params: Promise<{ area: string }> },
 ) {
+  if (isProd()) {
+    return NextResponse.json(
+      {
+        error:
+          'editor deletes are disabled in production. Author locally and redeploy.',
+      },
+      { status: 403 },
+    );
+  }
   const { area: rawArea } = await ctx.params;
   const area = asArea(rawArea);
   if (!area) {

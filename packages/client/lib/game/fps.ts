@@ -659,75 +659,11 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     keys.delete(e.code);
   }
 
-  // Sticky-aim parameters. Only engages when fire is held *via
-  // mobile* (mobileFireHeld) — keyboard / mouse players get the
-  // raw mouse-look they already have.
-  //
-  //   AIM_ASSIST_CONE_RAD: half-angle of the forward cone. Wider
-  //     than a typical desktop crosshair so the assist actually
-  //     bites; tight enough that you can still aim PAST an enemy
-  //     by turning further than the cone.
-  //   AIM_ASSIST_RANGE_PX: enemies beyond this distance are
-  //     ignored; mid-range engagements feel mostly snap-free,
-  //     close engagements get the most help.
-  //   AIM_ASSIST_RATE_RAD_PER_S: max yaw rotation per second
-  //     applied by the assist. Soft enough that the player still
-  //     feels in control; firm enough that a finger drag toward
-  //     an enemy "locks in."
-  const AIM_ASSIST_CONE_RAD = 0.35;
-  const AIM_ASSIST_RANGE_PX = 600;
-  const AIM_ASSIST_RATE_RAD_PER_S = 2.0;
-  // dt source for aim assist: walltime delta between tickInput
-  // calls. Ticker delta would work too, but performance.now()
-  // is reliable across Pixi versions and matches the units the
-  // existing animation system uses.
-  let lastTickInputAt = 0;
-
-  function applyMobileAimAssist(dtMs: number): void {
-    if (!mobileFireHeld) return;
-    if (equippedWeapon === null) return;
-    const fwdX = Math.cos(yaw);
-    const fwdY = Math.sin(yaw);
-    let bestEnemy: { dx: number; dy: number } | null = null;
-    let bestDistSq = AIM_ASSIST_RANGE_PX * AIM_ASSIST_RANGE_PX;
-    for (const e of enemies.values()) {
-      if (e.hp <= 0) continue;
-      const dx = e.x - selfX;
-      const dy = e.y - selfY;
-      const dsq = dx * dx + dy * dy;
-      if (dsq > bestDistSq) continue;
-      // Forward-cone gate: enemy must lie within ±CONE of our
-      // facing direction. Dot product against unit forward vector
-      // gives cos(angle); compare against cos(cone) without an
-      // atan2.
-      const dist = Math.sqrt(dsq);
-      if (dist < 0.001) continue;
-      const cosAngle = (dx * fwdX + dy * fwdY) / dist;
-      if (cosAngle < Math.cos(AIM_ASSIST_CONE_RAD)) continue;
-      bestDistSq = dsq;
-      bestEnemy = { dx, dy };
-    }
-    if (!bestEnemy) return;
-    const targetYaw = Math.atan2(bestEnemy.dy, bestEnemy.dx);
-    let delta = targetYaw - yaw;
-    // Wrap to [-PI, PI] so the rotation takes the short way around.
-    while (delta > Math.PI) delta -= 2 * Math.PI;
-    while (delta < -Math.PI) delta += 2 * Math.PI;
-    const maxStep = AIM_ASSIST_RATE_RAD_PER_S * (dtMs / 1000);
-    if (delta > maxStep) delta = maxStep;
-    else if (delta < -maxStep) delta = -maxStep;
-    yaw = (yaw + delta) % (Math.PI * 2);
-  }
-
   // Yaw-relative WASD: W/S = forward/back along facing, D/A = strafe right/
   // left. We rotate the unit input vector into world space before handing
   // it to the server, which still treats moveX/moveY as a world-space
   // direction (no protocol change).
   function tickInput() {
-    const now = performance.now();
-    const dtMs = lastTickInputAt === 0 ? 16 : now - lastTickInputAt;
-    lastTickInputAt = now;
-    applyMobileAimAssist(dtMs);
     let fwd: number;
     let right: number;
     let sprint: boolean;
@@ -3248,6 +3184,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     setFireHeld(held) {
       mobileFireHeld = held;
+    },
+    requestFire() {
+      // Single-shot fire in the current facing direction. Mirrors
+      // what tickInput would emit on one frame of held-fire, just
+      // synchronous so a quick tap never gets dropped between
+      // ticker invocations. Server gates per-weapon fire interval.
+      if (equippedWeapon === null) return;
+      const cy = Math.cos(yaw);
+      const sy = Math.sin(yaw);
+      init.sendFire(cy, sy);
     },
     destroy() {
       unsubFpsOverrides();
