@@ -97,6 +97,7 @@ export const SandboxPreview = forwardRef<
   // a mode swap mid-session lands at the current floor + entities,
   // not the original surface.
   const sceneStateRef = useRef<{
+    sceneId: string;
     self: WelcomeMsg['self'];
     players: WelcomeMsg['players'];
     enemies: WelcomeMsg['enemies'];
@@ -184,6 +185,7 @@ export const SandboxPreview = forwardRef<
 
     function cacheScene(w: WelcomeMsg): void {
       sceneStateRef.current = {
+        sceneId: w.sceneId,
         self: w.self,
         players: w.players,
         enemies: w.enemies,
@@ -264,6 +266,7 @@ export const SandboxPreview = forwardRef<
           // any currently-mounted renderer so the canvas paints
           // the new floor immediately.
           const snap: SceneState = {
+            sceneId: msg.sceneId,
             self: msg.self,
             players: msg.players.filter(
               (p) => p.characterId !== msg.self.characterId,
@@ -277,6 +280,7 @@ export const SandboxPreview = forwardRef<
             layout: msg.layout,
           };
           sceneStateRef.current = {
+            sceneId: msg.sceneId,
             self: msg.self,
             players: msg.players,
             enemies: msg.enemies,
@@ -344,6 +348,7 @@ export const SandboxPreview = forwardRef<
 
     const runner = runnerFor(mode);
     gameRef.current = runner(host, {
+      sceneId: snap.sceneId,
       self: snap.self,
       others: snap.players.filter(
         (p) => p.characterId !== snap.self.characterId,
@@ -416,6 +421,7 @@ export type { WelcomeMsg };
 // `players` as the full roster including self) to the SceneState
 // shape the renderers expect (self separate, players = others).
 function toSceneState(cached: {
+  sceneId: string;
   self: WelcomeMsg['self'];
   players: WelcomeMsg['players'];
   enemies: WelcomeMsg['enemies'];
@@ -427,6 +433,7 @@ function toSceneState(cached: {
   layout: WelcomeMsg['layout'];
 }): SceneState {
   return {
+    sceneId: cached.sceneId,
     self: cached.self,
     players: cached.players.filter(
       (p) => p.characterId !== cached.self.characterId,

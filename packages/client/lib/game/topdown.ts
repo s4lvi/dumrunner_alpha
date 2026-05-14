@@ -69,6 +69,7 @@ export function runTopdownGame(
   const players = new Map<string, Player>();
   for (const p of init.others) players.set(p.characterId, p);
   let self: Player = { ...init.self };
+  let currentSceneId: string = init.sceneId;
   players.set(self.characterId, self);
 
   const enemies = new Map<string, EnemyState>();
@@ -575,6 +576,7 @@ export function runTopdownGame(
       /* topdown has no view-model */
     },
     swapScene: (state: SceneState) => {
+      currentSceneId = state.sceneId;
       players.clear();
       for (const p of state.players) players.set(p.characterId, p);
       self = { ...state.self };
@@ -600,6 +602,7 @@ export function runTopdownGame(
       requestRepaint();
     },
     currentSceneState: (): SceneState => ({
+      sceneId: currentSceneId,
       self,
       players: [...players.values()].filter(
         (p) => p.characterId !== self.characterId,

@@ -308,14 +308,23 @@ function applyMovement(
   const speed = enemy.template.moveSpeed * currentEnemySpeedMult(enemy) * dt;
 
   if (m.kind === 'chase') {
-    // Hold a small standoff at melee range so chasers don't walk
-    // into body contact before swinging — reads as "attacking
-    // from a step away" rather than clipping into the player.
-    // 0.75 tiles of pad inside the declared melee range.
+    // Hold a standoff at melee range so chasers don't walk into
+    // body-contact with the player before swinging — reads as
+    // "attacking from a step away" rather than clipping in. The
+    // standoff is a fixed body-clearance pad (~1.5 tiles) added on
+    // top of the player+enemy radii, capped just inside the
+    // declared melee range so swings still land.
+    const MELEE_STANDOFF_PAD = 48;
     let stop = 0;
     for (const atk of enemy.template.attacks) {
       if (atk.kind === 'melee') {
-        stop = Math.max(0, atk.range - 24);
+        // Stay at least MELEE_STANDOFF_PAD away, but never further
+        // than 12px inside the declared attack range — otherwise
+        // long-armed enemies sit out of swing.
+        stop = Math.min(
+          Math.max(0, atk.range - 12),
+          MELEE_STANDOFF_PAD,
+        );
         break;
       }
     }

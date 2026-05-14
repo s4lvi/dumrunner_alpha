@@ -143,7 +143,7 @@ export const COMBAT = {
   ENEMY_FALLBACK_RADIUS: 18,
 
   LOOT_TTL_MS: 90_000,
-  LOOT_PICKUP_RADIUS: 40,
+  LOOT_PICKUP_RADIUS: 28,
 
   // Players can only place buildings within this many tiles of their current
   // position. Server validates; client shades the same ring.

@@ -123,6 +123,11 @@ export function Game({ serverId }: { serverId: string }) {
   const [equipment, setEquipment] = useState<Equipment>(() => emptyEquipment());
   const [hotbarSelection, setHotbarSelection] = useState(0);
   const [sceneId, setSceneId] = useState<string>('surface');
+  // Bumped on every scene_changed. The transition overlay reads it
+  // as a React key so each transition remounts the overlay and
+  // restarts its fade-out animation from full opacity — without
+  // this the CSS animation only runs once per page load.
+  const [transitionTick, setTransitionTick] = useState(0);
   // Current scene's SceneLayout; lets the HazardHUD compute the
   // player's room-zone category client-side using the same
   // categoryAt helper the server's hazard tick uses. null = no
@@ -642,6 +647,7 @@ export function Game({ serverId }: { serverId: string }) {
           const cb = rendererCallbacksRef.current!;
           const runner = runnerFor(rendererMode);
           gameRef.current = runner(host, {
+            sceneId: msg.sceneId,
             self: msg.self,
             others: msg.players.filter((p) => p.characterId !== msg.self.characterId),
             enemies: msg.enemies,
@@ -799,6 +805,7 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       case 'scene_changed':
         setSceneId(msg.sceneId);
+        setTransitionTick((t) => t + 1);
         setCurrentLayout(msg.layout);
         setEquipment(msg.equipment);
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
@@ -818,6 +825,7 @@ export function Game({ serverId }: { serverId: string }) {
           maxStamina: msg.self.maxStamina,
         }));
         gameRef.current?.swapScene({
+          sceneId: msg.sceneId,
           self: msg.self,
           players: msg.players.filter(
             (p) => p.characterId !== msg.self.characterId
@@ -1220,6 +1228,7 @@ export function Game({ serverId }: { serverId: string }) {
     gameRef.current = null;
     const runner = runnerFor(rendererMode);
     gameRef.current = runner(host, {
+      sceneId: snapshot.sceneId,
       self: snapshot.self,
       others: snapshot.players,
       enemies: snapshot.enemies,
@@ -1469,6 +1478,15 @@ export function Game({ serverId }: { serverId: string }) {
 
       <div className="flex-1 relative">
         <div ref={canvasHostRef} className="absolute inset-0 cursor-crosshair" />
+
+        {/* Scene-transition curtain. Rendered on top of the canvas
+            via z-index, keyed by transitionTick so each scene swap
+            remounts the element and replays the fade-out. The CSS
+            animation handles the visual entirely (no setTimeout /
+            unmount needed). */}
+        {transitionTick > 0 && (
+          <SceneTransitionOverlay key={transitionTick} />
+        )}
 
         <Hotbar
           inventory={inventory}
@@ -2779,11 +2797,16 @@ function InventoryPanel({
 }) {
   const hotbar = inventory.slice(0, HOTBAR_SIZE);
   const bag = inventory.slice(HOTBAR_SIZE);
-  // Click-to-inspect target. null = no inspector visible (default
-  // grid view). Cleared automatically when the targeted slot becomes
-  // empty (e.g. after a craft/swap shuffles the bag), so the panel
-  // doesn't render stale stats.
+  // Click-to-inspect target. Two parallel slots: one for a bag /
+  // hotbar index, one for an equipped suit slot. At most one is
+  // non-null at a time — clicking the other source clears the
+  // first. Cleared automatically when the targeted item disappears
+  // (slot empties, part unequipped), so the panel doesn't render
+  // stale stats.
   const [inspectedIdx, setInspectedIdx] = useState<number | null>(null);
+  const [inspectedArmor, setInspectedArmor] = useState<SuitSlotKind | null>(
+    null,
+  );
   useEffect(() => {
     if (inspectedIdx === null) return;
     if (inspectedIdx >= inventory.length) {
@@ -2794,8 +2817,26 @@ function InventoryPanel({
       setInspectedIdx(null);
     }
   }, [inventory, inspectedIdx]);
-  const inspectedSlot =
-    inspectedIdx !== null ? inventory[inspectedIdx] : null;
+  useEffect(() => {
+    if (inspectedArmor === null) return;
+    if (!equipment[inspectedArmor]) {
+      setInspectedArmor(null);
+    }
+  }, [equipment, inspectedArmor]);
+  const onInspectArmor = useCallback((suitSlot: SuitSlotKind) => {
+    setInspectedIdx(null);
+    setInspectedArmor((cur) => (cur === suitSlot ? null : suitSlot));
+  }, []);
+  const onInspectInventory = useCallback((idx: number | null) => {
+    setInspectedArmor(null);
+    setInspectedIdx(idx);
+  }, []);
+  const armorPart = inspectedArmor ? equipment[inspectedArmor] : null;
+  const inspectedSlot: InventorySlot | null = armorPart
+    ? { kind: 'part', part: armorPart }
+    : inspectedIdx !== null
+      ? inventory[inspectedIdx]
+      : null;
 
   return (
     <Modal onClose={onClose} width="min(960px, 96vw)">
@@ -2824,6 +2865,8 @@ function InventoryPanel({
             stats={stats}
             onEquip={onEquip}
             onUnequip={onUnequip}
+            onInspect={onInspectArmor}
+            inspectedSlot={inspectedArmor}
           />
         </div>
         <div className="space-y-3 flex-1 min-w-0">
@@ -2843,7 +2886,7 @@ function InventoryPanel({
                     onSwap={onSwap}
                     onContextMenu={onContextMenu}
                     onArmorDrop={(suitSlot) => onUnequip(suitSlot, idx)}
-                    onInspect={setInspectedIdx}
+                    onInspect={onInspectInventory}
                     inspecting={idx === inspectedIdx}
                   />
                 );
@@ -2866,7 +2909,7 @@ function InventoryPanel({
                   onSwap={onSwap}
                   onContextMenu={onContextMenu}
                   onArmorDrop={(suitSlot) => onUnequip(suitSlot, i)}
-                  onInspect={setInspectedIdx}
+                  onInspect={onInspectInventory}
                   inspecting={i === inspectedIdx}
                 />
               ))}
@@ -2878,7 +2921,10 @@ function InventoryPanel({
           {inspectedSlot && inspectedSlot.kind !== 'empty' && (
             <InspectPanel
               slot={inspectedSlot}
-              onClose={() => setInspectedIdx(null)}
+              onClose={() => {
+                setInspectedIdx(null);
+                setInspectedArmor(null);
+              }}
             />
           )}
           <CraftPanel
@@ -5513,6 +5559,8 @@ function CharacterPanel({
   stats,
   onEquip,
   onUnequip,
+  onInspect,
+  inspectedSlot,
 }: {
   equipment: Equipment;
   stats: {
@@ -5525,6 +5573,8 @@ function CharacterPanel({
   };
   onEquip: (fromInventoryIdx: number, suitSlot: SuitSlotKind) => void;
   onUnequip: (suitSlot: SuitSlotKind, toInventoryIdx?: number) => void;
+  onInspect: (suitSlot: SuitSlotKind) => void;
+  inspectedSlot: SuitSlotKind | null;
 }) {
   // Compute the suit's contribution from the equipment so we can render
   // each row as "current/max (+suit bonus)". The server has already
@@ -5544,6 +5594,8 @@ function CharacterPanel({
             part={equipment.chassis}
             onDropPart={onEquip}
             onUnequip={onUnequip}
+            onInspect={onInspect}
+            inspecting={inspectedSlot === 'chassis'}
           />
         </div>
         {/* Middle — plating */}
@@ -5553,6 +5605,8 @@ function CharacterPanel({
             part={equipment.plating}
             onDropPart={onEquip}
             onUnequip={onUnequip}
+            onInspect={onInspect}
+            inspecting={inspectedSlot === 'plating'}
           />
         </div>
         {/* Lower — life support */}
@@ -5562,6 +5616,8 @@ function CharacterPanel({
             part={equipment.life_support}
             onDropPart={onEquip}
             onUnequip={onUnequip}
+            onInspect={onInspect}
+            inspecting={inspectedSlot === 'life_support'}
           />
         </div>
         {/* Left — utility mod */}
@@ -5571,6 +5627,8 @@ function CharacterPanel({
             part={equipment.utility_mod}
             onDropPart={onEquip}
             onUnequip={onUnequip}
+            onInspect={onInspect}
+            inspecting={inspectedSlot === 'utility_mod'}
           />
         </div>
         {/* Right — cargo grid */}
@@ -5580,6 +5638,8 @@ function CharacterPanel({
             part={equipment.cargo_grid}
             onDropPart={onEquip}
             onUnequip={onUnequip}
+            onInspect={onInspect}
+            inspecting={inspectedSlot === 'cargo_grid'}
           />
         </div>
       </div>
@@ -5689,6 +5749,29 @@ function StatRow({
   );
 }
 
+// Scene-transition curtain. Drops in fully opaque on mount and
+// fades out to nothing over ~500ms, revealing the freshly-swapped
+// scene underneath. The visual is a layered CSS pattern: a black
+// base, then a tight horizontal scanline stripe, then a faint
+// chroma shimmer — together this reads as a CRT-style warp wipe
+// rather than a plain fade. Pointer-events stay off so input
+// never gets eaten by the curtain.
+function SceneTransitionOverlay() {
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 z-30 scene-transition-curtain"
+      style={{
+        background: [
+          // Faint chroma — picks up the scene tint behind it.
+          'repeating-linear-gradient(to bottom, rgba(80,200,255,0.06) 0, rgba(80,200,255,0.06) 1px, transparent 1px, transparent 3px)',
+          // Hard scanlines on top of the black base.
+          'repeating-linear-gradient(to bottom, rgba(0,0,0,0.92) 0, rgba(0,0,0,0.92) 2px, rgba(20,20,28,0.78) 2px, rgba(20,20,28,0.78) 4px)',
+        ].join(', '),
+      }}
+    />
+  );
+}
+
 function CharacterSilhouette() {
   // Simple top-down humanoid silhouette behind the slot overlays.
   return (
@@ -5714,11 +5797,15 @@ function ArmorSlot({
   part,
   onDropPart,
   onUnequip,
+  onInspect,
+  inspecting,
 }: {
   kind: SuitSlotKind;
   part: CarriedPart | null;
   onDropPart: (fromInventoryIdx: number, suitSlot: SuitSlotKind) => void;
   onUnequip: (suitSlot: SuitSlotKind, toInventoryIdx?: number) => void;
+  onInspect: (suitSlot: SuitSlotKind) => void;
+  inspecting: boolean;
 }) {
   const draggable = part !== null;
   // Slot label sits under the box and always shows the slot kind
@@ -5732,10 +5819,14 @@ function ArmorSlot({
     <div className="flex flex-col items-center gap-0.5">
       <div
         className={`w-10 h-10 rounded border ${
-          part
-            ? 'border-[color:var(--accent)]'
-            : 'border-[color:var(--panel-border)]'
-        } bg-[color:var(--bg)] flex items-center justify-center`}
+          inspecting
+            ? 'border-[color:var(--accent)] ring-1 ring-[color:var(--accent)]'
+            : part
+              ? 'border-[color:var(--accent)]'
+              : 'border-[color:var(--panel-border)]'
+        } bg-[color:var(--bg)] flex items-center justify-center ${
+          part ? 'cursor-pointer' : ''
+        }`}
         draggable={draggable}
         onDragStart={
           draggable
@@ -5758,6 +5849,7 @@ function ArmorSlot({
           if (!Number.isFinite(from)) return;
           onDropPart(from, kind);
         }}
+        onClick={part ? () => onInspect(kind) : undefined}
         onContextMenu={
           part
             ? (e) => {

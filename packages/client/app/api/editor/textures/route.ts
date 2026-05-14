@@ -32,6 +32,11 @@ const ALLOWED_CATEGORIES = new Set([
   // sprite shown anchored bottom-centre in the FPS renderer.
   'projectile',
   'weapon_view',
+  // Portal sprites — stairs_down (descend a floor) and extract_pad
+  // (return to surface). Keyed by interactable kind. When absent
+  // the renderer skips drawing the marker entirely so authors can
+  // rely on a manually-placed prop instead.
+  'interactable',
   // Library-model animations (post-refactor). All animation
   // textures — spritesheets or per-frame PNGs — live under this
   // single category, keyed by animation id rather than entity id.

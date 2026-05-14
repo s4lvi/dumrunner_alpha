@@ -830,6 +830,7 @@ function EnemyPreview({ draft }: { draft: EnemyDef }) {
       maxHp: draft.stats.hp,
     };
     return {
+      sceneId: 'editor:enemies',
       self,
       others: [],
       enemies: [enemy],

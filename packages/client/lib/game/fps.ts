@@ -256,9 +256,17 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // Fog of war — one byte per cell (1 = revealed). Allocated when
   // a layout with a tileGrid is applied. Marks cells in a circle
   // around self each tick. Cleared whenever the scene swaps.
+  // Minimap fog per scene. We persist the seenTiles bitmap keyed
+  // by sceneId so re-entering a previously-visited scene (e.g.
+  // surface → dungeon → surface) restores what the player had
+  // already revealed rather than dropping back to all-black fog.
+  // Cache lifetime is the renderer instance; destroy() drops it.
+  const fogBySceneId = new Map<string, Uint8Array>();
+  let currentSceneId: string = init.sceneId;
   let seenTiles: Uint8Array | null = init.layout?.tileGrid
     ? new Uint8Array(init.layout.tileGrid.width * init.layout.tileGrid.height)
     : null;
+  if (seenTiles) fogBySceneId.set(currentSceneId, seenTiles);
   // Visibility radius in tiles for fog reveals. Wide enough to
   // feel useful in 3-tile-wide rooms but tight enough that the
   // player still has to actually traverse corridors to map them.
@@ -1744,7 +1752,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // the sprite renders as a textured billboard (per-column UV
     // strip with z-test); otherwise falls back to the flat-color
     // column path.
-    texCategory?: 'enemy' | 'building' | 'prop' | 'player' | 'material' | 'projectile';
+    texCategory?:
+      | 'enemy'
+      | 'building'
+      | 'prop'
+      | 'player'
+      | 'material'
+      | 'projectile'
+      | 'interactable';
     texId?: string;
     // Animation Phase C: pre-resolved Texture used in place of
     // the (texCategory, texId) lookup. Set by the per-entity
@@ -2013,17 +2028,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         animTex ?? undefined,
       );
     }
-    // Interactables — stairs, extract pad. Rendered as tall, distinctive
-    // billboards so the player can spot them from across a room. Color by
-    // kind. Pulse over time for the "interactable" cue.
+    // Interactables — stairs, extract pad. Authored as a textured
+    // billboard per kind under category 'interactable'. When no
+    // texture is authored the renderer draws nothing — authors are
+    // expected to drop a building/prop at the spot for the visual
+    // (the auto-billboard from earlier builds was an over-cue once
+    // hand-placed portals became the norm).
     if (layout) {
-      const pulse = 0.7 + 0.3 * Math.sin(now / 250);
       for (const it of layout.interactables) {
-        const color =
-          it.kind === 'stairs_down'
-            ? blendColor(0x3b82f6, 0xffffff, 1 - pulse)
-            : blendColor(0xfacc15, 0xffffff, 1 - pulse);
-        pushSprite(it.x, it.y, color, 36);
+        if (!getFpsOverrideTexture('interactable', it.kind)) continue;
+        // White tint so the texture's own colour passes through
+        // unmodified — the flat-color fallback path isn't used
+        // because we only push when a texture exists.
+        pushSprite(it.x, it.y, 0xffffff, 36, 'interactable', it.kind);
       }
     }
 
@@ -2239,7 +2256,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         | 'prop'
         | 'player'
         | 'material'
-        | 'projectile',
+        | 'projectile'
+        | 'interactable',
       texId?: string,
       floats: boolean = false,
       groundOffset: number = 0,
@@ -2709,12 +2727,21 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   function applySceneState(state: SceneState) {
     layout = state.layout;
     layoutTiles = decodeLayoutTiles(layout);
-    // Fog state — fresh seen[] for each scene. Without a tileGrid
-    // we leave it null and the minimap falls back to no-fog.
+    // Fog state — keyed by sceneId so re-entering a previously
+    // visited scene restores its bitmap. A cached entry whose
+    // dimensions no longer match the current tileGrid (e.g.
+    // re-rolled dungeon between cycles) is dropped and rebuilt.
+    currentSceneId = state.sceneId;
     if (layout?.tileGrid) {
       const w = layout.tileGrid.width;
       const h = layout.tileGrid.height;
-      seenTiles = new Uint8Array(w * h);
+      const cached = fogBySceneId.get(currentSceneId);
+      if (cached && cached.length === w * h) {
+        seenTiles = cached;
+      } else {
+        seenTiles = new Uint8Array(w * h);
+        fogBySceneId.set(currentSceneId, seenTiles);
+      }
     } else {
       seenTiles = null;
     }
@@ -3008,6 +3035,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       return {
         selfX,
         selfY,
+        selfYaw: yaw,
         selfId: init.self.characterId,
         tileSize: layout?.tileSize ?? 32,
         walkables: layout?.walkables ?? [],
@@ -3068,6 +3096,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         otherPlayers.push({ ...p });
       }
       return {
+        sceneId: currentSceneId,
         self: self ? { ...self } : { ...init.self, x: selfX, y: selfY },
         players: otherPlayers,
         enemies: [...enemies.values()].map((e) => ({ ...e })),

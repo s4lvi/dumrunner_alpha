@@ -45,6 +45,11 @@ const BUILD_RADIUS_TILES = 3;
 const INTERACTABLE_RADIUS = 60;
 
 export type GameInit = {
+  // Initial scene this renderer is mounted into. Used as the cache
+  // key for per-scene state (e.g. minimap fog) so re-entering a
+  // previously-visited scene can restore prior data instead of
+  // wiping it on every transition.
+  sceneId: string;
   self: Player;
   others: Player[];
   enemies: EnemyState[];
@@ -114,7 +119,10 @@ export type GameInit = {
 
 // Subset of state we need to apply when the player transitions between scenes
 // (server message scene_changed). Same shape as the welcome scene fields.
+// sceneId is included so renderers can key per-scene state (e.g. minimap fog)
+// against it — re-entering a previously-visited scene restores prior data.
 export type SceneState = {
+  sceneId: string;
   self: Player;
   players: Player[];
   enemies: EnemyState[];
@@ -389,6 +397,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   // Active scene layout. Drives wall rendering and visual line-of-sight.
   // Updated on init (welcome) and on swapScene (scene_changed).
   let currentLayout: SceneLayout | null = init.layout;
+  let currentSceneId: string = init.sceneId;
   // Versions used by the fog cache. Bump these whenever the underlying
   // data the fog scan reads changes.
   let layoutVersion = 0;
@@ -2594,6 +2603,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
       // Top-down renderer doesn't show a view-model.
     },
     swapScene(state: SceneState) {
+      currentSceneId = state.sceneId;
       ifReady(() => {
         // Tear down everything that doesn't belong to the new scene.
         for (const p of players.values())
@@ -2722,6 +2732,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         otherPlayers.push({ ...p.data });
       }
       return {
+        sceneId: currentSceneId,
         self,
         players: otherPlayers,
         enemies: [...enemies.values()].map((e) => ({ ...e.data })),

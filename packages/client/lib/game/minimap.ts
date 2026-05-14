@@ -14,6 +14,10 @@ import {
 export type MinimapSnapshot = {
   selfX: number;
   selfY: number;
+  // Player heading in radians (0 = +X, π/2 = +Y). Optional —
+  // top-down 2D renderers without a facing direction can omit it
+  // and the minimap will skip drawing the heading line.
+  selfYaw?: number;
   selfId: string;
   tileSize: number;
   walkables: Rect[];
@@ -238,6 +242,22 @@ export function paintMinimap(
   ctx.strokeStyle = '#000';
   ctx.lineWidth = 1;
   ctx.stroke();
+
+  // Heading line — points the way the player is facing. Drawn
+  // after the blob so it sits on top. Length is fixed in pixels
+  // (not world units) so it stays legible at every zoom level.
+  if (typeof snap.selfYaw === 'number') {
+    const HEADING_LEN_PX = 9;
+    const hx = cx + Math.cos(snap.selfYaw) * HEADING_LEN_PX;
+    const hy = cy + Math.sin(snap.selfYaw) * HEADING_LEN_PX;
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(hx, hy);
+    ctx.stroke();
+  }
 
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
   ctx.lineWidth = 1;

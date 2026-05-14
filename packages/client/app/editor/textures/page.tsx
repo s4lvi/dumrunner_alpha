@@ -278,6 +278,16 @@ export default function EditorPage() {
             />
           ))}
         </Section>
+        <Section title="Portals">
+          <p className="text-[10px] text-zinc-500 px-2 mb-2">
+            Per-kind sprite for portal interactables. The renderer
+            shows the texture as a bottom-anchored billboard at the
+            portal's world position. Leave a row empty to skip the
+            marker — place a building/prop manually for the visual.
+          </p>
+          <TextureRow category="interactable" id="stairs_down" />
+          <TextureRow category="interactable" id="extract_pad" />
+        </Section>
         <Section title="Buildings (front)">
           {BUILDING_KINDS.map((id) => (
             <TextureRow key={`building-${id}`} category="building" id={id} />
@@ -458,6 +468,7 @@ function buildDemoInit({
   }));
 
   return {
+    sceneId: 'editor:textures',
     self,
     others: [],
     enemies,

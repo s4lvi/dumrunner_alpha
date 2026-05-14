@@ -1962,10 +1962,15 @@ function sameRect(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
-// Find every perimeter tile of the room that overlaps an adjacent
-// corridor. Returns ALL such tiles so the door fully spans the
-// entrance — a 2-wide corridor placed against a room produces 2
-// adjacent doors that open as one (server flood-fills by adjacency).
+// Find the door spans where the room meets adjacent corridors.
+// Each room wall (top/bottom/left/right) emits at most ONE
+// contiguous span — the longest run of perimeter tiles that touch
+// a corridor on that side. Without this cap, when a corridor
+// grazes multiple sides of a room (common when the tunneler hugs
+// it on more than one side), every touching tile becomes a door
+// and the room reads as having doors around all borders.
+// A multi-tile span is preserved as multiple adjacent doors that
+// open as one (the server flood-fills by adjacency).
 function pickDoorTilesForRoom(
   room: Rect,
   corridors: Rect[],
@@ -1976,25 +1981,76 @@ function pickDoorTilesForRoom(
   const txEnd = Math.floor((room.x + room.w) / tileSize);
   const tyEnd = Math.floor((room.y + room.h) / tileSize);
 
+  // For one wall: walk the perimeter tiles in order and split into
+  // contiguous runs of corridor-touching tiles. Returns the longest
+  // run only; ties keep the first encountered.
+  function longestRun(
+    startIdx: number,
+    endIdx: number,
+    touches: (i: number) => boolean,
+    makeDoor: (i: number) => InitialDoor,
+  ): InitialDoor[] {
+    let bestStart = -1;
+    let bestLen = 0;
+    let curStart = -1;
+    let curLen = 0;
+    for (let i = startIdx; i < endIdx; i++) {
+      if (touches(i)) {
+        if (curLen === 0) curStart = i;
+        curLen++;
+        if (curLen > bestLen) {
+          bestLen = curLen;
+          bestStart = curStart;
+        }
+      } else {
+        curLen = 0;
+      }
+    }
+    if (bestLen === 0) return [];
+    const out: InitialDoor[] = [];
+    for (let i = bestStart; i < bestStart + bestLen; i++) {
+      out.push(makeDoor(i));
+    }
+    return out;
+  }
+
   const tiles: InitialDoor[] = [];
-  // Top + bottom edges.
-  for (let tx = tx0; tx < txEnd; tx++) {
-    if (tileTouchesCorridor(tx, ty0 - 1, corridors, tileSize)) {
-      tiles.push({ tileX: tx, tileY: ty0 });
-    }
-    if (tileTouchesCorridor(tx, tyEnd, corridors, tileSize)) {
-      tiles.push({ tileX: tx, tileY: tyEnd - 1 });
-    }
-  }
-  // Left + right edges.
-  for (let ty = ty0; ty < tyEnd; ty++) {
-    if (tileTouchesCorridor(tx0 - 1, ty, corridors, tileSize)) {
-      tiles.push({ tileX: tx0, tileY: ty });
-    }
-    if (tileTouchesCorridor(txEnd, ty, corridors, tileSize)) {
-      tiles.push({ tileX: txEnd - 1, tileY: ty });
-    }
-  }
+  // Top wall — touching corridor on the row above.
+  tiles.push(
+    ...longestRun(
+      tx0,
+      txEnd,
+      (tx) => tileTouchesCorridor(tx, ty0 - 1, corridors, tileSize),
+      (tx) => ({ tileX: tx, tileY: ty0 }),
+    ),
+  );
+  // Bottom wall.
+  tiles.push(
+    ...longestRun(
+      tx0,
+      txEnd,
+      (tx) => tileTouchesCorridor(tx, tyEnd, corridors, tileSize),
+      (tx) => ({ tileX: tx, tileY: tyEnd - 1 }),
+    ),
+  );
+  // Left wall.
+  tiles.push(
+    ...longestRun(
+      ty0,
+      tyEnd,
+      (ty) => tileTouchesCorridor(tx0 - 1, ty, corridors, tileSize),
+      (ty) => ({ tileX: tx0, tileY: ty }),
+    ),
+  );
+  // Right wall.
+  tiles.push(
+    ...longestRun(
+      ty0,
+      tyEnd,
+      (ty) => tileTouchesCorridor(txEnd, ty, corridors, tileSize),
+      (ty) => ({ tileX: txEnd - 1, tileY: ty }),
+    ),
+  );
   return tiles;
 }
 

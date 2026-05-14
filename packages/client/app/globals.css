@@ -26,3 +26,27 @@ a { color: var(--accent); }
 input, select, textarea, button {
   font: inherit;
 }
+
+/* Scene-transition curtain. The element is mounted on scene_changed
+   keyed by an incrementing tick, so each mount replays this from
+   the top. The scanline pattern scrolls vertically while the whole
+   layer fades out — reads like a CRT wipe rather than a flat fade. */
+@keyframes scene-transition-wipe {
+  0% {
+    opacity: 1;
+    background-position: 0 0, 0 0;
+  }
+  60% {
+    opacity: 1;
+    background-position: 0 14px, 0 28px;
+  }
+  100% {
+    opacity: 0;
+    background-position: 0 56px, 0 96px;
+  }
+}
+
+.scene-transition-curtain {
+  animation: scene-transition-wipe 520ms ease-out forwards;
+  will-change: opacity, background-position;
+}

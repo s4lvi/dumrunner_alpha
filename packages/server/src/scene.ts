@@ -97,7 +97,7 @@ import {
 // PLAYER_RADIUS + tileSize/2 ≈ 30px away on each axis; sqrt(2)·30 ≈ 42
 // at the corner, plus a safety margin so first-frame collision jitter
 // doesn't cause a missed interaction.
-const INTERACTABLE_RADIUS = 60;
+const INTERACTABLE_RADIUS = 40;
 
 // 16 unit-circle directions used by Scene.circlePassable. Mirrors the
 // shared geometry sampler so player and AI bounding-circle tests are
