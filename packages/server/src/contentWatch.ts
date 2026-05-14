@@ -27,6 +27,7 @@ const AREAS = [
   'weapons',
   'recipes',
   'attachments',
+  'buildings',
 ] as const;
 const DEBOUNCE_MS = 250;
 
@@ -46,6 +47,7 @@ export type ContentReloader = {
   weapons(): Promise<void>;
   recipes(): Promise<void>;
   attachments(): Promise<void>;
+  buildings(): Promise<void>;
 };
 
 export function startContentWatch(reloader: ContentReloader): () => void {

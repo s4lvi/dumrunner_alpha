@@ -59,6 +59,8 @@ import {
   decodeTileGrid,
   enemyVisualFor,
   propVisualFor,
+  buildingVisualFor,
+  INTERACTABLE_RADIUS,
   isInsideAny,
   isWalkableTileId,
   materialTint,
@@ -84,6 +86,15 @@ function propAnimKey(id: string): string {
 }
 function projectileAnimKey(id: string): string {
   return `projectile::${id}`;
+}
+// Building animations key per-kind, not per-instance: every
+// instance of the same kind shares one AnimationController so
+// they advance together (e.g. all Power Links pulse in sync).
+// The raycaster's wall pass hits multiple cells per frame and
+// doesn't carry building ids, so per-kind keying also matches
+// the natural granularity of the texture lookup.
+function buildingAnimKey(kind: string): string {
+  return `building::${kind}`;
 }
 
 // Per-equipped-weapon view-model controller key. Reusing the
@@ -330,7 +341,8 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   const dyingProps = new Map<string, number>();
   // Build mode: kind to place, or null when not building. Pending action is
   // resolved during the next render so a click reads the latest target tile.
-  let buildKind: import('@dumrunner/shared').BuildingKind | null = null;
+  let buildKind: import('@dumrunner/shared').PlaceableBuildingKind | null =
+    null;
   let buildRadiusBonus = 0;
   let pendingBuildAction: 'place' | 'demolish' | null = null;
 
@@ -731,8 +743,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       }
       return;
     }
-    const r = 60; // matches INTERACTABLE_RADIUS on the server + top-down
-    const r2 = r * r;
+    const r2 = INTERACTABLE_RADIUS * INTERACTABLE_RADIUS;
     let bestId: string | null = null;
     let bestLabel: string | null = null;
     let bestDistSq = r2;
@@ -1216,7 +1227,23 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
               ? getFpsOverrideTexture('prop_open', propKind)
               : null) ?? getFpsOverrideTexture('prop', propKind);
         } else if (hit.isBuilding) {
-          tex = getFpsOverrideTexture('building', hit.buildingKind ?? 'wall');
+          // Per-kind animation override: when the building's
+          // BuildingVisual carries an animationId, drive every
+          // face of every instance off the current frame. Falls
+          // back to the static ('building', kind) texture when no
+          // animation is authored or the frame array hasn't loaded
+          // yet (during the brief async PNG fetch on first use).
+          const kind = hit.buildingKind ?? 'wall';
+          const animId = buildingVisualFor(kind).animationId;
+          const animTex = animId
+            ? getAnimationFrame(
+                animId,
+                buildingAnimKey(kind),
+                nowMs,
+                'idle',
+              )
+            : null;
+          tex = animTex ?? getFpsOverrideTexture('building', kind);
         } else {
           // Phase D: per-cell phase offset for biome wall
           // animations. Each cell rolls its own time offset

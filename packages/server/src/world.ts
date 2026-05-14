@@ -88,6 +88,7 @@ import {
   getOverworldBiome,
 } from './biomes.js';
 import { getPropVisualsForWire } from './props.js';
+import { getBuildingVisualsForWire } from './buildingOverrides.js';
 import { getBlueprintsForWire } from './blueprints.js';
 import { getWeaponsForWire } from './weapons.js';
 import { getRecipesForWire } from './recipes.js';
@@ -622,6 +623,7 @@ export class World {
       enemyVisuals: getEnemyVisualsForWire(),
       biomes: getBiomesForWire(),
       propVisuals: getPropVisualsForWire(),
+      buildingVisuals: getBuildingVisualsForWire(),
     });
 
     scene.broadcast(
@@ -2934,6 +2936,13 @@ export class World {
       meta.doors,
       initialProps,
     );
+    // Promote the dungeon's two portal interactables (stairs_down +
+    // extract_pad) into solid building cubes so they render as
+    // animatable visuals via /editor/buildings. Idempotent — a
+    // rehydrated scene already carrying the buildings is left
+    // alone. The Interactable layer continues to handle E-press;
+    // the building only owns the physical/visual presence.
+    scene.ensurePortalBuildings();
     this.scenes.set(sceneId, scene);
     return scene;
   }

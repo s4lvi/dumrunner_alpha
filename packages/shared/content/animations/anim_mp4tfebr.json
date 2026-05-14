@@ -1,0 +1,13 @@
+{
+  "id": "anim_mp4tfebr",
+  "name": "up_stair",
+  "category": "prop",
+  "states": {
+    "idle": {
+      "frames": 5,
+      "fps": 2.75,
+      "loop": true,
+      "source": "frames"
+    }
+  }
+}

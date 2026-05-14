@@ -11,6 +11,7 @@ import type {
   AttachmentDefData,
   BiomeDef,
   BlueprintDef,
+  BuildingOverride,
   CorridorTemplate,
   EnemyDef,
   PropDef,
@@ -34,6 +35,7 @@ type Schema = {
   recipes: RecipeDef;
   attachments: AttachmentDefData;
   animations: AnimationDef;
+  buildings: BuildingOverride;
 };
 type Area = EditorArea;
 

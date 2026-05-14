@@ -15,12 +15,14 @@ import {
   circleFits,
   decodeTileGrid,
   enemyVisualFor,
+  INTERACTABLE_RADIUS,
   isInsideAny,
   isWalkableTileId,
   materialTint,
   segmentInsideWalkables,
   TIER_COLORS_NUM,
   type BuildingKind,
+  type PlaceableBuildingKind,
   type BuildingState,
   type CorpseState,
   type EnemyState,
@@ -41,8 +43,6 @@ const PLAYER_RADIUS = 14;
 // Must match server: COMBAT.BUILD_RADIUS_TILES.
 const BUILD_RADIUS_TILES = 3;
 
-// Must match server: INTERACTABLE_RADIUS in scene.ts.
-const INTERACTABLE_RADIUS = 60;
 
 export type GameInit = {
   // Initial scene this renderer is mounted into. Used as the cache
@@ -63,7 +63,11 @@ export type GameInit = {
   // tick rate; the server is authoritative.
   sendInput: (moveX: number, moveY: number, sprint: boolean) => void;
   sendFire: (dirX: number, dirY: number) => void;
-  sendBuild: (kind: BuildingKind, tileX: number, tileY: number) => void;
+  sendBuild: (
+    kind: PlaceableBuildingKind,
+    tileX: number,
+    tileY: number,
+  ) => void;
   sendDemolish: (buildingId: string) => void;
   // Called whenever the nearest in-range interactable changes (or becomes
   // null). The host UI renders the "Press E to …" prompt off this.
@@ -186,7 +190,7 @@ export type GameHandle = {
   // Pass a BuildingKind to enter build mode placing that kind, or null to
   // exit. Build mode also requires the current scene to be the surface;
   // pixi enforces that via the layout.tileSize > 0 + sceneId check.
-  setBuildMode(kind: BuildingKind | null): void;
+  setBuildMode(kind: PlaceableBuildingKind | null): void;
   // Suit-derived build-radius bonus (in whole tiles) for the local
   // player. Renderer uses this when sizing the build-mode ring and
   // checking placement validity. Server applies the same bonus
@@ -428,7 +432,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
   let mouseDown = false;
   // Active placeable kind, or null when build mode is off. Driven externally
   // by Game.tsx (based on the selected hotbar slot + current scene).
-  let buildKind: BuildingKind | null = null;
+  let buildKind: PlaceableBuildingKind | null = null;
   let buildRadiusBonus = 0;
   // Currently equipped weapon (or null when no weapon is selected). Driven
   // externally; gates fire/swing locally so we don't show animation for
@@ -2585,7 +2589,7 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
         addProp(p);
       });
     },
-    setBuildMode(kind: BuildingKind | null) {
+    setBuildMode(kind: PlaceableBuildingKind | null) {
       buildKind = kind;
       if (kind !== null) mouseDown = false;
     },

@@ -47,11 +47,13 @@ import {
   setBlueprintCatalog,
   setEnemyVisuals,
   setPropVisuals,
+  setBuildingVisuals,
   setRecipes,
   setWeaponRegistry,
   SUIT_ATTACHMENT_SLOTS,
   SUIT_SLOT_KINDS,
   type BuildingKind,
+  type PlaceableBuildingKind,
   type BuildingState,
   type CarriedPart,
   type ClientMessage,
@@ -346,7 +348,7 @@ export function Game({ serverId }: { serverId: string }) {
   const rendererCallbacksRef = useRef<{
     sendInput: (mx: number, my: number, sprint: boolean) => void;
     sendFire: (dx: number, dy: number) => void;
-    sendBuild: (kind: BuildingKind, tx: number, ty: number) => void;
+    sendBuild: (kind: PlaceableBuildingKind, tx: number, ty: number) => void;
     sendDemolish: (id: string) => void;
     onNearInteractableChanged: (
       near: { id: string; label: string } | null
@@ -546,6 +548,10 @@ export function Game({ serverId }: { serverId: string }) {
         setBiomePalettes(msg.biomes);
         // Per-prop sprite size + ground offset live here.
         setPropVisuals(msg.propVisuals);
+        // Per-BuildingKind override (animationId, etc.) — keyed by
+        // kind so the renderer can resolve building animations the
+        // same way enemies and props do.
+        setBuildingVisuals(msg.buildingVisuals);
         // Blueprint catalog — populated from JSON content on the
         // server. The editor at /editor/blueprints writes those
         // JSON files; client picks up changes on next welcome.
@@ -1245,9 +1251,14 @@ export function Game({ serverId }: { serverId: string }) {
     // Reapply build/weapon mode against the new renderer so the equipped
     // hotbar slot stays in sync.
     const slot = inventory[hotbarSelection];
+    // Placeable slots never carry procgen-only kinds (stairs_down /
+    // extract_pad) at runtime — there's no recipe / loot path that
+    // could put one in inventory. The cast crosses the wider
+    // BuildingKind inventory type into the narrower placement
+    // type setBuildMode accepts.
     const kind =
       sceneId === 'surface' && slot?.kind === 'placeable' && slot.count > 0
-        ? slot.buildingKind
+        ? (slot.buildingKind as PlaceableBuildingKind)
         : null;
     gameRef.current.setBuildMode(kind);
     gameRef.current.setEquippedWeapon(
@@ -1267,7 +1278,7 @@ export function Game({ serverId }: { serverId: string }) {
       sceneId === 'surface' &&
       slot?.kind === 'placeable' &&
       slot.count > 0
-        ? slot.buildingKind
+        ? (slot.buildingKind as PlaceableBuildingKind)
         : null;
     gameRef.current?.setBuildMode(kind);
     // Equipped weapon: pistol/knife when the selected slot is a weapon, else

@@ -84,6 +84,32 @@ export function setPropVisuals(
   Object.assign(PROP_VISUALS, visuals);
 }
 
+// ---------- Building visual registry ----------
+//
+// Per-BuildingKind editor-authored overrides for the otherwise
+// hardcoded BUILDING_REGISTRY (shared/buildings.ts). Today this
+// only carries an optional animationId; the structural metadata
+// (HP, station flags, horde priority) stays in code because it
+// shapes server behaviour. Populated from
+// packages/shared/content/buildings/<kind>.json at server boot
+// and shipped via welcome's buildingVisuals payload.
+export type BuildingVisual = {
+  animationId?: string;
+};
+
+export const BUILDING_VISUALS: Record<string, BuildingVisual> = {};
+
+export function buildingVisualFor(kind: string): BuildingVisual {
+  return BUILDING_VISUALS[kind] ?? {};
+}
+
+export function setBuildingVisuals(
+  visuals: Record<string, BuildingVisual>,
+): void {
+  for (const k of Object.keys(BUILDING_VISUALS)) delete BUILDING_VISUALS[k];
+  Object.assign(BUILDING_VISUALS, visuals);
+}
+
 // ---------- Biome registry ----------
 //
 // Per-biome render palette shipped to the client at session

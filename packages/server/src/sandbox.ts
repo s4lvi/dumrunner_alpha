@@ -40,6 +40,7 @@ import { getWeaponsForWire } from './weapons.js';
 import { getRecipesForWire } from './recipes.js';
 import { getAttachmentsForWire } from './attachments.js';
 import { getPropVisualsForWire } from './props.js';
+import { getBuildingVisualsForWire } from './buildingOverrides.js';
 import {
   generateFloorLayout,
   generateInitialEnemies,
@@ -483,6 +484,7 @@ export class SandboxWorld {
       enemyVisuals: getEnemyVisualsForWire(),
       biomes: getBiomesForWire(),
       propVisuals: getPropVisualsForWire(),
+      buildingVisuals: getBuildingVisualsForWire(),
     });
   }
 

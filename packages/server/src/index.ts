@@ -25,6 +25,7 @@ import { initTemplates } from './ai/templates.js';
 import { initBiomes } from './biomes.js';
 import { initBlueprints } from './blueprints.js';
 import { initProps } from './props.js';
+import { initBuildingOverrides } from './buildingOverrides.js';
 import { initRooms } from './rooms.js';
 import { initCorridors } from './corridors.js';
 import { initWeapons } from './weapons.js';
@@ -41,6 +42,7 @@ import type { World } from './world.js';
 await initTemplates();
 await initBiomes();
 await initProps();
+await initBuildingOverrides();
 await initRooms();
 await initCorridors();
 await initBlueprints();
@@ -62,6 +64,7 @@ startContentWatch({
   weapons: initWeapons,
   recipes: initRecipes,
   attachments: initAttachments,
+  buildings: initBuildingOverrides,
 });
 
 // Typed dispatch map for inbound client messages. Each key is a

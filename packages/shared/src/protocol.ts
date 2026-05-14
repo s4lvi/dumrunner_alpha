@@ -208,7 +208,16 @@ export type BuildingKind =
   | 'power_link'
   | 'door'
   | 'wall_door'
-  | 'storage_chest';
+  | 'storage_chest'
+  // Procgen-spawned portal buildings, one per dungeon scene each.
+  // stairs_down occupies the deepest room's centre tile; extract_pad
+  // the entrance room's pad tile. They share their world position
+  // with the same-named Interactable so E-press still resolves via
+  // the existing interactable code path. Indestructible (high HP,
+  // hordePriority 0) and dungeon-only — the surface descent uses
+  // the power_link building instead.
+  | 'stairs_down'
+  | 'extract_pad';
 
 // Subset of BuildingKind that acts as a crafting workstation. Recipes can
 // require the player to be in range of one of these to craft.
@@ -471,6 +480,10 @@ export const FireMsgSchema = z.object({
   dirY: finiteNumber,
 });
 
+// Closed set of BuildingKinds that players are allowed to place
+// via the build UI. Excludes procgen-only structures
+// (stairs_down, extract_pad) — those are spawned by the server,
+// never requested over the wire.
 const BuildingKindSchema = z.enum([
   'wall',
   'wall_mk2',
@@ -492,6 +505,9 @@ const BuildingKindSchema = z.enum([
   'wall_door',
   'storage_chest',
 ]);
+// Player-buildable kinds, derived from the wire schema so the
+// type stays in lock-step with the validator.
+export type PlaceableBuildingKind = z.infer<typeof BuildingKindSchema>;
 
 export const BuildRequestMsgSchema = z.object({
   type: z.literal('build_request'),
@@ -1036,6 +1052,18 @@ export type ServerMessage =
           wallAnimationId?: string;
           floorAnimationId?: string;
           ceilingAnimationId?: string;
+        }
+      >;
+      // Per-BuildingKind editor-authored overrides — today, just an
+      // optional animationId. Hardcoded structural metadata (HP,
+      // priority, station flags) stays in BUILDING_REGISTRY in
+      // code; this payload only carries presentation. Only kinds
+      // with authored content land here; absent kinds fall through
+      // to a no-op visual.
+      buildingVisuals: Record<
+        string,
+        {
+          animationId?: string;
         }
       >;
     }

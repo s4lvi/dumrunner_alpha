@@ -31,10 +31,6 @@
   },
   "enemyRoster": [
     {
-      "id": "dummy_target",
-      "weight": 1
-    },
-    {
       "id": "chaser_melee",
       "weight": 1
     },
@@ -86,6 +82,5 @@
         "blocksProjectiles": true
       }
     ]
-  },
-  "wallHeightTiles": 1.2
+  }
 }

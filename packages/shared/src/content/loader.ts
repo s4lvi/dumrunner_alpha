@@ -29,10 +29,12 @@ import {
   RoomTemplateSchema,
   WeaponDefSchema,
   WorldDefSchema,
+  BuildingOverrideSchema,
   type AnimationDef,
   type AttachmentDefData,
   type BiomeDef,
   type BlueprintDef,
+  type BuildingOverride,
   type CorridorTemplate,
   type EnemyDef,
   type PropDef,
@@ -61,6 +63,7 @@ export const EDITOR_AREAS = [
   'recipes',
   'attachments',
   'animations',
+  'buildings',
 ] as const;
 export type EditorArea = (typeof EDITOR_AREAS)[number];
 
@@ -142,6 +145,8 @@ export const loadAttachments = (): Promise<AttachmentDefData[]> =>
   loadArea('attachments', AttachmentDefSchema);
 export const loadAnimations = (): Promise<AnimationDef[]> =>
   loadArea('animations', AnimationDefSchema);
+export const loadBuildingOverrides = (): Promise<BuildingOverride[]> =>
+  loadArea('buildings', BuildingOverrideSchema);
 
 // Single-entity helpers. The editor's API route writes one file
 // at a time; the GET endpoint may want to fetch one without
@@ -195,6 +200,8 @@ export const loadAttachment = (id: string) =>
   loadEntity('attachments', id, AttachmentDefSchema);
 export const loadAnimation = (id: string) =>
   loadEntity('animations', id, AnimationDefSchema);
+export const loadBuildingOverride = (id: string) =>
+  loadEntity('buildings', id, BuildingOverrideSchema);
 
 // Save validates BEFORE writing — a malformed payload from the
 // editor's POST handler can never make it onto disk. The schema
@@ -238,6 +245,8 @@ export const saveAttachment = (data: unknown) =>
   saveEntity('attachments', data, AttachmentDefSchema);
 export const saveAnimation = (data: unknown) =>
   saveEntity('animations', data, AnimationDefSchema);
+export const saveBuildingOverride = (data: unknown) =>
+  saveEntity('buildings', data, BuildingOverrideSchema);
 
 // World config — single file, not file-per-entity. Read at
 // boot; absent / malformed = empty config (no overrides).

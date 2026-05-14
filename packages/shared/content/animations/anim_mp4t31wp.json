@@ -1,0 +1,13 @@
+{
+  "id": "anim_mp4t31wp",
+  "name": "portal",
+  "category": "prop",
+  "states": {
+    "idle": {
+      "frames": 4,
+      "fps": 10.25,
+      "loop": true,
+      "source": "frames"
+    }
+  }
+}

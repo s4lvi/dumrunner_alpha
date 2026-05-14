@@ -818,6 +818,24 @@ export const PropDefSchema = z
   );
 export type PropDef = z.infer<typeof PropDefSchema>;
 
+// ---------- BuildingOverride ----------
+//
+// Per-BuildingKind editor-authored overrides for the otherwise
+// hardcoded BUILDING_REGISTRY (shared/buildings.ts). Today this
+// holds only an optional animationId; intentionally narrow so the
+// existing structural metadata (HP, horde priority, station
+// flags) stays in code where it shapes server behaviour. `id`
+// must match a known BuildingKind at server load — entries
+// referencing unknown kinds are dropped with a warning so a
+// renamed kind doesn't crash boot.
+export const BuildingOverrideSchema = z
+  .object({
+    id: idSchema,
+    animationId: idSchema.optional(),
+  })
+  .strict();
+export type BuildingOverride = z.infer<typeof BuildingOverrideSchema>;
+
 // ---------- BlueprintDef ----------
 //
 // Mirrors the runtime BlueprintCatalogEntry shape (shared/crafting.ts)

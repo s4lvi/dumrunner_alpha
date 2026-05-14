@@ -4,6 +4,14 @@
 
 import type { Rect, TileGrid } from './protocol';
 
+// Hit-radius the server uses to decide which Interactable an
+// E-press resolves to. The client renderers read this same value
+// to gate the "Press E to …" prompt — anything bigger on the
+// client makes the prompt appear at distances where the server
+// will refuse to interact, which reads as a broken affordance.
+// Adjust here, not in copies.
+export const INTERACTABLE_RADIUS = 40;
+
 // Decode a TileGrid's base64-packed `tilesB64` into a Uint8Array.
 // Works in browser + Node (atob in browsers, Buffer on the server).
 // Cache the result outside this helper if you'll read the grid more

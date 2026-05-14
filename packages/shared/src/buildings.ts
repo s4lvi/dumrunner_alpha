@@ -177,6 +177,25 @@ export const BUILDING_REGISTRY: Record<BuildingKind, BuildingDef> = {
     isStation: false,
     isWorkstation: false,
   },
+  // Dungeon portal cubes. Same role as power_link is on the
+  // surface — give the interactable a physical, animatable visual
+  // by occupying the same tile as a 1×1 building. Indestructible
+  // by design (high HP) and ignored by horde targeting.
+  // Procgen-spawned only; not player-craftable.
+  stairs_down: {
+    label: 'Stairs Down',
+    maxHp: 9999,
+    hordePriority: 0,
+    isStation: false,
+    isWorkstation: false,
+  },
+  extract_pad: {
+    label: 'Extract Pad',
+    maxHp: 9999,
+    hordePriority: 0,
+    isStation: false,
+    isWorkstation: false,
+  },
   // Player-built openable door for surface bases. Distinct from
   // the dungeon `door` (which is a key-gated locked-room fixture
   // and gets *destroyed* when opened). wall_door persists across

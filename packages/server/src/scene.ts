@@ -72,6 +72,7 @@ import {
 } from './assetGenClient.js';
 import {
   decodeTileGrid,
+  INTERACTABLE_RADIUS,
   isInsideAny,
   isWalkableTileId,
   segmentInsideWalkables,
@@ -92,12 +93,9 @@ import {
   resistFor,
 } from '@dumrunner/shared';
 
-// 60 covers diagonal approaches to a 1×1 wall-tile building (e.g. the
-// Power Link): a player can't enter the tile so they stand at most
-// PLAYER_RADIUS + tileSize/2 ≈ 30px away on each axis; sqrt(2)·30 ≈ 42
-// at the corner, plus a safety margin so first-frame collision jitter
-// doesn't cause a missed interaction.
-const INTERACTABLE_RADIUS = 40;
+// INTERACTABLE_RADIUS now lives in shared/geometry.ts so the
+// client renderers + server can't drift apart. Both halves
+// import the same constant; adjusting the value adjusts both.
 
 // 16 unit-circle directions used by Scene.circlePassable. Mirrors the
 // shared geometry sampler so player and AI bounding-circle tests are
@@ -2832,6 +2830,98 @@ export class Scene {
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
     this.bindings.onBuildingsChanged();
     return building;
+  }
+
+  // Spawn the portal cubes (stairs_down + extract_pad) at the
+  // matching interactables' tile positions. Same role as
+  // ensurePowerLink on the surface: gives each portal a physical,
+  // animatable building visual at the spot the player E-presses.
+  // Idempotent — if a building of the same kind already exists
+  // (snapshot rehydrate, second call) we skip it. Dungeon-only;
+  // calling on a surface scene is a no-op because the surface uses
+  // the power_link building for the entrance instead.
+  ensurePortalBuildings(): void {
+    if (this.kind !== 'dungeon_floor') return;
+    const layout = this.layout;
+    if (!layout) return;
+    const tileSize = layout.tileSize;
+    if (!tileSize || tileSize <= 0) return;
+    const PORTAL_KINDS: ReadonlySet<BuildingKind> = new Set([
+      'stairs_down',
+      'extract_pad',
+    ]);
+    // Index existing kinds so re-runs are O(1).
+    const existing = new Set<BuildingKind>();
+    for (const b of this.buildings.values()) existing.add(b.kind);
+    for (const it of layout.interactables) {
+      const kind = it.kind as BuildingKind;
+      if (!PORTAL_KINDS.has(kind)) continue;
+      if (existing.has(kind)) continue;
+      const tileX = Math.floor(it.x / tileSize);
+      const tileY = Math.floor(it.y / tileSize);
+      const maxHp = buildingMaxHp(kind);
+      const id = `b${this.nextBuildingId++}`;
+      const building: BuildingRuntime = {
+        id,
+        kind,
+        tileX,
+        tileY,
+        width: 1,
+        height: 1,
+        hp: maxHp,
+        maxHp,
+        lastFireAt: 0,
+        output: [],
+      };
+      this.buildings.set(id, building);
+      existing.add(kind);
+      this.broadcast({
+        type: 'building_placed',
+        building: toBuildingState(building),
+      });
+    }
+    this.bindings.onBuildingsChanged();
+    // Procgen places the extract_pad ~1.5 tiles from the entrance
+    // centre — in narrow (3-tile) entrance rooms that collapses
+    // onto the spawn cell, so a fresh descend would teleport the
+    // player inside the newly-placed cube and they'd be stuck.
+    // Snap the spawn to a clear neighbour cell whenever the cube
+    // and the spawn collide.
+    this.snapSpawnClearOfBuildings();
+  }
+
+  // If the layout's spawn point now sits inside any building's
+  // footprint (e.g. a portal cube placed on top of it), search
+  // outward in one-tile rings for the nearest passable cell and
+  // rewrite layout.spawn to its centre. No-op when the existing
+  // spawn is already clear.
+  private snapSpawnClearOfBuildings(): void {
+    const layout = this.layout;
+    if (!layout) return;
+    const tileSize = layout.tileSize ?? 32;
+    if (tileSize <= 0) return;
+    const spawn = layout.spawn;
+    if (this.circlePassable(spawn.x, spawn.y, COMBAT.PLAYER_RADIUS)) return;
+    const tx0 = Math.floor(spawn.x / tileSize);
+    const ty0 = Math.floor(spawn.y / tileSize);
+    for (let r = 1; r <= 8; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const cx = (tx0 + dx + 0.5) * tileSize;
+          const cy = (ty0 + dy + 0.5) * tileSize;
+          if (this.circlePassable(cx, cy, COMBAT.PLAYER_RADIUS)) {
+            spawn.x = cx;
+            spawn.y = cy;
+            return;
+          }
+        }
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[scene] snapSpawnClearOfBuildings exhausted search in ${this.id}; spawn left at (${spawn.x},${spawn.y})`,
+    );
   }
 
   // Sandbox playtest helper. Drops a starter set of workstations on

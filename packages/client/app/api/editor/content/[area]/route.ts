@@ -40,6 +40,8 @@ import {
   loadAnimations,
   loadAttachment,
   loadAttachments,
+  loadBuildingOverride,
+  loadBuildingOverrides,
   loadRecipe,
   loadRecipes,
   loadRoom,
@@ -50,6 +52,7 @@ import {
   saveAttachment,
   saveBiome,
   saveBlueprint,
+  saveBuildingOverride,
   saveCorridor,
   saveEnemy,
   saveProp,
@@ -76,6 +79,7 @@ const LIST: Record<EditorArea, () => Promise<unknown[]>> = {
   recipes: loadRecipes,
   attachments: loadAttachments,
   animations: loadAnimations,
+  buildings: loadBuildingOverrides,
 };
 const ONE: Record<EditorArea, (id: string) => Promise<unknown | null>> = {
   biomes: loadBiome,
@@ -88,6 +92,7 @@ const ONE: Record<EditorArea, (id: string) => Promise<unknown | null>> = {
   recipes: loadRecipe,
   attachments: loadAttachment,
   animations: loadAnimation,
+  buildings: loadBuildingOverride,
 };
 const SAVE: Record<EditorArea, (data: unknown) => Promise<unknown>> = {
   biomes: saveBiome,
@@ -100,6 +105,7 @@ const SAVE: Record<EditorArea, (data: unknown) => Promise<unknown>> = {
   recipes: saveRecipe,
   attachments: saveAttachment,
   animations: saveAnimation,
+  buildings: saveBuildingOverride,
 };
 
 export async function GET(

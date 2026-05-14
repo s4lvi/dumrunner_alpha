@@ -33,6 +33,7 @@ import {
   setBlueprintCatalog,
   setEnemyVisuals,
   setPropVisuals,
+  setBuildingVisuals,
   setRecipes,
   setWeaponRegistry,
   tileIdAt,
@@ -407,6 +408,7 @@ function applyWelcomeRegistries(msg: WelcomeMsg): void {
   if (msg.enemyVisuals) setEnemyVisuals(msg.enemyVisuals);
   if (msg.biomes) setBiomePalettes(msg.biomes);
   if (msg.propVisuals) setPropVisuals(msg.propVisuals);
+  if (msg.buildingVisuals) setBuildingVisuals(msg.buildingVisuals);
   if (msg.weapons) setWeaponRegistry(msg.weapons);
   if (msg.blueprints) setBlueprintCatalog(msg.blueprints);
   if (msg.recipes) setRecipes(msg.recipes);

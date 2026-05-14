@@ -54,6 +54,7 @@ export const DOMAINS: DomainSpec[] = [
       // `/editor/props`. Linking to the canonical path keeps
       // the rail/pills highlighted on the right domain.
       { href: '/editor/props', label: 'Props' },
+      { href: '/editor/buildings', label: 'Buildings' },
     ],
   },
   {
