@@ -229,6 +229,31 @@ export type GameHandle = {
   // the player's tile to a HazardZoneCategory using `categoryAt`.
   // Returns null before the first scene state is hydrated.
   getSelfPosition(): { x: number; y: number } | null;
+  // ---------- mobile input ----------
+  //
+  // Touch UI calls these so it doesn't need to synthesize keyboard
+  // / mouse events. fps.ts is the real implementation; other
+  // renderers (pixi top-down, topdown.ts) currently no-op because
+  // the mobile UI only mounts the FPS view.
+
+  // Apply a relative look delta (in CSS pixels, same units as
+  // PointerEvent.movementX/Y) — rotates yaw + clamps pitch using
+  // the same POINTER_SENSITIVITY constant the mouse path uses.
+  applyLookDelta(dxPx: number, dyPx: number): void;
+
+  // Set the joystick's movement intent. forward / right are -1..1
+  // (clamped); when both are 0 the renderer falls back to WASD.
+  // Stickiness across frames is the caller's job — call every
+  // frame the touch is active, then call with (0, 0, false) on
+  // release.
+  setMobileMove(forward: number, right: number, sprint: boolean): void;
+
+  // Toggle continuous fire from the touch fire button. Mirrors
+  // mouse-down / mouse-up — gated on equippedWeapon + per-weapon
+  // fire interval server-side. Bypasses pointer-lock since mobile
+  // has none.
+  setFireHeld(held: boolean): void;
+
   destroy(): void;
 };
 
@@ -2605,6 +2630,17 @@ export function runGame(host: HTMLElement, init: GameInit): GameHandle {
     },
     notifyReloadStarted() {
       // Top-down renderer doesn't show a view-model.
+    },
+    applyLookDelta() {
+      // Top-down has no first-person camera to rotate. Mobile UI
+      // never mounts against this renderer today, so this is a
+      // safe no-op rather than a TODO.
+    },
+    setMobileMove() {
+      // Top-down uses mouse-position aim, not joystick. No-op.
+    },
+    setFireHeld() {
+      // Top-down fires on click only; no held-fire model yet.
     },
     swapScene(state: SceneState) {
       currentSceneId = state.sceneId;

@@ -2,24 +2,57 @@
   "id": "swarmer",
   "label": "Swarmer",
   "faction": "catacombs",
-  "biomeAffinity": ["catacombs"],
+  "biomeAffinity": [
+    "catacombs"
+  ],
   "stats": {
     "hp": 22,
     "radius": 11,
     "moveSpeed": 165,
     "senseRadius": 380
   },
-  "movement": { "kind": "chase" },
+  "movement": {
+    "kind": "chase"
+  },
   "attacks": [
-    { "kind": "melee", "range": 30, "damagePerSec": 14 }
+    {
+      "kind": "melee",
+      "range": 30,
+      "damagePerSec": 14
+    }
   ],
   "fleeBelowHpRatio": null,
   "stunDurationOnHitMs": 140,
-  "visual": { "shape": "triangle", "color": "#fb7185", "size": 12 },
+  "visual": {
+    "shape": "triangle",
+    "color": "#fb7185",
+    "size": 12
+  },
   "lootTable": [
-    { "materialId": "scrap",  "chance": 0.8,  "min": 1, "max": 2 },
-    { "materialId": "wire",   "chance": 0.30, "min": 1, "max": 1 },
-    { "materialId": "biotic", "chance": 0.20, "min": 1, "max": 1 },
-    { "materialId": "key",    "chance": 0.02, "min": 1, "max": 1 }
-  ]
+    {
+      "materialId": "scrap",
+      "min": 1,
+      "max": 2,
+      "chance": 0.8
+    },
+    {
+      "materialId": "wire",
+      "min": 1,
+      "max": 1,
+      "chance": 0.3
+    },
+    {
+      "materialId": "biotic",
+      "min": 1,
+      "max": 1,
+      "chance": 0.2
+    },
+    {
+      "materialId": "key",
+      "min": 1,
+      "max": 1,
+      "chance": 0.02
+    }
+  ],
+  "animationId": "anim_mp4u7zo2"
 }

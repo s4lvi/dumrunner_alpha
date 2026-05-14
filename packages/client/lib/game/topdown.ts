@@ -575,6 +575,15 @@ export function runTopdownGame(
     notifyReloadStarted: () => {
       /* topdown has no view-model */
     },
+    applyLookDelta: () => {
+      /* topdown has no first-person yaw */
+    },
+    setMobileMove: () => {
+      /* topdown reads keys directly; mobile path not wired here */
+    },
+    setFireHeld: () => {
+      /* topdown fires per-click only */
+    },
     swapScene: (state: SceneState) => {
       currentSceneId = state.sceneId;
       players.clear();

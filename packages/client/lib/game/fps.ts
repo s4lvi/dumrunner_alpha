@@ -320,6 +320,19 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   let pointerLocked = false;
   let mouseDown = false;
   let equippedWeapon: import('@dumrunner/shared').WeaponKind | null = null;
+  // ---------- mobile input state ----------
+  //
+  // Set by the touch UI through GameHandle.setMobileMove /
+  // setFireHeld / applyLookDelta. When mobileMoveActive is true
+  // (joystick is being touched) we override the WASD-derived
+  // movement vector; otherwise keyboard input still wins. Fire is
+  // OR-ed with the desktop mouseDown path so either input source
+  // can trigger held-fire.
+  let mobileMoveForward = 0;
+  let mobileMoveRight = 0;
+  let mobileSprint = false;
+  let mobileMoveActive = false;
+  let mobileFireHeld = false;
   // Brief muzzle-flash window so the crosshair pulses on every fire frame.
   let lastFireFlashAt = 0;
   // Damage feedback: full-screen red tint on self damage, per-enemy white
@@ -646,21 +659,97 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     keys.delete(e.code);
   }
 
+  // Sticky-aim parameters. Only engages when fire is held *via
+  // mobile* (mobileFireHeld) — keyboard / mouse players get the
+  // raw mouse-look they already have.
+  //
+  //   AIM_ASSIST_CONE_RAD: half-angle of the forward cone. Wider
+  //     than a typical desktop crosshair so the assist actually
+  //     bites; tight enough that you can still aim PAST an enemy
+  //     by turning further than the cone.
+  //   AIM_ASSIST_RANGE_PX: enemies beyond this distance are
+  //     ignored; mid-range engagements feel mostly snap-free,
+  //     close engagements get the most help.
+  //   AIM_ASSIST_RATE_RAD_PER_S: max yaw rotation per second
+  //     applied by the assist. Soft enough that the player still
+  //     feels in control; firm enough that a finger drag toward
+  //     an enemy "locks in."
+  const AIM_ASSIST_CONE_RAD = 0.35;
+  const AIM_ASSIST_RANGE_PX = 600;
+  const AIM_ASSIST_RATE_RAD_PER_S = 2.0;
+  // dt source for aim assist: walltime delta between tickInput
+  // calls. Ticker delta would work too, but performance.now()
+  // is reliable across Pixi versions and matches the units the
+  // existing animation system uses.
+  let lastTickInputAt = 0;
+
+  function applyMobileAimAssist(dtMs: number): void {
+    if (!mobileFireHeld) return;
+    if (equippedWeapon === null) return;
+    const fwdX = Math.cos(yaw);
+    const fwdY = Math.sin(yaw);
+    let bestEnemy: { dx: number; dy: number } | null = null;
+    let bestDistSq = AIM_ASSIST_RANGE_PX * AIM_ASSIST_RANGE_PX;
+    for (const e of enemies.values()) {
+      if (e.hp <= 0) continue;
+      const dx = e.x - selfX;
+      const dy = e.y - selfY;
+      const dsq = dx * dx + dy * dy;
+      if (dsq > bestDistSq) continue;
+      // Forward-cone gate: enemy must lie within ±CONE of our
+      // facing direction. Dot product against unit forward vector
+      // gives cos(angle); compare against cos(cone) without an
+      // atan2.
+      const dist = Math.sqrt(dsq);
+      if (dist < 0.001) continue;
+      const cosAngle = (dx * fwdX + dy * fwdY) / dist;
+      if (cosAngle < Math.cos(AIM_ASSIST_CONE_RAD)) continue;
+      bestDistSq = dsq;
+      bestEnemy = { dx, dy };
+    }
+    if (!bestEnemy) return;
+    const targetYaw = Math.atan2(bestEnemy.dy, bestEnemy.dx);
+    let delta = targetYaw - yaw;
+    // Wrap to [-PI, PI] so the rotation takes the short way around.
+    while (delta > Math.PI) delta -= 2 * Math.PI;
+    while (delta < -Math.PI) delta += 2 * Math.PI;
+    const maxStep = AIM_ASSIST_RATE_RAD_PER_S * (dtMs / 1000);
+    if (delta > maxStep) delta = maxStep;
+    else if (delta < -maxStep) delta = -maxStep;
+    yaw = (yaw + delta) % (Math.PI * 2);
+  }
+
   // Yaw-relative WASD: W/S = forward/back along facing, D/A = strafe right/
   // left. We rotate the unit input vector into world space before handing
   // it to the server, which still treats moveX/moveY as a world-space
   // direction (no protocol change).
   function tickInput() {
-    const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0)
-              - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-    const right = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0)
-                - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+    const now = performance.now();
+    const dtMs = lastTickInputAt === 0 ? 16 : now - lastTickInputAt;
+    lastTickInputAt = now;
+    applyMobileAimAssist(dtMs);
+    let fwd: number;
+    let right: number;
+    let sprint: boolean;
+    if (mobileMoveActive) {
+      // Touch joystick is engaged — its analog vector takes
+      // precedence over WASD. Numbers are pre-clamped by the
+      // mobile UI; we don't re-clamp here.
+      fwd = mobileMoveForward;
+      right = mobileMoveRight;
+      sprint = mobileSprint;
+    } else {
+      fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0)
+          - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+      right = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0)
+            - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+      sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    }
     // y-down world coords: forward = (cos, sin); right = (-sin, cos).
     const cy = Math.cos(yaw);
     const sy = Math.sin(yaw);
     const mx = fwd * cy + right * -sy;
     const my = fwd * sy + right * cy;
-    const sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
     init.sendInput(mx, my, sprint);
 
     // Hold-to-fire while pointer-locked + a weapon equipped. Server
@@ -668,7 +757,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // so we send every frame and let it drop the noise. The crosshair
     // flash is driven off projectile_spawned (see spawnProjectile
     // below) so empty-mag / reloading frames don't flash.
-    if (mouseDown && pointerLocked && equippedWeapon !== null) {
+    // Mobile path skips the pointer-lock gate (touch can't acquire
+    // one) — the UI surfacing the fire button is the engagement
+    // signal.
+    const fireHeld =
+      (mouseDown && pointerLocked) || mobileFireHeld;
+    if (fireHeld && equippedWeapon !== null) {
       init.sendFire(cy, sy);
     }
   }
@@ -3134,6 +3228,26 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
         props: [...props.values()].map((p) => ({ ...p })),
         layout,
       };
+    },
+    applyLookDelta(dxPx, dyPx) {
+      yaw = (yaw + dxPx * POINTER_SENSITIVITY) % (Math.PI * 2);
+      pitch = Math.max(
+        -PITCH_LIMIT,
+        Math.min(PITCH_LIMIT, pitch - dyPx * POINTER_SENSITIVITY),
+      );
+    },
+    setMobileMove(forward, right, sprint) {
+      // Clamp here as a defensive guard against an over-eager touch
+      // handler — joystick math should already normalize.
+      mobileMoveForward = Math.max(-1, Math.min(1, forward));
+      mobileMoveRight = Math.max(-1, Math.min(1, right));
+      mobileSprint = sprint;
+      mobileMoveActive =
+        Math.abs(mobileMoveForward) > 0.001 ||
+        Math.abs(mobileMoveRight) > 0.001;
+    },
+    setFireHeld(held) {
+      mobileFireHeld = held;
     },
     destroy() {
       unsubFpsOverrides();

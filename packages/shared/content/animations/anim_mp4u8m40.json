@@ -1,0 +1,17 @@
+{
+  "id": "anim_mp4u8m40",
+  "name": "shooter_drone",
+  "category": "enemy",
+  "states": {
+    "idle": {
+      "frames": 1,
+      "fps": 6,
+      "loop": true
+    },
+    "death": {
+      "frames": 1,
+      "fps": 6,
+      "loop": false
+    }
+  }
+}

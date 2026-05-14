@@ -85,6 +85,11 @@ function runnerFor(mode: RendererMode): typeof runGame {
 import { audio } from '@/lib/audio';
 import { loadAssetIndex, type AssetIndex } from '@/lib/assetGen';
 import { rewriteGameWsUrl } from '@/lib/discord/sdk';
+import { useIsTouchDevice } from '@/lib/useIsTouchDevice';
+import {
+  MobileControls,
+  useLandscapeOrientationLock,
+} from './MobileControls';
 
 type JoinResponse = {
   wsUrl: string;
@@ -115,6 +120,10 @@ type ChatEntry = {
 
 export function Game({ serverId }: { serverId: string }) {
   const router = useRouter();
+  // Touch-device detection drives the mobile overlay + landscape
+  // orientation lock. Desktop sessions render nothing extra.
+  const isTouch = useIsTouchDevice();
+  useLandscapeOrientationLock(isTouch);
   // Set when the server sends 'server_paused' so the subsequent
   // ws.onclose can route to the lobby with a friendly banner
   // instead of showing a generic disconnect error.
@@ -1297,6 +1306,55 @@ export function Game({ serverId }: { serverId: string }) {
     gameRef.current?.setBuildRadiusBonus(bonus);
   }, [equipment]);
 
+  // Run the same E-press resolution the keyboard handler does,
+  // but as a callable function so the mobile UI's Interact button
+  // can fire the same logic without re-implementing the priority
+  // chain. Stable identity (no deps) — all branches read from
+  // refs so a stale closure can't pick the wrong target.
+  const tryInteract = useCallback((): void => {
+    const near = nearInteractableRef.current;
+    if (near) {
+      sendOnLiveWs({ type: 'interact', interactableId: near.id });
+      return;
+    }
+    const nearestKind = nearestStationRef.current;
+    if (nearestKind === 'artifact_uplink') {
+      setStationModalKind(null);
+      setShowTradeModal(true);
+      return;
+    }
+    if (
+      nearestKind === 'workbench' ||
+      nearestKind === 'forge' ||
+      nearestKind === 'electronics_bench' ||
+      nearestKind === 'weapon_bench' ||
+      nearestKind === 'precision_mill' ||
+      nearestKind === 'suit_bench'
+    ) {
+      setShowTradeModal(false);
+      setStationModalKind(nearestKind);
+      return;
+    }
+    if (nearestKind === 'storage_chest') {
+      const chestId = nearestChestIdRef.current;
+      if (chestId) {
+        chestModalIdRef.current = chestId;
+        setChestModalId(chestId);
+      }
+      return;
+    }
+    const doorId = nearestDoorIdRef.current;
+    if (doorId) {
+      sendOnLiveWs({ type: 'open_door', buildingId: doorId });
+      return;
+    }
+    const containerId = nearestContainerIdRef.current;
+    if (containerId) {
+      sendOnLiveWs({ type: 'open_container', propId: containerId });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Tab toggles the inventory overlay. Number keys 1-9 select the hotbar.
   // preventDefault stops the browser from moving focus around while playing.
   useEffect(() => {
@@ -1350,55 +1408,11 @@ export function Game({ serverId }: { serverId: string }) {
         setStationModalKind(null);
         return;
       }
-      // E to interact. Precedence:
-      //   1. layout interactables (stairs / extract)
-      //   2. nearest station — uplink opens trade modal,
-      //      workbench/forge/electronics_bench opens its modal
-      //   3. nearest door — sends open_door (server consumes a key)
+      // E to interact — same priority chain the mobile Interact
+      // button uses (extracted into tryInteract above so both
+      // inputs stay in lock-step).
       if (e.key === 'e' || e.key === 'E') {
-        const near = nearInteractableRef.current;
-        if (near) {
-          sendOnLiveWs({ type: 'interact', interactableId: near.id });
-          return;
-        }
-        const nearestKind = nearestStationRef.current;
-        if (nearestKind === 'artifact_uplink') {
-          setStationModalKind(null);
-          setShowTradeModal(true);
-          return;
-        }
-        if (
-          nearestKind === 'workbench' ||
-          nearestKind === 'forge' ||
-          nearestKind === 'electronics_bench' ||
-          nearestKind === 'weapon_bench' ||
-          nearestKind === 'precision_mill' ||
-          nearestKind === 'suit_bench'
-        ) {
-          setShowTradeModal(false);
-          setStationModalKind(nearestKind);
-          return;
-        }
-        if (nearestKind === 'storage_chest') {
-          const chestId = nearestChestIdRef.current;
-          if (chestId) {
-            chestModalIdRef.current = chestId;
-            setChestModalId(chestId);
-          }
-          return;
-        }
-        const doorId = nearestDoorIdRef.current;
-        if (doorId) {
-          sendOnLiveWs({ type: 'open_door', buildingId: doorId });
-          return;
-        }
-        // E5: container prop fallback. Routes after doors so a
-        // door right next to a container resolves to the door first.
-        const containerId = nearestContainerIdRef.current;
-        if (containerId) {
-          sendOnLiveWs({ type: 'open_container', propId: containerId });
-          return;
-        }
+        tryInteract();
         return;
       }
       // M toggles audio mute. Cheap; works any time.
@@ -1487,7 +1501,18 @@ export function Game({ serverId }: { serverId: string }) {
         </div>
       </header>
 
-      <div className="flex-1 relative">
+      <div
+        className="flex-1 relative"
+        // Touch sessions: suppress browser gestures (pinch-zoom,
+        // swipe-back, pull-to-refresh) inside the game viewport.
+        // Desktop is unaffected — the styles are inert without a
+        // touch input.
+        style={
+          isTouch
+            ? { touchAction: 'none', overscrollBehavior: 'contain' }
+            : undefined
+        }
+      >
         <div ref={canvasHostRef} className="absolute inset-0 cursor-crosshair" />
 
         {/* Scene-transition curtain. Rendered on top of the canvas
@@ -1499,11 +1524,46 @@ export function Game({ serverId }: { serverId: string }) {
           <SceneTransitionOverlay key={transitionTick} />
         )}
 
+        {isTouch && (
+          <MobileControls
+            onMove={(forward, right, sprint) => {
+              gameRef.current?.setMobileMove(forward, right, sprint);
+            }}
+            onLookDelta={(dx, dy) => {
+              gameRef.current?.applyLookDelta(dx, dy);
+            }}
+            onFireDown={() => {
+              gameRef.current?.setFireHeld(true);
+            }}
+            onFireUp={() => {
+              gameRef.current?.setFireHeld(false);
+            }}
+            onReload={() => {
+              sendOnLiveWs({ type: 'reload_weapon' });
+            }}
+            onInteract={tryInteract}
+            onOpenInventory={() => setShowInventory(true)}
+            canInteract={
+              !!nearInteractable ||
+              nearestStation !== null ||
+              nearestDoorId !== null ||
+              nearestContainerId !== null
+            }
+            canReload={
+              inventory[hotbarSelection]?.kind === 'weapon'
+            }
+          />
+        )}
+
         <Hotbar
           inventory={inventory}
           selected={hotbarSelection}
           onSwap={(from, to) => sendOnLiveWs({ type: 'inventory_swap', from, to })}
           onContextMenu={(slot, x, y) => setSlotMenu({ slot, x, y })}
+          onSelect={(slot) => {
+            setHotbarSelection(slot);
+            sendOnLiveWs({ type: 'select_hotbar', slot });
+          }}
         />
         {worldClock && <WorldClockHud clock={worldClock} />}
         {worldClock && (
@@ -2729,11 +2789,16 @@ function Hotbar({
   selected,
   onSwap,
   onContextMenu,
+  onSelect,
 }: {
   inventory: Inventory;
   selected: number;
   onSwap: (from: number, to: number) => void;
   onContextMenu: (slot: number, x: number, y: number) => void;
+  // Tap / click selects this slot. Same effect as a number-key
+  // press — mirrors that for mouse + touch users. Optional so
+  // callers that want a read-only hotbar can omit it.
+  onSelect?: (slot: number) => void;
 }) {
   const slots = inventory.slice(0, HOTBAR_SIZE);
   return (
@@ -2748,6 +2813,7 @@ function Hotbar({
           size="hotbar"
           onSwap={onSwap}
           onContextMenu={onContextMenu}
+          onSelect={onSelect}
         />
       ))}
     </div>
@@ -6052,6 +6118,7 @@ function SlotCell({
   onContextMenu,
   onArmorDrop,
   onInspect,
+  onSelect,
   inspecting,
 }: {
   slot: InventorySlot;
@@ -6066,6 +6133,12 @@ function SlotCell({
   // fire `click` only on a true press+release, not on drags, so
   // this coexists with the drag-to-swap flow without conflict.
   onInspect?: (slot: number) => void;
+  // Hotbar-only — click selects this slot. Mirrors the keyboard
+  // number-row binding so mouse + touch users get the same path.
+  // Wins over onInspect when both are set (hotbar instances never
+  // pass onInspect today, but a future panel that wires both
+  // should pick select over inspect for the click).
+  onSelect?: (slot: number) => void;
   // Highlights the slot the inspector is currently focused on so
   // the player can see which item the stats panel describes.
   inspecting?: boolean;
@@ -6100,9 +6173,11 @@ function SlotCell({
       title={title}
       draggable={draggable}
       onClick={
-        onInspect && slot.kind !== 'empty'
-          ? () => onInspect(index)
-          : undefined
+        onSelect
+          ? () => onSelect(index)
+          : onInspect && slot.kind !== 'empty'
+            ? () => onInspect(index)
+            : undefined
       }
       onDragStart={
         draggable
