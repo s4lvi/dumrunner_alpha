@@ -67,6 +67,7 @@ import {
 } from '@dumrunner/shared';
 import { runGame, type GameHandle } from '@/lib/game/pixi';
 import { runFpsGame } from '@/lib/game/fps';
+import { runFpsV2Game } from '@/lib/game/fps.v2';
 import { paintMinimap } from '@/lib/game/minimap';
 import { getOverride } from '@/lib/textureOverrides';
 
@@ -75,12 +76,31 @@ import { getOverride } from '@/lib/textureOverrides';
 // functional. 'topdown' is retained as a type variant only
 // because pixi.ts (runGame) is still imported for its
 // GameHandle / SceneState types — no UI path reaches it.
-type RendererMode = 'topdown' | 'fps';
+// 'fps-v2' is the default sector-based renderer. `?v2=0` falls
+// back to the v1 raycaster for parity comparisons.
+type RendererMode = 'topdown' | 'fps' | 'fps-v2';
 
-const RENDERER_CYCLE: RendererMode[] = ['fps'];
+const RENDERER_CYCLE: RendererMode[] = ['fps-v2'];
 
 function runnerFor(mode: RendererMode): typeof runGame {
+  if (mode === 'fps-v2') return runFpsV2Game;
   return mode === 'fps' ? runFpsGame : runGame;
+}
+
+// Read the renderer override from the URL. Called from a
+// post-mount useEffect, never during initial render — SSR has
+// no window and would mismatch the client's hydrated state
+// otherwise. `?v2=0` falls back to the v1 raycaster; anything
+// else keeps the default v2 sector renderer.
+function readRendererModeFromUrl(): RendererMode | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('v2') === '0') return 'fps';
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 import { audio } from '@/lib/audio';
 import { loadAssetIndex, type AssetIndex } from '@/lib/assetGen';
@@ -350,8 +370,24 @@ export function Game({ serverId }: { serverId: string }) {
   // for. Reset on cycle bump (horde_ended) so the next perihelion
   // fires its alert again. -1 means we haven't alerted this run.
   const perihelionAlertCycleRef = useRef<number>(-1);
-  // Renderer pick. FPS is the only mode in play.
-  const [rendererMode, setRendererMode] = useState<RendererMode>('fps');
+  // Renderer pick. v2 is the default; `?v2=0` opts back into v1.
+  // Initial render must match SSR — start on 'fps-v2', and the
+  // post-mount effect below flips to 'fps' if the URL requests
+  // the v1 opt-out. The brief first-paint on the wrong renderer
+  // is fine because the game canvas isn't visible yet (still in
+  // the connecting state).
+  const [rendererMode, setRendererMode] = useState<RendererMode>('fps-v2');
+  // Ref mirror so closures captured before the URL-read effect
+  // runs (notably `attemptJoin`'s welcome handler) read the live
+  // mode at the moment they fire instead of the stale default
+  // they captured at useCallback time.
+  const rendererModeRef = useRef<RendererMode>('fps-v2');
+  rendererModeRef.current = rendererMode;
+  useEffect(() => {
+    const requested = readRendererModeFromUrl();
+    if (requested && requested !== rendererMode) setRendererMode(requested);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Captured WS-callback bundle so the toggle handler can re-instantiate
   // the renderer without losing access to session.ws.
   const rendererCallbacksRef = useRef<{
@@ -660,7 +696,11 @@ export function Game({ serverId }: { serverId: string }) {
           const host = canvasHostRef.current;
           if (!host || gameRef.current) return;
           const cb = rendererCallbacksRef.current!;
-          const runner = runnerFor(rendererMode);
+          // Read renderer mode via ref so the URL-toggle effect's
+          // post-mount flip (to 'fps' if `?v2=0`) reaches this
+          // welcome closure even though attemptJoin's useCallback
+          // was created before that flip resolved.
+          const runner = runnerFor(rendererModeRef.current);
           gameRef.current = runner(host, {
             sceneId: msg.sceneId,
             self: msg.self,

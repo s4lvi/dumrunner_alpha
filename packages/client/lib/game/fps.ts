@@ -374,6 +374,14 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   // walls overdraw.
   const floorLayer = new Container();
   const ceilingLayer = new Container();
+  // Depth-fog tint for the textured floor / ceiling meshes. Painted
+  // as multiply-blended strips so the math matches what walls do
+  // (texture × tint colour). The older approach used alpha-composited
+  // strips of `fogColor`, which washes the fog hue into the texture
+  // and produced a visibly bluer floor/ceiling than the walls. Multiply
+  // with `blendColor(white, fog, t)` reproduces wall fog exactly.
+  const floorCeilingFogLayer = new Graphics();
+  floorCeilingFogLayer.blendMode = 'multiply';
   const wallTexLayer = new Container();
   // Top-surface rendering for short obstacles. Two layers:
   //   wallTopLayer — Mesh quads with proper UVs for textured
@@ -522,6 +530,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
   root.addChild(skyboxLayer);
   root.addChild(floorLayer);
   root.addChild(ceilingLayer);
+  // Fog tint sits above the floor/ceiling meshes (so multiply lands
+  // on the texture pixels) and below the wall layers (so wall column
+  // fills + textures overdraw it cleanly where walls exist).
+  root.addChild(floorCeilingFogLayer);
   root.addChild(wallLayer);
   root.addChild(wallTexLayer);
   root.addChild(wallTopLayer);
@@ -944,6 +956,7 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const horizonY = Math.max(0, Math.min(H, H / 2 + pitchPixels));
 
     wallLayer.clear();
+    floorCeilingFogLayer.clear();
     buildGhostLayer.clear();
     // Drop last frame's textured meshes + per-sprite Graphics.
     // Mesh-per-column wall + sprite passes allocate fresh
@@ -1166,12 +1179,12 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     // and ceiling regions.
     if (floorTex && horizonY < H) {
       paintFloorOrCeilingFogOverlay(
-        'floor', wallLayer, W, H, camHeight, horizonY, palette.fog,
+        'floor', floorCeilingFogLayer, W, H, camHeight, horizonY, palette.fog,
       );
     }
     if (ceilTex && horizonY > 0) {
       paintFloorOrCeilingFogOverlay(
-        'ceiling', wallLayer, W, H, ceilHeight, horizonY, palette.fog,
+        'ceiling', floorCeilingFogLayer, W, H, ceilHeight, horizonY, palette.fog,
       );
     }
 
@@ -2497,13 +2510,16 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     layer.addChild(mesh);
   }
 
-  // Depth-based fog overlay for textured floor / ceiling. Paints a
-  // stack of alpha-tinted fog strips on top of the mesh — alpha is
-  // computed per strip from rowDist using the same applyFog t-curve
-  // walls use, so the floor / ceiling fades into the same fog colour
-  // walls do at any given distance. Lives in wallLayer (Graphics)
-  // which sits above floor/ceiling meshes but below wall fills, so
-  // wall columns naturally overdraw the fog where they exist.
+  // Depth-based fog tint for textured floor / ceiling. Paints a
+  // stack of multiply-blended strips on top of the mesh. The
+  // parent Graphics is set to blendMode='multiply' so each
+  // strip's fill multiplies the texture beneath — same operation
+  // walls do with mesh.tint, so a bluish fog tints floors and
+  // walls equally instead of washing colour onto floor/ceiling.
+  //
+  // Each strip's tint = blendColor(white, fog, t) at full alpha.
+  // The t-curve matches the wall path's applyFog so both surfaces
+  // fade in lock-step with depth.
   function paintFloorOrCeilingFogOverlay(
     kind: 'floor' | 'ceiling',
     g: Graphics,
@@ -2516,13 +2532,10 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
     const yStart = kind === 'floor' ? horizonY + 1 : 0;
     const yEnd = kind === 'floor' ? H : Math.max(1, horizonY - 1);
     if (yEnd - yStart < 1) return;
-    // Pixel-aligned strips with no overlap. The previous version
-    // used +1 height so strips overlapped by 1px to avoid hairline
-    // gaps — but with alpha fills, the overlap region was composited
-    // twice, doubling the darkness and producing visible "edge"
-    // bands. Snapping to integer y boundaries means each pixel row
-    // is owned by exactly one strip and there are no gaps either
-    // (yB of strip s == yA of strip s+1 by construction).
+    // Pixel-aligned strips with no overlap. Each pixel row is
+    // owned by exactly one strip (yB of strip s == yA of strip
+    // s+1 by construction) — no gaps, no double-multiply
+    // artifacts at strip seams.
     const STRIPS = 48;
     const range = yEnd - yStart;
     let prevY = Math.round(yStart);
@@ -2539,8 +2552,13 @@ export function runFpsGame(host: HTMLElement, init: GameInit): GameHandle {
       const rowDist = (camHeight * H) / dy;
       const distT = Math.min(1, rowDist / FOG_FULL_DIST);
       const t = Math.min(1, activeAmbient + (1 - activeAmbient) * distT);
+      // t=0 → tint is pure white (1× multiply, no change).
+      // t=1 → tint is fog colour (full saturation/darkening).
+      // Skip strips with negligible tint — multiplying by ~white
+      // is a no-op visually and costs a draw call.
       if (t <= 0.001) continue;
-      g.rect(0, yA, W, yB - yA).fill({ color: fogColor, alpha: t });
+      const tint = blendColor(0xffffff, fogColor, t);
+      g.rect(0, yA, W, yB - yA).fill({ color: tint, alpha: 1 });
     }
   }
 

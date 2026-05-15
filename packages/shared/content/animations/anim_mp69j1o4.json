@@ -1,0 +1,17 @@
+{
+  "id": "anim_mp69j1o4",
+  "name": "barrel",
+  "category": "prop",
+  "states": {
+    "idle": {
+      "frames": 1,
+      "fps": 6,
+      "loop": true
+    },
+    "destroy": {
+      "frames": 1,
+      "fps": 6,
+      "loop": false
+    }
+  }
+}
