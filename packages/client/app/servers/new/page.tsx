@@ -1,8 +1,12 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { loadScenes } from '@dumrunner/shared/content/loader';
 import { supabaseServer } from '@/lib/supabase/server';
 import { AppNav } from '@/app/components/AppNav';
+import { getSessionUser } from '@/app/components/session';
 import { NewServerForm } from './NewServerForm';
+
+export const dynamic = 'force-dynamic';
 
 export default async function NewServerPage() {
   const supabase = await supabaseServer();
@@ -11,14 +15,12 @@ export default async function NewServerPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect('/login');
 
-  const { data: account } = await supabase
-    .from('accounts')
-    .select('display_name')
-    .eq('id', user.id)
-    .maybeSingle();
-  const defaultName = account?.display_name
-    ? `${account.display_name}'s server`
+  const session = await getSessionUser();
+  const defaultName = session?.displayName
+    ? `${session.displayName}'s server`
     : '';
+
+  const scenes = (await loadScenes()).map((s) => ({ id: s.id, name: s.name }));
 
   return (
     <>
@@ -30,12 +32,9 @@ export default async function NewServerPage() {
           </Link>
         </div>
 
-        <h1 className="text-3xl font-bold mb-1">Create server</h1>
-        <p className="text-zinc-400 mb-8">
-          Set up a world for you and up to 9 friends.
-        </p>
+        <h1 className="text-3xl font-bold mb-6">Create server</h1>
 
-        <NewServerForm defaultName={defaultName} />
+        <NewServerForm defaultName={defaultName} scenes={scenes} />
       </main>
     </>
   );

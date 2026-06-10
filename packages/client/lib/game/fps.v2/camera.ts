@@ -41,6 +41,10 @@ const Z_FAR = 4000;
 // floor, so this is relative to the player's current sector's
 // floorZ.
 export const EYE_HEIGHT = 16;
+// Crouch eye height. Drop ~6 wu (1/5 of a wall) — enough to
+// drag the silhouette below head-height shots without making
+// the world feel tiny.
+export const EYE_HEIGHT_CROUCH = 10;
 
 export class Camera {
   yaw = 0;
@@ -48,6 +52,14 @@ export class Camera {
   selfX = 0;
   selfY = 0;
   floorZ = 0;
+  // Phase 7 vertical-movement state. jumpZ rides above floorZ;
+  // crouching swaps eye height to the crouch value. Renderer
+  // writes these every frame from the server-broadcast values.
+  jumpZ = 0;
+  crouching = false;
+  // Smoothed eye height for the crouch lerp — snaps when not
+  // animating, lerps when crouching state changes.
+  eyeHeightSmoothed = EYE_HEIGHT;
   // Aspect ratio is set per frame from the canvas size.
   aspect = 1;
 
@@ -79,6 +91,11 @@ export class Camera {
     this.floorZ = floorZ;
   }
 
+  setVertical(jumpZ: number, crouching: boolean): void {
+    this.jumpZ = jumpZ;
+    this.crouching = crouching;
+  }
+
   // Rebuild the matrix from current state. Cheap (~30 mul); call
   // every frame.
   build(viewportW: number, viewportH: number): void {
@@ -98,7 +115,16 @@ export class Camera {
     // View matrix: translate world so camera sits at origin,
     // then rotate yaw around Z, then rotate pitch around the
     // camera's right axis.
-    const eyeZ = this.floorZ + EYE_HEIGHT;
+    // Lerp eye height toward the standing / crouching target so
+    // crouch transitions read as a smooth bob rather than a snap.
+    // 120 ms time constant matches the v2 plan; jumpZ rides on
+    // top (the server reports it, so no smoothing needed here).
+    const eyeTarget = this.crouching ? EYE_HEIGHT_CROUCH : EYE_HEIGHT;
+    this.eyeHeightSmoothed += (eyeTarget - this.eyeHeightSmoothed) * 0.18;
+    if (Math.abs(eyeTarget - this.eyeHeightSmoothed) < 0.05) {
+      this.eyeHeightSmoothed = eyeTarget;
+    }
+    const eyeZ = this.floorZ + this.eyeHeightSmoothed + this.jumpZ;
     // Compose in column-major order. Conceptually:
     //   view = R_pitch * R_yaw * T(-eye)
     // R_yaw rotates world so that looking +Y is straight ahead;

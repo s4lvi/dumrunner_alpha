@@ -7,25 +7,23 @@
 // + loot.
 
 import { Suspense, useEffect, useState } from 'react';
+import type { z } from 'zod';
 import type {
   AoeConeEffectKind,
   AttackSpec,
   EnemyDef,
-  EnemyState,
   Faction,
   MovementSpec,
-  Player,
-  SceneLayout,
 } from '@dumrunner/shared';
-import { setEnemyVisuals } from '@dumrunner/shared';
-import type { GameInit } from '@/lib/game/pixi';
+import { EnemyDefSchema } from '@dumrunner/shared';
 import { listEntities } from '@/lib/editorContentClient';
 import { useEntityEditor } from '../_components/useEntityEditor';
 import { EntityList } from '../_components/EntityList';
-import { EnemyPreview as SandboxEnemyPreview } from '../_components/EnemyPreview';
+import { EnemyPreview } from '../_components/EnemyPreview';
 import { ReferencesPanel } from '../_components/ReferencesPanel';
 import {
   Button,
+  ConfirmButton,
   ColorField,
   EnumField,
   FormSection,
@@ -34,7 +32,6 @@ import {
   SliderField,
   TextField,
 } from '../_components/Form';
-import { IsoPreview } from '../_components/IsoPreview';
 import { TextureRow } from '../_components/TextureRow';
 import { AnimationPicker } from '../_components/AnimationPicker';
 
@@ -128,7 +125,13 @@ function EnemyEditorBody() {
     createNew,
     error,
     saving,
-  } = useEntityEditor<EnemyDef>('enemies', { makeBlank, newIdPrefix: 'enemy' });
+    validationError,
+    canSave,
+  } = useEntityEditor<EnemyDef>('enemies', {
+    makeBlank,
+    newIdPrefix: 'enemy',
+    schema: EnemyDefSchema as unknown as z.ZodType<EnemyDef>,
+  });
   const [tab, setTab] = useState<'edit' | 'preview'>('edit');
   const onSave = save;
   const onDelete = remove;
@@ -186,7 +189,7 @@ function EnemyEditorBody() {
 
         {tab === 'preview' && draft && (
           <div className="flex-1 min-h-0">
-            <SandboxEnemyPreview enemyId={draft.id} />
+            <EnemyPreview enemyId={draft.id} />
           </div>
         )}
 
@@ -202,10 +205,18 @@ function EnemyEditorBody() {
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-lg font-bold">{draft.label}</h1>
               <div className="flex gap-2">
-                <Button variant="danger" onClick={onDelete}>
+                <ConfirmButton variant="danger" onConfirm={onDelete}>
                   Delete
-                </Button>
-                <Button variant="primary" disabled={saving} onClick={onSave}>
+                </ConfirmButton>
+                {validationError && (
+                  <span
+                    title={validationError}
+                    className="text-[10px] text-red-300 font-mono max-w-[20rem] truncate self-center mr-2"
+                  >
+                    {validationError}
+                  </span>
+                )}
+                <Button variant="primary" disabled={!canSave} onClick={onSave}>
                   {saving ? 'Saving…' : 'Save'}
                 </Button>
               </div>
@@ -415,9 +426,6 @@ function EnemyEditorBody() {
         <h2 className="text-xs uppercase text-zinc-500">Preview</h2>
         {draft ? (
           <>
-            <div className="h-72 shrink-0">
-              <EnemyPreview draft={draft} />
-            </div>
             <div className="text-[11px] text-zinc-400 space-y-0.5 font-mono">
               <div>id: {draft.id}</div>
               <div>faction: {draft.faction}</div>
@@ -427,11 +435,6 @@ function EnemyEditorBody() {
               <div>speed: {draft.stats.moveSpeed} px/s</div>
               <div>biomes: {draft.biomeAffinity.join(', ') || '(none)'}</div>
             </div>
-            <p className="text-[10px] text-zinc-600 leading-snug">
-              Iso preview shows the procedural billboard at this
-              enemy&apos;s shape / colour / size. Live AI sandbox
-              is in the Preview tab above.
-            </p>
             <div className="border-t border-zinc-800 mt-2 pt-2">
               <ReferencesPanel area="enemies" id={draft.id} />
             </div>
@@ -767,94 +770,3 @@ function BiomeAffinityField({
   );
 }
 
-// ---------- Iso preview ----------
-//
-// Mounts the iso renderer with a small demo scene: a single
-// walkable room, the local "self" at centre, and one of the
-// draft enemy positioned in front. Updates whenever the
-// visual / shape / colour / size change so iteration is live.
-//
-// Trick: the iso renderer reads enemy visuals from a runtime
-// map (shared/visuals.ts ENEMY_VISUALS) populated at session
-// welcome. The editor has no welcome message, so we manually
-// poke the draft into setEnemyVisuals before mounting.
-
-const PREVIEW_TILE = 32;
-const PREVIEW_SELF_ID = 'enemy_preview_self';
-const PREVIEW_ENEMY_ID = 'enemy_preview_target';
-
-function EnemyPreview({ draft }: { draft: EnemyDef }) {
-  const buildInit = (): GameInit => {
-    // Push the draft visual into the runtime map so the iso
-    // renderer's enemyVisualFor() lookup picks the right shape /
-    // colour / size when it draws the billboard.
-    const colorNum = parseHex(draft.visual.color);
-    setEnemyVisuals({
-      [draft.id]: {
-        shape: draft.visual.shape,
-        color: colorNum,
-        size: draft.visual.size,
-      },
-    });
-    const tiles = 12;
-    const half = (tiles * PREVIEW_TILE) / 2;
-    const layout: SceneLayout = {
-      worldBounds: { x: -1000, y: -1000, w: 2000, h: 2000 },
-      walkables: [{ x: -half, y: -half, w: tiles * PREVIEW_TILE, h: tiles * PREVIEW_TILE }],
-      rooms: [{ x: -half, y: -half, w: tiles * PREVIEW_TILE, h: tiles * PREVIEW_TILE }],
-      spawn: { x: 0, y: 0 },
-      interactables: [],
-      tileSize: PREVIEW_TILE,
-      biome: 'default',
-    };
-    const self: Player = {
-      characterId: PREVIEW_SELF_ID,
-      accountId: 'editor',
-      displayName: 'self',
-      x: 0,
-      y: 0,
-      hp: 100,
-      maxHp: 100,
-      stamina: 100,
-      maxStamina: 100,
-      shield: 0,
-      maxShield: 0,
-      alive: true,
-    };
-    const enemy: EnemyState = {
-      id: PREVIEW_ENEMY_ID,
-      kind: draft.id,
-      x: 0,
-      y: -PREVIEW_TILE * 3, // ~3 tiles north of the player
-      hp: draft.stats.hp,
-      maxHp: draft.stats.hp,
-    };
-    return {
-      sceneId: 'editor:enemies',
-      self,
-      others: [],
-      enemies: [enemy],
-      projectiles: [],
-      loot: [],
-      corpses: [],
-      buildings: [],
-      props: [],
-      layout,
-      sendInput: () => {},
-      sendFire: () => {},
-      sendBuild: () => {},
-      sendDemolish: () => {},
-      onNearInteractableChanged: () => {},
-      onNearWorkstationsChanged: () => {},
-    };
-  };
-  // Anything that affects the rendered enemy → remount.
-  const signature = `${draft.id}|${draft.visual.shape}|${draft.visual.color}|${draft.visual.size}|${draft.stats.hp}`;
-  return <IsoPreview buildInit={buildInit} signature={signature} />;
-}
-
-function parseHex(s: string): number {
-  const trimmed = s.startsWith('#') ? s.slice(1) : s;
-  const n = parseInt(trimmed, 16);
-  return Number.isFinite(n) ? n : 0xa855f7;
-}

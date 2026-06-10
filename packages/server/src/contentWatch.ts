@@ -22,12 +22,12 @@ const AREAS = [
   'enemies',
   'props',
   'rooms',
-  'corridors',
   'blueprints',
   'weapons',
   'recipes',
   'attachments',
   'buildings',
+  'scenes',
 ] as const;
 const DEBOUNCE_MS = 250;
 
@@ -42,12 +42,15 @@ export type ContentReloader = {
   enemies(): Promise<void>;
   props(): Promise<void>;
   rooms(): Promise<void>;
-  corridors(): Promise<void>;
   blueprints(): Promise<void>;
   weapons(): Promise<void>;
   recipes(): Promise<void>;
   attachments(): Promise<void>;
   buildings(): Promise<void>;
+  // Editor scene saves trigger a re-init of floor overrides — a
+  // pinned scene's geometry may have changed so the cached
+  // PolygonSectorScene needs refreshing.
+  scenes(): Promise<void>;
 };
 
 export function startContentWatch(reloader: ContentReloader): () => void {

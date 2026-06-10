@@ -41,7 +41,7 @@ export const DOMAINS: DomainSpec[] = [
     areas: [
       { href: '/editor/biomes', label: 'Biomes' },
       { href: '/editor/rooms', label: 'Rooms' },
-      { href: '/editor/corridors', label: 'Corridors' },
+      { href: '/editor/scenes-csg', label: 'Scenes' },
     ],
   },
   {
@@ -50,9 +50,6 @@ export const DOMAINS: DomainSpec[] = [
     glyph: '◉',
     areas: [
       { href: '/editor/enemies', label: 'Enemies' },
-      // `/editor/decorators` is a legacy server redirect to
-      // `/editor/props`. Linking to the canonical path keeps
-      // the rail/pills highlighted on the right domain.
       { href: '/editor/props', label: 'Props' },
       { href: '/editor/buildings', label: 'Buildings' },
     ],

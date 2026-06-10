@@ -7,6 +7,7 @@
 // support; stubbing the layout now keeps the form work decoupled).
 
 import { Suspense, useEffect, useMemo, useState } from 'react';
+import type { z } from 'zod';
 import type {
   BiomeDef,
   EnemyDef,
@@ -14,10 +15,15 @@ import type {
   MaterialKind,
   PropDef,
 } from '@dumrunner/shared';
-import { findSpriteFitOffenders, MATERIALS } from '@dumrunner/shared';
+import {
+  BiomeDefSchema,
+  findSpriteFitOffenders,
+  MATERIALS,
+} from '@dumrunner/shared';
 import { listEntities } from '@/lib/editorContentClient';
 import {
   Button,
+  ConfirmButton,
   CheckboxField,
   ColorField,
   EnumField,
@@ -50,12 +56,6 @@ function makeBlank(id = 'new_biome'): BiomeDef {
     dominantHazard: 'heat',
     palette: { floor: '#1f242c', wall: '#52525b', accent: '#fde68a' },
     generation: {
-      roomCountMin: 6,
-      roomCountMax: 12,
-      roomSizeMin: 4,
-      roomSizeMax: 9,
-      corridorWidth: 2,
-      branching: 0.3,
       propDensity: 0.05,
       enemyDensity: 0.04,
       lootDensity: 0.5,
@@ -112,9 +112,12 @@ function BiomeEditorBody() {
     createNew,
     error,
     saving,
+    validationError,
+    canSave,
   } = useEntityEditor<BiomeDef>('biomes', {
     makeBlank,
     newIdPrefix: 'biome',
+    schema: BiomeDefSchema as unknown as z.ZodType<BiomeDef>,
   });
   // Tab toggle: 'edit' shows the form, 'preview' shows the
   // full-pane iso scene rendered with this biome's settings.
@@ -212,13 +215,21 @@ function BiomeEditorBody() {
             Preview
           </button>
           {draft && (
-            <div className="ml-auto flex gap-2">
-              <Button variant="danger" onClick={onDelete}>
+            <div className="ml-auto flex items-center gap-2">
+              {validationError && (
+                <span
+                  title={validationError}
+                  className="text-[10px] text-red-300 font-mono max-w-[20rem] truncate"
+                >
+                  {validationError}
+                </span>
+              )}
+              <ConfirmButton variant="danger" onConfirm={onDelete}>
                 Delete
-              </Button>
+              </ConfirmButton>
               <Button
                 variant="primary"
-                disabled={saving || spriteFitOffenders.length > 0}
+                disabled={!canSave || spriteFitOffenders.length > 0}
                 onClick={onSave}
               >
                 {saving ? 'Saving…' : 'Save'}
@@ -462,253 +473,6 @@ function BiomeEditorBody() {
 
             {(draft.kind ?? 'dungeon') === 'dungeon' && (
             <FormSection title="Generation">
-              <EnumField<'tunneling' | 'walker'>
-                label="generator"
-                value={draft.generation.generator ?? 'tunneling'}
-                options={['tunneling', 'walker'] as const}
-                onChange={(v) =>
-                  setDraft({
-                    ...draft,
-                    generation: { ...draft.generation, generator: v },
-                  })
-                }
-                hint="tunneling = rect rooms + MST/loop corridors. walker = drunkard's-walk organic carve (rooms / corridor params below are ignored)."
-              />
-              {(draft.generation.generator ?? 'tunneling') === 'tunneling' && (
-                <>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumberField
-                      label="rooms (min)"
-                      value={draft.generation.roomCountMin ?? 25}
-                      min={1}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: { ...draft.generation, roomCountMin: v },
-                        })
-                      }
-                      hint="agents only quit after this many rooms exist."
-                    />
-                    <NumberField
-                      label="rooms (max)"
-                      value={draft.generation.roomCountMax ?? 60}
-                      min={1}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: { ...draft.generation, roomCountMax: v },
-                        })
-                      }
-                      hint="hard cap. once reached, no more rooms get spawned."
-                    />
-                    <NumberField
-                      label="room size (min)"
-                      value={draft.generation.roomSizeMin ?? 4}
-                      min={1}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: { ...draft.generation, roomSizeMin: v },
-                        })
-                      }
-                    />
-                    <NumberField
-                      label="room size (max)"
-                      value={draft.generation.roomSizeMax ?? 9}
-                      min={1}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: { ...draft.generation, roomSizeMax: v },
-                        })
-                      }
-                    />
-                    <NumberField
-                      label="initial corridor width"
-                      value={draft.generation.corridorWidth ?? 1}
-                      min={1}
-                      max={6}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: { ...draft.generation, corridorWidth: v },
-                        })
-                      }
-                      hint="agents start at this width; can drift ±2 over time unless locked below."
-                    />
-                    <CheckboxField
-                      label="lock corridor width"
-                      value={draft.generation.lockCorridorWidth ?? false}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: {
-                            ...draft.generation,
-                            lockCorridorWidth: v,
-                          },
-                        })
-                      }
-                      hint="when on, every corridor (parents + babies) keeps the initial width. no drift."
-                    />
-                    <NumberField
-                      label="initial agents"
-                      value={draft.generation.tunnelerCount ?? 2}
-                      min={1}
-                      max={6}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: { ...draft.generation, tunnelerCount: v },
-                        })
-                      }
-                      hint="agents seeded at origin. higher = floor fills from more directions."
-                    />
-                    <NumberField
-                      label="step budget"
-                      value={draft.generation.tunnelerStepBudget ?? 3000}
-                      min={100}
-                      step={250}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: {
-                            ...draft.generation,
-                            tunnelerStepBudget: v,
-                          },
-                        })
-                      }
-                      hint="hard cap on total agent steps. fail-safe + density knob."
-                    />
-                  </div>
-                  <SliderField
-                    label="turn chance"
-                    value={draft.generation.turnChance ?? 0.25}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    onChange={(v) =>
-                      setDraft({
-                        ...draft,
-                        generation: { ...draft.generation, turnChance: v },
-                      })
-                    }
-                    hint="per step, chance an agent rotates 90°. 0 = straight tunnels; 1 = jagged maze."
-                  />
-                  <SliderField
-                    label="room chance"
-                    value={draft.generation.roomChance ?? 0.4}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    onChange={(v) =>
-                      setDraft({
-                        ...draft,
-                        generation: { ...draft.generation, roomChance: v },
-                      })
-                    }
-                    hint="per step, chance an agent spawns a room next to its path (rolled twice — left and right)."
-                  />
-                  <SliderField
-                    label="branch chance"
-                    value={draft.generation.branching ?? 0.2}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    onChange={(v) =>
-                      setDraft({
-                        ...draft,
-                        generation: { ...draft.generation, branching: v },
-                      })
-                    }
-                    hint="on a turn, chance an agent spawns a child agent. higher = denser, more-junction maps."
-                  />
-                  <SliderField
-                    label="designed-room chance"
-                    value={draft.generation.roomTemplateChance ?? 1}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    onChange={(v) =>
-                      setDraft({
-                        ...draft,
-                        generation: {
-                          ...draft.generation,
-                          roomTemplateChance: v,
-                        },
-                      })
-                    }
-                    hint="per-room roll. 1 = always use an authored template when one fits; 0 = ignore templates and keep procedural rects; mix in between."
-                  />
-                </>
-              )}
-              {draft.generation.generator === 'walker' && (
-                <>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumberField
-                      label="cells (target)"
-                      value={draft.generation.walkerCellTarget ?? 600}
-                      min={50}
-                      step={50}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: {
-                            ...draft.generation,
-                            walkerCellTarget: v,
-                          },
-                        })
-                      }
-                      hint="cells the walker tries to carve. 600 ≈ medium cave, 1200 ≈ sprawling."
-                    />
-                    <NumberField
-                      label="chambers"
-                      value={draft.generation.walkerChamberCount ?? 2}
-                      min={1}
-                      max={12}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: {
-                            ...draft.generation,
-                            walkerChamberCount: v,
-                          },
-                        })
-                      }
-                      hint="enemy / prop scatter pockets along the carve."
-                    />
-                    <NumberField
-                      label="chamber radius (tiles)"
-                      value={draft.generation.walkerChamberRadius ?? 2}
-                      min={1}
-                      max={6}
-                      onChange={(v) =>
-                        setDraft({
-                          ...draft,
-                          generation: {
-                            ...draft.generation,
-                            walkerChamberRadius: v,
-                          },
-                        })
-                      }
-                      hint="2 = 5×5 chamber rect, 3 = 7×7."
-                    />
-                  </div>
-                  <SliderField
-                    label="momentum"
-                    value={draft.generation.walkerMomentum ?? 0}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    onChange={(v) =>
-                      setDraft({
-                        ...draft,
-                        generation: { ...draft.generation, walkerMomentum: v },
-                      })
-                    }
-                    hint="0 = pure random walk (round blob). 0.7 = mostly straight (long corridor passages)."
-                  />
-                </>
-              )}
               <SliderField
                 label="prop density"
                 value={draft.generation.propDensity}
@@ -929,17 +693,6 @@ function BiomeEditorBody() {
               </div>
               <span>{draft.id}</span>
               <span>· hazard: {draft.dominantHazard}</span>
-              <span>
-                · rooms {draft.generation.roomCountMin}–
-                {draft.generation.roomCountMax}
-              </span>
-              <span>
-                · room size {draft.generation.roomSizeMin}–
-                {draft.generation.roomSizeMax}
-              </span>
-              <span className="ml-auto text-zinc-600">
-                Procedural geometry from authored params lands with E3.4.
-              </span>
             </div>
           </div>
         )}

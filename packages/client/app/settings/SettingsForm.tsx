@@ -25,9 +25,6 @@ export function SettingsForm({ initialDisplayName }: { initialDisplayName: strin
           required
           className="w-full bg-[color:var(--bg)] border border-[color:var(--panel-border)] rounded px-3 py-2 outline-none focus:border-[color:var(--accent)]"
         />
-        <span className="block text-xs text-zinc-500 mt-1">
-          Other runners see this above your character.
-        </span>
       </label>
 
       {state.kind === 'error' && (

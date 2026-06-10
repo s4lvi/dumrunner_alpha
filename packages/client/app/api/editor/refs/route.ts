@@ -20,20 +20,18 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
   loadBiomes,
-  loadCorridors,
   loadEnemies,
   loadProps,
   loadRooms,
 } from '@dumrunner/shared/content/loader';
 import type {
   BiomeDef,
-  CorridorTemplate,
   EnemyDef,
   PropDef,
   RoomTemplate,
 } from '@dumrunner/shared';
 
-type EditorArea = 'biomes' | 'enemies' | 'props' | 'rooms' | 'corridors';
+type EditorArea = 'biomes' | 'enemies' | 'props' | 'rooms';
 
 export type RefEntity = { area: EditorArea; id: string };
 export type RefEdge = {
@@ -61,6 +59,9 @@ export type AssetSlot = {
 export type RefsResponse = {
   edges: RefEdge[];
   assets: AssetSlot[];
+  // Subset of `edges` whose `to` doesn't resolve to a known entity.
+  // The UI flags these as broken cross-references.
+  brokenEdges: RefEdge[];
 };
 
 const TEXTURES_DIR = path.join(process.cwd(), 'public', 'textures');
@@ -137,15 +138,6 @@ function enemyEdges(e: EnemyDef): RefEdge[] {
 function propEdges(p: PropDef): RefEdge[] {
   const from: RefEntity = { area: 'props', id: p.id };
   return p.biomeAffinity.map((biomeId, i) => ({
-    from,
-    to: { area: 'biomes', id: biomeId },
-    field: `biomeAffinity[${i}]`,
-  }));
-}
-
-function corridorEdges(c: CorridorTemplate): RefEdge[] {
-  const from: RefEntity = { area: 'corridors', id: c.id };
-  return c.biomeAffinity.map((biomeId, i) => ({
     from,
     to: { area: 'biomes', id: biomeId },
     field: `biomeAffinity[${i}]`,
@@ -254,12 +246,11 @@ function propAssetSlots(p: PropDef, index: Set<string>): AssetSlot[] {
 
 export async function GET() {
   try {
-    const [biomes, enemies, props, rooms, corridors, texIndex] = await Promise.all([
+    const [biomes, enemies, props, rooms, texIndex] = await Promise.all([
       loadBiomes(),
       loadEnemies(),
       loadProps(),
       loadRooms(),
-      loadCorridors(),
       buildTextureIndex(),
     ]);
 
@@ -268,8 +259,17 @@ export async function GET() {
       ...enemies.flatMap(enemyEdges),
       ...props.flatMap(propEdges),
       ...rooms.flatMap(roomEdges),
-      ...corridors.flatMap(corridorEdges),
     ];
+
+    const known: Record<EditorArea, Set<string>> = {
+      biomes: new Set(biomes.map((b) => b.id)),
+      enemies: new Set(enemies.map((e) => e.id)),
+      props: new Set(props.map((p) => p.id)),
+      rooms: new Set(rooms.map((r) => r.id)),
+    };
+    const brokenEdges = edges.filter(
+      (e) => !known[e.to.area]?.has(e.to.id),
+    );
 
     const assets: AssetSlot[] = [
       ...biomes.flatMap((b) => biomeAssetSlots(b, texIndex)),
@@ -277,7 +277,7 @@ export async function GET() {
       ...props.flatMap((p) => propAssetSlots(p, texIndex)),
     ];
 
-    const body: RefsResponse = { edges, assets };
+    const body: RefsResponse = { edges, assets, brokenEdges };
     return NextResponse.json(body);
   } catch (e) {
     return NextResponse.json(

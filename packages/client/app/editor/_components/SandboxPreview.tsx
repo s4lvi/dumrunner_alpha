@@ -38,9 +38,8 @@ import {
   setWeaponRegistry,
   tileIdAt,
 } from '@dumrunner/shared';
-import { runFpsGame } from '@/lib/game/fps';
-import { runTopdownGame } from '@/lib/game/topdown';
-import { runGame, type GameHandle, type SceneState } from '@/lib/game/pixi';
+import { runFpsV2Game } from '@/lib/game/fps.v2';
+import type { GameHandle, RunGame, SceneState } from '@/lib/game/types';
 import {
   openSandbox,
   type SandboxConnectionStatus,
@@ -51,7 +50,7 @@ import { getOverride } from '@/lib/textureOverrides';
 // Welcome message shape — mirrors the union arm in protocol.ts.
 type WelcomeMsg = Extract<ServerMessage, { type: 'welcome' }>;
 
-export type SandboxPreviewMode = 'fps' | 'topdown';
+export type SandboxPreviewMode = 'fps-v2';
 
 export type SandboxPreviewHandle = {
   spawnEnemy(kind: string, x: number, y: number): void;
@@ -68,14 +67,14 @@ export type SandboxPreviewHandle = {
     floorIndex: number;
     worldSeed: number;
   }): void;
+  loadAuthoredScene(scene: unknown): void;
   stampRoom(templateId: string, biome?: string): void;
   selfPosition(): { x: number; y: number } | null;
   status(): SandboxConnectionStatus;
 };
 
-function runnerFor(mode: SandboxPreviewMode): typeof runGame {
-  if (mode === 'topdown') return runTopdownGame;
-  return runFpsGame;
+function runnerFor(_mode: SandboxPreviewMode): RunGame {
+  return runFpsV2Game;
 }
 
 export const SandboxPreview = forwardRef<
@@ -110,6 +109,7 @@ export const SandboxPreview = forwardRef<
     layout: WelcomeMsg['layout'];
   } | null>(null);
   const [status, setStatus] = useState<SandboxConnectionStatus>('idle');
+  const lastAuthFailureRef = useRef(false);
   const [welcomeReady, setWelcomeReady] = useState(false);
   // Latest mode for stable callback reads.
   const modeRef = useRef(mode);
@@ -136,6 +136,7 @@ export const SandboxPreview = forwardRef<
       clear: (scope) => sandboxRef.current?.clear(scope),
       setLoadout: (kind) => sandboxRef.current?.setLoadout(kind),
       regenFloor: (args) => sandboxRef.current?.regenFloor(args),
+      loadAuthoredScene: (s) => sandboxRef.current?.loadAuthoredScene(s),
       stampRoom: (templateId, biome) =>
         sandboxRef.current?.send({
           type: 'sandbox_stamp_room',
@@ -180,7 +181,9 @@ export const SandboxPreview = forwardRef<
         sandboxRef.current = sandbox;
       } catch (e) {
         if (cancelled) return;
-        onError?.(e as Error);
+        const err = e as Error;
+        lastAuthFailureRef.current = /sandbox_token_fetch_401/.test(err.message);
+        onError?.(err);
       }
     })();
 
@@ -362,11 +365,21 @@ export const SandboxPreview = forwardRef<
       props: snap.props,
       layout: snap.layout,
       getEnemyTexture: (kind) => getOverride('enemy', kind),
-      sendInput: (moveX, moveY, sprint) => {
-        sandboxRef.current?.input(moveX, moveY, sprint);
+      // Direct WS sends, identical shape to Game.tsx's live
+      // game path. No typed shim per message; the protocol is
+      // the single source of truth.
+      sendInput: (moveX, moveY, sprint, jump, crouch) => {
+        sandboxRef.current?.send({
+          type: 'input',
+          moveX,
+          moveY,
+          sprint,
+          jump,
+          crouch,
+        });
       },
-      sendFire: (dirX, dirY) => {
-        sandboxRef.current?.send({ type: 'fire', dirX, dirY });
+      sendFire: (dirX, dirY, dirZ) => {
+        sandboxRef.current?.send({ type: 'fire', dirX, dirY, dirZ });
       },
       sendBuild: () => {
         /* sandbox: build disabled */
@@ -388,12 +401,26 @@ export const SandboxPreview = forwardRef<
     };
   }, [mode, welcomeReady]);
 
+  const unauthorized = status === 'error' && lastAuthFailureRef.current;
+
   return (
     <div className="relative w-full h-full">
       <div ref={hostRef} className="absolute inset-0" />
       <div className="absolute top-2 left-2 text-[10px] font-mono text-zinc-400 bg-zinc-900/70 px-2 py-0.5 rounded border border-zinc-800 pointer-events-none">
         sandbox · {mode} · {status}
       </div>
+      {unauthorized && (
+        <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/80">
+          <div className="text-xs text-zinc-300 text-center">
+            <a
+              href={`/login?next=${encodeURIComponent(typeof window !== 'undefined' ? window.location.pathname : '/editor')}`}
+              className="underline hover:text-zinc-100"
+            >
+              Log in to enable preview
+            </a>
+          </div>
+        </div>
+      )}
     </div>
   );
 });

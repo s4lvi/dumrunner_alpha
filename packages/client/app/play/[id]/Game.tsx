@@ -65,43 +65,10 @@ import {
   type ServerMessage,
   type SuitSlotKind,
 } from '@dumrunner/shared';
-import { runGame, type GameHandle } from '@/lib/game/pixi';
-import { runFpsGame } from '@/lib/game/fps';
+import { type GameHandle } from '@/lib/game/types';
 import { runFpsV2Game } from '@/lib/game/fps.v2';
 import { paintMinimap } from '@/lib/game/minimap';
 import { getOverride } from '@/lib/textureOverrides';
-
-// FPS is the only renderer in play. The V hotkey cycle is kept
-// as a single-element array so the existing toggle UI stays
-// functional. 'topdown' is retained as a type variant only
-// because pixi.ts (runGame) is still imported for its
-// GameHandle / SceneState types — no UI path reaches it.
-// 'fps-v2' is the default sector-based renderer. `?v2=0` falls
-// back to the v1 raycaster for parity comparisons.
-type RendererMode = 'topdown' | 'fps' | 'fps-v2';
-
-const RENDERER_CYCLE: RendererMode[] = ['fps-v2'];
-
-function runnerFor(mode: RendererMode): typeof runGame {
-  if (mode === 'fps-v2') return runFpsV2Game;
-  return mode === 'fps' ? runFpsGame : runGame;
-}
-
-// Read the renderer override from the URL. Called from a
-// post-mount useEffect, never during initial render — SSR has
-// no window and would mismatch the client's hydrated state
-// otherwise. `?v2=0` falls back to the v1 raycaster; anything
-// else keeps the default v2 sector renderer.
-function readRendererModeFromUrl(): RendererMode | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('v2') === '0') return 'fps';
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
 import { audio } from '@/lib/audio';
 import { loadAssetIndex, type AssetIndex } from '@/lib/assetGen';
 import { rewriteGameWsUrl } from '@/lib/discord/sdk';
@@ -138,7 +105,47 @@ type ChatEntry = {
   ts: number;
 };
 
-export function Game({ serverId }: { serverId: string }) {
+export type GameMode = 'live' | 'sandbox';
+
+export type GameProps = {
+  // Live-game server id. Required for `mode: 'live'`; ignored
+  // in sandbox.
+  serverId?: string;
+  // Which host pipeline to run. 'live' hits /api/servers/:id/join
+  // and routes through the live-game world. 'sandbox' hits
+  // /api/editor/sandbox/url and routes through a sandbox-mode
+  // World instance — same code path, same handlers, same audio.
+  mode?: GameMode;
+  // Editor playtest payload — when set in sandbox mode the page
+  // ships the scene to the server post-welcome so the sandbox
+  // World loads the authored geometry instead of the default
+  // arena. Either format is accepted; the server coerces.
+  sandboxScene?:
+    | import('@dumrunner/shared').LinedefScene
+    | import('@dumrunner/shared').SectorScene;
+  // Bumped by the editor when the author saves. Triggers a
+  // live-reload of the running sandbox without closing playtest.
+  // Independent of `sandboxScene` reference changes so in-flight
+  // keystrokes don't spam the wire.
+  sandboxReloadTick?: number;
+  // Editor close-button callback. When set the connecting /
+  // error chrome renders a back-to-editor affordance instead
+  // of the lobby redirect Live game uses.
+  onSandboxClose?: () => void;
+};
+
+export function Game({
+  serverId,
+  mode = 'live',
+  sandboxScene,
+  sandboxReloadTick,
+  onSandboxClose: _onSandboxClose,
+}: GameProps) {
+  // onSandboxClose isn't used yet — the editor's overlay
+  // handles its own close affordance. Keeping the prop in the
+  // API so the host can wire a custom error → back-to-editor
+  // path later without a signature change.
+  void _onSandboxClose;
   const router = useRouter();
   // Touch-device detection drives the mobile overlay + landscape
   // orientation lock. Desktop sessions render nothing extra.
@@ -197,6 +204,42 @@ export function Game({ serverId }: { serverId: string }) {
   const [activeEffects, setActiveEffects] = useState<
     import('@dumrunner/shared').PlayerEffect[]
   >([]);
+  // Deathmatch state. Only populated when the server emits
+  // `dm_round_start` / `dm_scores` / `dm_round_end`. Drives the
+  // DmHud overlay (round timer + kill leaderboard + intermission
+  // scoreboard). Stays null in non-deathmatch worlds so the HUD
+  // doesn't render.
+  type DmScore = {
+    characterId: string;
+    displayName: string;
+    kills: number;
+    deaths: number;
+  };
+  const [dmRound, setDmRound] = useState<{
+    startedAt: number;
+    killsToWin: number;
+    durationMs: number;
+  } | null>(null);
+  const [dmScores, setDmScores] = useState<DmScore[]>([]);
+  const [dmIntermission, setDmIntermission] = useState<{
+    endsAt: number;
+    winnerCharacterId: string | null;
+    reason: 'cap' | 'timeout';
+    scores: DmScore[];
+  } | null>(null);
+  // World mode the welcome message reported. Drives HUD branches —
+  // cycle clock, power HUD, inventory-on-TAB are live-only.
+  const [worldMode, setWorldMode] = useState<
+    import('@dumrunner/shared').WorldMode
+  >('live');
+  const isDeathmatch = worldMode === 'deathmatch';
+  const worldModeRef = useRef(worldMode);
+  useEffect(() => {
+    worldModeRef.current = worldMode;
+  }, [worldMode]);
+  // TAB-hold scoreboard visibility for deathmatch. Cleared on
+  // keyup; set on keydown in the input handler.
+  const [dmScoreboardOpen, setDmScoreboardOpen] = useState(false);
   // Minimap toggle. Defaults on; bound to 'N' so 'M' (mute) stays
   // its current binding. Persisted to localStorage so the player's
   // preference survives reloads.
@@ -370,29 +413,17 @@ export function Game({ serverId }: { serverId: string }) {
   // for. Reset on cycle bump (horde_ended) so the next perihelion
   // fires its alert again. -1 means we haven't alerted this run.
   const perihelionAlertCycleRef = useRef<number>(-1);
-  // Renderer pick. v2 is the default; `?v2=0` opts back into v1.
-  // Initial render must match SSR — start on 'fps-v2', and the
-  // post-mount effect below flips to 'fps' if the URL requests
-  // the v1 opt-out. The brief first-paint on the wrong renderer
-  // is fine because the game canvas isn't visible yet (still in
-  // the connecting state).
-  const [rendererMode, setRendererMode] = useState<RendererMode>('fps-v2');
-  // Ref mirror so closures captured before the URL-read effect
-  // runs (notably `attemptJoin`'s welcome handler) read the live
-  // mode at the moment they fire instead of the stale default
-  // they captured at useCallback time.
-  const rendererModeRef = useRef<RendererMode>('fps-v2');
-  rendererModeRef.current = rendererMode;
-  useEffect(() => {
-    const requested = readRendererModeFromUrl();
-    if (requested && requested !== rendererMode) setRendererMode(requested);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   // Captured WS-callback bundle so the toggle handler can re-instantiate
   // the renderer without losing access to session.ws.
   const rendererCallbacksRef = useRef<{
-    sendInput: (mx: number, my: number, sprint: boolean) => void;
-    sendFire: (dx: number, dy: number) => void;
+    sendInput: (
+      mx: number,
+      my: number,
+      sprint: boolean,
+      jump?: boolean,
+      crouch?: boolean,
+    ) => void;
+    sendFire: (dx: number, dy: number, dz?: number) => void;
     sendBuild: (kind: PlaceableBuildingKind, tx: number, ty: number) => void;
     sendDemolish: (id: string) => void;
     onNearInteractableChanged: (
@@ -478,7 +509,15 @@ export function Game({ serverId }: { serverId: string }) {
       setStatus({ kind: 'joining' });
 
       try {
-        const res = await fetch(`/api/servers/${serverId}/join`, {
+        // Pick the session-bootstrap route based on mode. Both
+        // routes return the same { wsUrl, token } shape; the
+        // sandbox flavour mints a sandbox-flagged token + skips
+        // the password / character lookup.
+        const sessionUrl =
+          mode === 'sandbox'
+            ? '/api/editor/sandbox/url'
+            : `/api/servers/${serverId}/join`;
+        const res = await fetch(sessionUrl, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(pw ? { password: pw } : {}),
@@ -581,6 +620,30 @@ export function Game({ serverId }: { serverId: string }) {
     switch (msg.type) {
       case 'welcome': {
         setStatus({ kind: 'connected', resp });
+        // Sandbox bootstrap: ship the authored scene + creative
+        // loadout right after auth. Server is already in
+        // sandbox mode; these two messages flow through the
+        // same MESSAGE_HANDLERS table the live game uses, so
+        // every system the player needs is already wired.
+        if (mode === 'sandbox') {
+          const ws = session.ws;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            if (sandboxScene) {
+              ws.send(
+                JSON.stringify({
+                  type: 'sandbox_load_authored_scene',
+                  scene: sandboxScene,
+                }),
+              );
+            }
+            ws.send(
+              JSON.stringify({
+                type: 'sandbox_set_loadout',
+                kind: 'creative',
+              }),
+            );
+          }
+        }
         // Hydrate the runtime enemy-visual registry from the
         // server's JSON-backed templates. Renderers read
         // enemyVisualFor() against this map; without this call
@@ -615,6 +678,31 @@ export function Game({ serverId }: { serverId: string }) {
         setEquipment(msg.equipment);
         setHotbarSelection(msg.hotbarSelection);
         setSceneId(msg.sceneId);
+        // Capture the world mode + initial deathmatch round snapshot.
+        // Drives DM-only HUD (round timer, scoreboard) and hides
+        // live-only HUDs (cycle clock, power, inventory-on-TAB).
+        setWorldMode(msg.mode ?? 'live');
+        if (msg.deathmatchRound) {
+          setDmRound({
+            startedAt: msg.deathmatchRound.startedAt,
+            killsToWin: msg.deathmatchRound.killsToWin,
+            durationMs: msg.deathmatchRound.durationMs,
+          });
+          setDmScores(msg.deathmatchRound.scores);
+          if (msg.deathmatchRound.intermissionEndsAt !== null) {
+            setDmIntermission({
+              endsAt: msg.deathmatchRound.intermissionEndsAt,
+              winnerCharacterId: null,
+              reason: 'cap',
+              scores: msg.deathmatchRound.scores,
+            });
+          } else {
+            setDmIntermission(null);
+          }
+        } else {
+          setDmRound(null);
+          setDmIntermission(null);
+        }
         setCurrentLayout(msg.layout);
         setKnownBlueprints(new Set(msg.knownBlueprints));
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
@@ -635,16 +723,28 @@ export function Game({ serverId }: { serverId: string }) {
         // swap (V key) uses this same bundle to re-instantiate without
         // needing access to `session` outside the welcome closure.
         rendererCallbacksRef.current = {
-          sendInput: (moveX, moveY, sprint) => {
+          sendInput: (moveX, moveY, sprint, jump, crouch) => {
             const ws = session.ws;
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
-            const m: ClientMessage = { type: 'input', moveX, moveY, sprint };
+            const m: ClientMessage = {
+              type: 'input',
+              moveX,
+              moveY,
+              sprint,
+              jump,
+              crouch,
+            };
             ws.send(JSON.stringify(m));
           },
-          sendFire: (dirX, dirY) => {
+          sendFire: (dirX, dirY, dirZ) => {
             const ws = session.ws;
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
-            const m: ClientMessage = { type: 'fire', dirX, dirY };
+            const m: ClientMessage = {
+              type: 'fire',
+              dirX,
+              dirY,
+              dirZ,
+            };
             ws.send(JSON.stringify(m));
           },
           sendBuild: (kind, tileX, tileY) => {
@@ -696,12 +796,7 @@ export function Game({ serverId }: { serverId: string }) {
           const host = canvasHostRef.current;
           if (!host || gameRef.current) return;
           const cb = rendererCallbacksRef.current!;
-          // Read renderer mode via ref so the URL-toggle effect's
-          // post-mount flip (to 'fps' if `?v2=0`) reaches this
-          // welcome closure even though attemptJoin's useCallback
-          // was created before that flip resolved.
-          const runner = runnerFor(rendererModeRef.current);
-          gameRef.current = runner(host, {
+          gameRef.current = runFpsV2Game(host, {
             sceneId: msg.sceneId,
             self: msg.self,
             others: msg.players.filter((p) => p.characterId !== msg.self.characterId),
@@ -725,12 +820,19 @@ export function Game({ serverId }: { serverId: string }) {
         gameRef.current?.removePlayer(msg.characterId);
         break;
       case 'player_moved':
-        gameRef.current?.movePlayer(msg.characterId, msg.x, msg.y);
-        // Footstep SFX for self only, throttled. Server broadcasts a
-        // player_moved at every meaningful position delta; we throttle
-        // playback to a step cadence (~330ms) so it feels like
-        // footfalls rather than a hum.
-        if (msg.characterId === selfIdRef.current) {
+        gameRef.current?.movePlayer(
+          msg.characterId,
+          msg.x,
+          msg.y,
+          msg.jumpZ,
+          msg.crouching,
+        );
+        // Footstep SFX for self only, throttled, and only while
+        // grounded — airborne position updates (jumping) aren't steps.
+        // Server broadcasts a player_moved at every meaningful position
+        // delta; we throttle playback to a step cadence (~330ms) so it
+        // feels like footfalls rather than a hum.
+        if (msg.characterId === selfIdRef.current && (msg.jumpZ ?? 0) <= 0) {
           const now = performance.now();
           if (now - lastFootstepAtRef.current > 330) {
             lastFootstepAtRef.current = now;
@@ -932,7 +1034,13 @@ export function Game({ serverId }: { serverId: string }) {
         break;
       }
       case 'projectile_despawned':
-        gameRef.current?.despawnProjectile(msg.id);
+        gameRef.current?.despawnProjectile(
+          msg.id,
+          msg.reason,
+          msg.x,
+          msg.y,
+          msg.z,
+        );
         break;
       case 'loot_spawned':
         gameRef.current?.spawnLoot(msg.loot);
@@ -1018,6 +1126,27 @@ export function Game({ serverId }: { serverId: string }) {
         if (msg.characterId === selfIdRef.current) {
           setActiveEffects(msg.effects);
         }
+        break;
+      case 'dm_round_start':
+        setDmRound({
+          startedAt: msg.startedAt,
+          killsToWin: msg.killsToWin,
+          durationMs: msg.durationMs,
+        });
+        setDmIntermission(null);
+        // Don't wipe scores; the dm_scores broadcast that follows
+        // carries the post-reset (zeroed) snapshot.
+        break;
+      case 'dm_scores':
+        setDmScores(msg.scores);
+        break;
+      case 'dm_round_end':
+        setDmIntermission({
+          endsAt: msg.intermissionEndsAt,
+          winnerCharacterId: msg.winnerCharacterId,
+          reason: msg.reason,
+          scores: msg.scores,
+        });
         break;
       case 'craft_job_started':
         // Server emits this both when a new job is enqueued (which
@@ -1142,7 +1271,10 @@ export function Game({ serverId }: { serverId: string }) {
   }, [sceneId]);
   useEffect(() => {
     return () => {
-      audio.playMusic(null);
+      // Hard-stop instead of crossfade — the 600ms fade lost the race
+      // against unmount on session exit, leaving music audible on the
+      // lobby / editor pages the player navigated back to.
+      audio.stopMusic();
     };
   }, []);
 
@@ -1257,67 +1389,33 @@ export function Game({ serverId }: { serverId: string }) {
     if (document.pointerLockElement) document.exitPointerLock?.();
   }, [showInventory, showTradeModal, stationModalKind]);
 
-  // Hot-swap renderers when `rendererMode` changes. Snapshot scene state
-  // from the outgoing renderer, destroy it, then instantiate the new one
-  // with that state. Skips the very first run because the welcome handler
-  // is responsible for the initial mount.
+  // Editor live-reload: the editor bumps `sandboxReloadTick` on
+  // save. Each bump (after the initial mount, which the welcome
+  // handler already covers) re-ships the latest scene to the
+  // running sandbox so the author doesn't have to close + reopen
+  // playtest. Cheap — the server already handles
+  // sandbox_load_authored_scene as a hot swap.
   //
-  // CRITICAL: depend ONLY on rendererMode. Adding inventory / hotbarSelection /
-  // sceneId here looks tempting (we read them inside) but it makes the
-  // effect re-run on every inventory mutation — which destroys and rebuilds
-  // the renderer mid-firefight, exits pointer lock, and dims the screen.
-  // The values we read inside the closure are the React-current ones at
-  // toggle time, which is what we want.
-  const initialMountRef = useRef(true);
+  // Keyed on the tick (not the scene reference) so in-flight
+  // edits don't spam the wire; reloads only on explicit save.
+  const sandboxReloadInitialRef = useRef(true);
   useEffect(() => {
-    if (initialMountRef.current) {
-      initialMountRef.current = false;
+    if (sandboxReloadInitialRef.current) {
+      sandboxReloadInitialRef.current = false;
       return;
     }
-    const current = gameRef.current;
-    const cb = rendererCallbacksRef.current;
-    const host = canvasHostRef.current;
-    if (!current || !cb || !host) return;
-    const snapshot = current.currentSceneState();
-    current.destroy();
-    gameRef.current = null;
-    const runner = runnerFor(rendererMode);
-    gameRef.current = runner(host, {
-      sceneId: snapshot.sceneId,
-      self: snapshot.self,
-      others: snapshot.players,
-      enemies: snapshot.enemies,
-      projectiles: snapshot.projectiles,
-      loot: snapshot.loot,
-      corpses: snapshot.corpses,
-      buildings: snapshot.buildings,
-      props: snapshot.props,
-      layout: snapshot.layout,
-      getEnemyTexture: (kind) =>
-        assetIndexRef.current?.getEnemyTexture(kind) ?? null,
-      ...cb,
-    });
-    // Reapply build/weapon mode against the new renderer so the equipped
-    // hotbar slot stays in sync.
-    const slot = inventory[hotbarSelection];
-    // Placeable slots never carry procgen-only kinds (stairs_down /
-    // extract_pad) at runtime — there's no recipe / loot path that
-    // could put one in inventory. The cast crosses the wider
-    // BuildingKind inventory type into the narrower placement
-    // type setBuildMode accepts.
-    const kind =
-      sceneId === 'surface' && slot?.kind === 'placeable' && slot.count > 0
-        ? (slot.buildingKind as PlaceableBuildingKind)
-        : null;
-    gameRef.current.setBuildMode(kind);
-    gameRef.current.setEquippedWeapon(
-      slot?.kind === 'weapon' ? slot.weapon.weaponId : null
-    );
-    gameRef.current.setBuildRadiusBonus(
-      Math.max(0, Math.floor(computeSuitStats(equipment).buildRadiusBonus))
+    if (mode !== 'sandbox') return;
+    if (!sandboxScene) return;
+    const ws = sessionRef.current?.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(
+      JSON.stringify({
+        type: 'sandbox_load_authored_scene',
+        scene: sandboxScene,
+      }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rendererMode]);
+  }, [sandboxReloadTick]);
 
   // Build mode follows the selected hotbar slot: a placeable WITH stock + the
   // surface scene turns it on, anything else turns it off.
@@ -1411,9 +1509,18 @@ export function Game({ serverId }: { serverId: string }) {
       }
       if (e.key === 'Tab') {
         e.preventDefault();
-        // Tab closes any modal first; only toggles inventory when nothing
-        // else is open. Avoids the "Tab opens inventory ON TOP of trade
-        // modal" stack and matches Esc behaviour for the chest modal.
+        // In deathmatch, TAB shows the scoreboard (hold-to-view, like
+        // an arena shooter). The keyup handler clears the overlay.
+        // Inventory + crafting modals aren't relevant in DM mode so
+        // we don't fall through to the live-mode chain.
+        if (worldModeRef.current === 'deathmatch') {
+          setDmScoreboardOpen(true);
+          return;
+        }
+        // Live mode: Tab closes any modal first; only toggles inventory
+        // when nothing else is open. Avoids the "Tab opens inventory ON
+        // TOP of trade modal" stack and matches Esc behaviour for the
+        // chest modal.
         if (chestModalIdRef.current !== null) {
           chestModalIdRef.current = null;
           setChestModalId(null);
@@ -1469,16 +1576,6 @@ export function Game({ serverId }: { serverId: string }) {
         setShowMinimap((v) => !v);
         return;
       }
-      // V toggles renderers: iso ↔ FPS. Swap is hot — we snapshot
-      // scene state from the old renderer and seed the new one.
-      if (e.key === 'v' || e.key === 'V') {
-        e.preventDefault();
-        setRendererMode((m) => {
-          const i = RENDERER_CYCLE.indexOf(m);
-          return RENDERER_CYCLE[(i + 1) % RENDERER_CYCLE.length];
-        });
-        return;
-      }
       // F triggers a consumable from the currently selected hotbar slot
       // (e.g. medkit). No-op if the slot isn't a consumable.
       if (e.key === 'f' || e.key === 'F') {
@@ -1508,8 +1605,17 @@ export function Game({ serverId }: { serverId: string }) {
         }
       }
     }
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.key === 'Tab' && worldModeRef.current === 'deathmatch') {
+        setDmScoreboardOpen(false);
+      }
+    }
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, []);
 
   return (
@@ -1525,7 +1631,7 @@ export function Game({ serverId }: { serverId: string }) {
             />
           )}
           <div className="text-sm text-zinc-400">
-            server {serverId.slice(0, 8)}…
+            server {(serverId ?? 'sandbox').slice(0, 8)}…
             {' • '}
             {status.kind === 'connected' && (
               <span className="text-emerald-400">connected</span>
@@ -1602,25 +1708,36 @@ export function Game({ serverId }: { serverId: string }) {
             sendOnLiveWs({ type: 'select_hotbar', slot });
           }}
         />
-        {worldClock && <WorldClockHud clock={worldClock} />}
-        {worldClock && (
+        {!isDeathmatch && worldClock && <WorldClockHud clock={worldClock} />}
+        {!isDeathmatch && worldClock && (
           <PerihelionWarning
             clock={worldClock}
             inDungeon={sceneId.startsWith('dungeon:')}
           />
         )}
-        {sceneId.startsWith('dungeon:') && currentLayout && (
-          <HazardHud
-            layout={currentLayout}
-            sceneId={sceneId}
-            equipment={equipment}
-            getSelfPosition={() =>
-              gameRef.current?.getSelfPosition() ?? null
-            }
+        {!isDeathmatch &&
+          sceneId.startsWith('dungeon:') &&
+          currentLayout && (
+            <HazardHud
+              layout={currentLayout}
+              sceneId={sceneId}
+              equipment={equipment}
+              getSelfPosition={() =>
+                gameRef.current?.getSelfPosition() ?? null
+              }
+            />
+          )}
+        {!isDeathmatch && <PowerHud state={powerState} />}
+        <ActiveEffectsHud effects={activeEffects} />
+        {dmRound && (
+          <DmHud
+            round={dmRound}
+            scores={dmScores}
+            intermission={dmIntermission}
+            selfId={selfIdRef.current ?? ''}
+            scoreboardOpen={dmScoreboardOpen}
           />
         )}
-        <PowerHud state={powerState} />
-        <ActiveEffectsHud effects={activeEffects} />
         {showMinimap && <Minimap gameRef={gameRef} />}
         <HudOverlay stats={selfStats} alive={selfAlive} />
         <AmmoHud
@@ -1671,7 +1788,7 @@ export function Game({ serverId }: { serverId: string }) {
           nearestContainerId && (
             <InteractPrompt label="Loot Container" />
           )}
-        <ControlsHint mode={rendererMode} />
+        <ControlsHint />
         {toast && <Toast message={toast.message} keyId={toast.key} />}
         {linkSeveredAt !== null && <LinkSeveredOverlay />}
 
@@ -1755,6 +1872,7 @@ export function Game({ serverId }: { serverId: string }) {
             weaponBenchTier={weaponBenchTier}
             craftJobs={craftJobs}
             buildings={buildings}
+            power={powerState}
             onClose={() => setStationModalKind(null)}
             onCraft={(recipeId) =>
               sendOnLiveWs({ type: 'craft_request', recipeId })
@@ -2013,22 +2131,9 @@ function Overlay({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ControlsHint({ mode }: { mode: RendererMode }) {
-  // Show what V will switch to next so the player knows what's coming.
-  // 'topdown' is deprecated and not reachable via the V cycle; if a
-  // ?topdown= URL hits, the next label still resolves cleanly.
-  const idx = RENDERER_CYCLE.indexOf(mode);
-  const nextMode =
-    idx < 0
-      ? RENDERER_CYCLE[0]
-      : RENDERER_CYCLE[(idx + 1) % RENDERER_CYCLE.length];
-  const nextLabel = nextMode === 'fps' ? 'first-person' : 'isometric';
+function ControlsHint() {
   return (
     <div className="absolute bottom-3 right-3 text-xs text-zinc-500 select-none pointer-events-none flex flex-col items-end gap-1">
-      <div>
-        <Kbd>V</Kbd>
-        <span className="ml-2">{nextLabel}</span>
-      </div>
       <div>
         <Kbd>Tab</Kbd>
         <span className="ml-2">inventory</span>
@@ -2037,17 +2142,10 @@ function ControlsHint({ mode }: { mode: RendererMode }) {
         <Kbd>E</Kbd>
         <span className="ml-2">interact</span>
       </div>
-      {mode === 'fps' ? (
-        <div>
-          <Kbd>WASD</Kbd>
-          <span className="ml-2">forward / strafe</span>
-        </div>
-      ) : (
-        <div>
-          <Kbd>WASD</Kbd>
-          <span className="ml-2">move</span>
-        </div>
-      )}
+      <div>
+        <Kbd>WASD</Kbd>
+        <span className="ml-2">forward / strafe</span>
+      </div>
       <div>
         <Kbd>Shift</Kbd>
         <span className="ml-2">sprint</span>
@@ -2422,6 +2520,222 @@ function ActiveEffectsHud({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Deathmatch HUD: round timer + leader chips top-center, scrolling
+// kill feed top-right, full scoreboard overlay during intermission.
+// Only mounted when the server sends `dm_round_start` (live worlds
+// never see it). Polls Date.now() on a 250ms timer to drive the
+// countdown — cheap and avoids re-rendering Game on every frame.
+function DmHud({
+  round,
+  scores,
+  intermission,
+  selfId,
+  scoreboardOpen,
+}: {
+  round: { startedAt: number; killsToWin: number; durationMs: number };
+  scores: Array<{
+    characterId: string;
+    displayName: string;
+    kills: number;
+    deaths: number;
+  }>;
+  intermission: {
+    endsAt: number;
+    winnerCharacterId: string | null;
+    reason: 'cap' | 'timeout';
+    scores: Array<{
+      characterId: string;
+      displayName: string;
+      kills: number;
+      deaths: number;
+    }>;
+  } | null;
+  selfId: string;
+  scoreboardOpen: boolean;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
+  const top = scores[0];
+  const elapsedSec = Math.floor((now - round.startedAt) / 1000);
+  const remainingMs = Math.max(0, round.durationMs - (now - round.startedAt));
+  const mm = Math.floor(remainingMs / 60000);
+  const ss = Math.floor((remainingMs % 60000) / 1000);
+  return (
+    <>
+      {/* Top banner — round timer + leader. */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none select-none z-30">
+        <div className="flex items-center gap-3 bg-black/70 border border-red-700/60 rounded px-3 py-1.5 text-xs text-zinc-100">
+          <span className="font-mono tabular-nums">
+            {mm}:{ss.toString().padStart(2, '0')}
+          </span>
+          <span className="text-zinc-500">·</span>
+          {top ? (
+            <span>
+              <span className="text-red-300">{top.displayName}</span>{' '}
+              <span className="text-zinc-400 tabular-nums">{top.kills}</span>
+              <span className="text-zinc-600">/{round.killsToWin}</span>
+            </span>
+          ) : (
+            <span className="text-zinc-500">First to {round.killsToWin}</span>
+          )}
+          {void elapsedSec}
+        </div>
+      </div>
+      {/* Kill-feed lines ride on the existing ChatPanel as system
+          messages (server posts "A killed B" via notifyPlayerDied).
+          No separate UI here. */}
+      {/* Intermission overlay — full scoreboard until round restart. */}
+      {intermission && (
+        <DmIntermissionOverlay
+          intermission={intermission}
+          selfId={selfId}
+          now={now}
+        />
+      )}
+      {/* Hold-TAB scoreboard during the active round. Suppressed
+          during intermission since the intermission overlay already
+          shows the scoreboard. */}
+      {scoreboardOpen && !intermission && (
+        <DmScoreboardOverlay scores={scores} selfId={selfId} />
+      )}
+    </>
+  );
+}
+
+function DmScoreboardOverlay({
+  scores,
+  selfId,
+}: {
+  scores: Array<{
+    characterId: string;
+    displayName: string;
+    kills: number;
+    deaths: number;
+  }>;
+  selfId: string;
+}) {
+  return (
+    <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center">
+      <div className="bg-zinc-950/90 border border-zinc-700 rounded-lg p-5 min-w-[320px] max-w-[420px]">
+        <div className="text-xs uppercase tracking-widest text-zinc-500 mb-3 text-center">
+          Scoreboard
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-zinc-500 text-xs uppercase tracking-wider">
+              <th className="text-left font-normal pb-1">Player</th>
+              <th className="text-right font-normal pb-1 w-12">K</th>
+              <th className="text-right font-normal pb-1 w-12">D</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scores.map((s) => {
+              const isSelf = s.characterId === selfId;
+              return (
+                <tr
+                  key={s.characterId}
+                  className={isSelf ? 'text-[color:var(--accent)]' : 'text-zinc-200'}
+                >
+                  <td className="py-0.5 truncate max-w-[200px]">
+                    {s.displayName}
+                  </td>
+                  <td className="py-0.5 text-right tabular-nums">{s.kills}</td>
+                  <td className="py-0.5 text-right tabular-nums text-zinc-500">
+                    {s.deaths}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function DmIntermissionOverlay({
+  intermission,
+  selfId,
+  now,
+}: {
+  intermission: {
+    endsAt: number;
+    winnerCharacterId: string | null;
+    reason: 'cap' | 'timeout';
+    scores: Array<{
+      characterId: string;
+      displayName: string;
+      kills: number;
+      deaths: number;
+    }>;
+  };
+  selfId: string;
+  now: number;
+}) {
+  const remaining = Math.max(
+    0,
+    Math.ceil((intermission.endsAt - now) / 1000),
+  );
+  const winner = intermission.scores.find(
+    (s) => s.characterId === intermission.winnerCharacterId,
+  );
+  return (
+    <div className="absolute inset-0 z-50 pointer-events-none flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-zinc-950/90 border border-red-700/60 rounded-lg p-6 min-w-[360px] max-w-[480px]">
+        <div className="text-center mb-4">
+          <div className="text-xs uppercase tracking-widest text-red-400 mb-1">
+            Round Over · {intermission.reason === 'cap' ? 'Kill cap' : 'Time up'}
+          </div>
+          <div className="text-xl font-semibold">
+            {winner ? (
+              <>
+                <span className="text-red-300">{winner.displayName}</span>{' '}
+                <span className="text-zinc-400">wins</span>
+              </>
+            ) : (
+              <span className="text-zinc-400">No winner</span>
+            )}
+          </div>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-zinc-500 text-xs uppercase tracking-wider">
+              <th className="text-left font-normal pb-1">Player</th>
+              <th className="text-right font-normal pb-1 w-12">K</th>
+              <th className="text-right font-normal pb-1 w-12">D</th>
+            </tr>
+          </thead>
+          <tbody>
+            {intermission.scores.map((s) => {
+              const isSelf = s.characterId === selfId;
+              return (
+                <tr
+                  key={s.characterId}
+                  className={isSelf ? 'text-[color:var(--accent)]' : 'text-zinc-200'}
+                >
+                  <td className="py-0.5 truncate max-w-[200px]">
+                    {s.displayName}
+                  </td>
+                  <td className="py-0.5 text-right tabular-nums">{s.kills}</td>
+                  <td className="py-0.5 text-right tabular-nums text-zinc-500">
+                    {s.deaths}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="mt-5 text-center text-xs text-zinc-500">
+          Next round in <span className="text-zinc-300 tabular-nums">{remaining}s</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3784,6 +4098,7 @@ function WorkstationModal({
   weaponBenchTier,
   craftJobs,
   buildings,
+  power,
   onClose,
   onCraft,
   onPickup,
@@ -3798,6 +4113,9 @@ function WorkstationModal({
   weaponBenchTier: number;
   craftJobs: CraftJobState[];
   buildings: Map<string, BuildingState>;
+  // Power headroom — queued jobs wait on power, and the queue UI
+  // should say so instead of looking stuck.
+  power: { capacity: number; draw: number };
   onClose: () => void;
   onCraft: (recipeId: string) => void;
   onPickup: (kind: BuildingKind) => void;
@@ -3870,9 +4188,15 @@ function WorkstationModal({
   }
   const hasOutput = aggregateOutput.length > 0;
   // Total parallel-slot capacity across all nearby stations of this kind
-  // (1 per station for now; visible to the player as "Slots: N/M").
+  // (1 per station for now). Jobs are bound per-building server-side;
+  // surface that here: each row gets a #N station tag when there's
+  // more than one station, and queued rows say why they're waiting
+  // when the bottleneck is power rather than a busy bench.
   const totalSlots = stationsOfKind.length;
-  const usedSlots = jobsAtStation.length;
+  const activeCount = jobsAtStation.filter((j) => j.completesAt > 0).length;
+  const stationIndexById = new Map<string, number>();
+  stationsOfKind.forEach((b, i) => stationIndexById.set(b.id, i + 1));
+  const powerSaturated = power.draw >= power.capacity;
   // Progress-bar updates run inside CraftJobRow via rAF + direct DOM
   // mutation, so the modal itself never re-renders during job progress.
   // useMemo so the recipes array reference is stable while kind +
@@ -3979,12 +4303,21 @@ function WorkstationModal({
                 </div>
                 {totalSlots > 0 && (
                   <div className="text-[10px] text-zinc-500 tabular-nums">
-                    Slots {usedSlots}/{totalSlots}
+                    Active {activeCount}/{totalSlots}
                   </div>
                 )}
               </div>
               {jobsAtStation.map((job) => (
-                <CraftJobRow key={job.id} job={job} />
+                <CraftJobRow
+                  key={job.id}
+                  job={job}
+                  stationLabel={
+                    totalSlots > 1
+                      ? `#${stationIndexById.get(job.stationBuildingId) ?? '?'}`
+                      : undefined
+                  }
+                  awaitingPower={job.completesAt === 0 && powerSaturated}
+                />
               ))}
             </div>
           )}
@@ -5349,7 +5682,19 @@ function outputSlotLabel(slot: InventorySlot): string {
 // One row in the "In Progress" queue. Progress bar + seconds counter
 // update via rAF + direct DOM mutation — React never re-renders this
 // row during job progress, and the parent modal stays still.
-function CraftJobRow({ job }: { job: CraftJobState }) {
+function CraftJobRow({
+  job,
+  stationLabel,
+  awaitingPower,
+}: {
+  job: CraftJobState;
+  // "#N" tag shown when multiple stations of the kind are nearby,
+  // so per-building queues read as separate queues.
+  stationLabel?: string;
+  // Queued because power is saturated (not because the bench is
+  // busy) — surfaced so a stalled queue doesn't look broken.
+  awaitingPower?: boolean;
+}) {
   const recipe = listRecipes().find((r) => r.id === job.recipeId);
   const fillRef = useRef<HTMLDivElement>(null);
   const secondsRef = useRef<HTMLSpanElement>(null);
@@ -5380,10 +5725,13 @@ function CraftJobRow({ job }: { job: CraftJobState }) {
     return (
       <div className="flex items-center gap-3 text-xs opacity-60">
         <span className="w-32 text-zinc-300 truncate">
+          {stationLabel ? `${stationLabel} ` : ''}
           {recipe?.name ?? job.recipeId}
         </span>
         <div className="flex-1 h-2 rounded bg-black/40 border border-dashed border-[color:var(--panel-border)]" />
-        <span className="w-10 text-right text-zinc-500 italic">queued</span>
+        <span className="w-24 text-right text-zinc-500 italic">
+          {awaitingPower ? 'low power' : 'queued'}
+        </span>
       </div>
     );
   }
@@ -5394,6 +5742,7 @@ function CraftJobRow({ job }: { job: CraftJobState }) {
   return (
     <div className="flex items-center gap-3 text-xs">
       <span className="w-32 text-zinc-200 truncate">
+        {stationLabel ? `${stationLabel} ` : ''}
         {recipe?.name ?? job.recipeId}
       </span>
       <div className="flex-1 h-2 rounded bg-black/40 border border-[color:var(--panel-border)] overflow-hidden">

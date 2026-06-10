@@ -12,15 +12,18 @@ import { MAX_LIGHTS, type LightingUniformsHandle } from './lightingUniforms';
 const VERTEX_SRC = `
 attribute vec3 aPosition;
 attribute vec2 aUV;
+attribute float aBrightness;
 
 uniform mat4 uViewProj;
 
 varying vec2 vUV;
 varying vec3 vWorldPos;
+varying float vBrightness;
 
 void main() {
   vUV = aUV;
   vWorldPos = aPosition;
+  vBrightness = aBrightness;
   gl_Position = uViewProj * vec4(aPosition, 1.0);
 }
 `;
@@ -36,6 +39,7 @@ precision mediump float;
 
 varying vec2 vUV;
 varying vec3 vWorldPos;
+varying float vBrightness;
 
 uniform sampler2D uTexture;
 uniform vec3 uCameraPos;
@@ -64,7 +68,11 @@ vec3 sampleLights(vec3 worldPos) {
 
 void main() {
   vec4 tex = texture2D(uTexture, vUV);
-  vec3 litRgb = tex.rgb + sampleLights(vWorldPos) * tex.rgb;
+  // Per-vertex brightness comes from CPU-side face shading
+  // (sunDir · faceNormal at geometry build time). The textured
+  // walls / floor / ceiling all share the same attribute so
+  // neighbouring faces at different angles read distinctly.
+  vec3 litRgb = tex.rgb * vBrightness + sampleLights(vWorldPos) * tex.rgb;
   float d = distance(vWorldPos, uCameraPos);
   float fogT = clamp(
     (d - uFogStart) / max(0.0001, uFogEnd - uFogStart),

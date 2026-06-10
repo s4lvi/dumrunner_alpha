@@ -50,6 +50,7 @@ const CONTENT_AREAS = [
   'attachments',
   'animations',
   'buildings',
+  'scenes',
 ];
 
 // Mirror of ALLOWED_CATEGORIES in app/api/editor/textures/route.ts.

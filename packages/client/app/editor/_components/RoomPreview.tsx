@@ -24,7 +24,7 @@ export function RoomPreview({
 }) {
   const previewRef = useRef<SandboxPreviewHandle | null>(null);
   const [status, setStatus] = useState<SandboxConnectionStatus>('idle');
-  const [mode, setMode] = useState<SandboxPreviewMode>('fps');
+  const mode: SandboxPreviewMode = 'fps-v2';
   const [biome, setBiome] = useState<string>(biomeAffinity[0] ?? '');
   const [error, setError] = useState<string | null>(null);
   const [autoStamped, setAutoStamped] = useState(false);
@@ -55,18 +55,6 @@ export function RoomPreview({
     <div className="flex flex-col h-full w-full">
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/40 shrink-0 text-[10px] text-zinc-400">
         <span className="font-mono">{status}</span>
-        <div className="flex gap-1">
-          <ToolButton
-            active={mode === 'fps'}
-            label="fps"
-            onClick={() => setMode('fps')}
-          />
-          <ToolButton
-            active={mode === 'topdown'}
-            label="topdown"
-            onClick={() => setMode('topdown')}
-          />
-        </div>
         <span className="ml-2">
           template: <span className="text-zinc-300 font-mono">{templateId || '(no id)'}</span>
         </span>
@@ -110,26 +98,3 @@ export function RoomPreview({
   );
 }
 
-function ToolButton({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`px-2 py-0.5 rounded border ${
-        active
-          ? 'bg-zinc-800 border-zinc-600 text-zinc-100'
-          : 'border-zinc-800 text-zinc-400 hover:bg-zinc-800/50'
-      }`}
-    >
-      {label}
-    </button>
-  );
-}

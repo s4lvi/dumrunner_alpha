@@ -20,6 +20,8 @@ export async function createServerAction(
   const dropItemsOnDeath =
     String(formData.get('drop_items_on_death') ?? 'on') === 'on';
   const isPlaytest = String(formData.get('is_playtest') ?? '') === 'on';
+  const mode = String(formData.get('mode') ?? 'live');
+  const arenaSceneIdRaw = String(formData.get('arena_scene_id') ?? '').trim();
 
   if (!name || name.length < 1 || name.length > 64) {
     return { error: 'Server name must be 1–64 characters.' };
@@ -42,6 +44,21 @@ export async function createServerAction(
   }
   if (visibility === 'private' && !password) {
     return { error: 'Private servers require a password (used as the invite code).' };
+  }
+  if (mode !== 'live' && mode !== 'deathmatch') {
+    return { error: 'Invalid mode.' };
+  }
+  let arenaSceneId: string | null = null;
+  if (mode === 'deathmatch') {
+    if (!arenaSceneIdRaw) {
+      return { error: 'Deathmatch mode requires picking a map.' };
+    }
+    // Server-side slug validation mirrors the loader's id schema —
+    // prevents arbitrary file paths sneaking in via the form.
+    if (!/^[a-z0-9_-]+$/i.test(arenaSceneIdRaw)) {
+      return { error: 'Arena scene id has invalid characters.' };
+    }
+    arenaSceneId = arenaSceneIdRaw;
   }
 
   let worldSeed: number | null = null;
@@ -70,6 +87,8 @@ export async function createServerAction(
       days_per_cycle: daysPerCycle,
       drop_items_on_death: dropItemsOnDeath,
       is_playtest: isPlaytest,
+      mode,
+      arena_scene_id: arenaSceneId,
     })
     .select('id')
     .single();

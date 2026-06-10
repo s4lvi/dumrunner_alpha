@@ -106,6 +106,35 @@ export const COMBAT = {
   PLAYER_RESPAWN_X: 0,
   PLAYER_RESPAWN_Y: 0,
 
+  // Max floor-height delta the player can climb in one step
+  // (world units; one tile = 32 wu, one wall = 32 wu). Anything
+  // taller is treated as a wall — the platform's perimeter
+  // blocks the move. Step-down is unrestricted. Picked at 12 wu
+  // ≈ 3/8 wall so stair risers fit comfortably under it.
+  STEP_UP_MAX: 12,
+
+  // Vertical movement (jump + crouch). Apex ≈ vz² / (2g) ≈ 25 wu
+  // — just over half a wall (32 wu), enough to clear short
+  // risers but not the full wall behind them. Total airtime
+  // ≈ 2*vz/g = 1s; previously 1.24s read as floaty. GRAVITY in
+  // wu/s² so per-tick integration uses dt in seconds.
+  JUMP_VZ_INIT: 100,
+  GRAVITY: 200,
+  // Player vertical extents (world units). Crouching shrinks
+  // the hitbox so head-height shots miss; standing eye sits at
+  // mid-body for the "eye in the middle of the silhouette" look
+  // that matches the standing sprite art.
+  PLAYER_HEIGHT_STAND: 24,
+  PLAYER_HEIGHT_CROUCH: 14,
+  EYE_HEIGHT_STAND: 16,
+  EYE_HEIGHT_CROUCH: 10,
+  CROUCH_SPEED_MULT: 0.55,
+  // Brief grace window after landing where step-up gate ignores
+  // the floor delta. Without it, landing on a platform after a
+  // jump can read as a step-up too tall if the landing position
+  // is slightly inside a higher floor patch.
+  JUMP_LANDING_GRACE_MS: 50,
+
   // Stamina / sprint
   PLAYER_MAX_STAMINA: 100,
   SPRINT_SPEED_MULTIPLIER: 1.6,

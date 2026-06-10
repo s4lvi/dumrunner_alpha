@@ -34,7 +34,9 @@ export type AttackSpec =
   | {
       kind: 'melee';
       range: number;            // contact range from enemy centre
-      damagePerSec: number;     // applied while target is in range (continuous)
+      damagePerSec: number;     // continuous-damage rate used for BUILDING siege (a chaser chewing a wall keeps grinding). Player damage is discrete; per-swing damage is derived as damagePerSec * cooldownMs / 1000.
+      cooldownMs?: number;      // ms between swing starts; default 1200. Discrete swings stop the "damaged every tick" problem on the PLAYER side.
+      windupMs?: number;        // ms the enemy commits to the swing before damage applies. Defaults to 350. Gives players a reaction window; if they exit `range` during windup the swing whiffs.
     }
   | {
       kind: 'projectile';

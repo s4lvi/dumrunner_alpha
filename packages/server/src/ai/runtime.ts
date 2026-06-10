@@ -17,6 +17,13 @@ export type EnemyRuntime = EnemyState & {
   // The attack at index i is ready when now >= attackReadyAt[i].
   attackReadyAt: number[];
 
+  // Per-attack swing-commit timestamps for melee. 0 = not winding
+  // up; >0 = swing lands at that wall-clock. Lets melee enemies
+  // telegraph (stand still, no damage) for windupMs before the
+  // hit resolves, instead of dumping damagePerSec * dt every
+  // single tick the player is in range.
+  attackSwingAt: number[];
+
   // Hit-stun expiry (epoch ms). While now < stunUntil the FSM skips
   // movement and attacks. Refreshed (not stacked) on each new hit.
   stunUntil: number;
@@ -47,6 +54,14 @@ export type EnemyRuntime = EnemyState & {
   // window so they don't visually freeze in place.
   strafeDirection: 1 | -1;
   strafeUntil: number;
+
+  // Waypoint steering — set when the direct chase line is blocked by
+  // geometry. The FSM steers toward (waypointX, waypointY) until it's
+  // reached or the repath timer lapses, then falls back to the direct
+  // line. repathAt throttles the (BFS-backed) env.nextWaypoint calls.
+  waypointX: number | null;
+  waypointY: number | null;
+  repathAt: number;
 
   // Status effects layered onto the enemy from player-side imbue
   // mods (incendiary, chem). Enemies get the same DoT / slow shape

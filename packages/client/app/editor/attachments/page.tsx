@@ -15,12 +15,15 @@
 
 import { Suspense, useMemo } from 'react';
 import Link from 'next/link';
+import type { z } from 'zod';
 import type {
   AttachmentDefData,
   WeaponFamilyKind,
 } from '@dumrunner/shared';
+import { AttachmentDefSchema } from '@dumrunner/shared';
 import {
   Button,
+  ConfirmButton,
   EnumField,
   FieldRow,
   FormSection,
@@ -100,9 +103,12 @@ function AttachmentEditorBody() {
     createNew,
     error,
     saving,
+    validationError,
+    canSave,
   } = useEntityEditor<AttachmentDefData>('attachments', {
     makeBlank,
     newIdPrefix: 'att',
+    schema: AttachmentDefSchema as unknown as z.ZodType<AttachmentDefData>,
   });
 
   const sorted = useMemo(() => {
@@ -127,7 +133,7 @@ function AttachmentEditorBody() {
     return errs;
   }, [draft]);
 
-  const blockSave = localErrors.length > 0 || saving;
+  const blockSave = localErrors.length > 0 || !canSave;
 
   return (
     <div className="flex h-full">
@@ -174,9 +180,9 @@ function AttachmentEditorBody() {
                   <Button onClick={save} disabled={blockSave}>
                     {saving ? 'saving…' : 'save'}
                   </Button>
-                  <Button onClick={remove} variant="danger">
+                  <ConfirmButton onConfirm={remove} variant="danger">
                     delete
-                  </Button>
+                  </ConfirmButton>
                 </div>
               </div>
 
@@ -185,8 +191,9 @@ function AttachmentEditorBody() {
                   {error}
                 </div>
               )}
-              {localErrors.length > 0 && (
+              {(localErrors.length > 0 || validationError) && (
                 <div className="mb-3 px-3 py-2 rounded bg-amber-950/40 border border-amber-900/80 text-amber-200 text-xs space-y-1">
+                  {validationError && <div>• {validationError}</div>}
                   {localErrors.map((e, i) => (
                     <div key={i}>• {e}</div>
                   ))}

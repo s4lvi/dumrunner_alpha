@@ -1,41 +1,112 @@
-// Editor landing. The tree on the left is the canonical
-// navigator — this page just shows a short hint about how to
-// use it so new authors aren't dropped onto a blank canvas.
+import {
+  loadAnimations,
+  loadAttachments,
+  loadBiomes,
+  loadBlueprints,
+  loadEnemies,
+  loadProps,
+  loadRecipes,
+  loadRooms,
+  loadScenes,
+  loadWeapons,
+} from '@dumrunner/shared/content/loader';
 
-export default function EditorIndex() {
+export const dynamic = 'force-dynamic';
+
+type CountRow = { label: string; n: number; href: string };
+type Group = { label: string; rows: CountRow[] };
+
+export default async function EditorIndex() {
+  const [
+    biomes,
+    rooms,
+    scenes,
+    enemies,
+    props,
+    weapons,
+    recipes,
+    attachments,
+    blueprints,
+    animations,
+  ] = await Promise.all([
+    loadBiomes(),
+    loadRooms(),
+    loadScenes(),
+    loadEnemies(),
+    loadProps(),
+    loadWeapons(),
+    loadRecipes(),
+    loadAttachments(),
+    loadBlueprints(),
+    loadAnimations(),
+  ]);
+
+  const groups: Group[] = [
+    {
+      label: 'World',
+      rows: [
+        { label: 'biomes', n: biomes.length, href: '/editor/biomes' },
+        { label: 'rooms', n: rooms.length, href: '/editor/rooms' },
+        { label: 'scenes', n: scenes.length, href: '/editor/scenes-csg' },
+      ],
+    },
+    {
+      label: 'Entities',
+      rows: [
+        { label: 'enemies', n: enemies.length, href: '/editor/enemies' },
+        { label: 'props', n: props.length, href: '/editor/props' },
+      ],
+    },
+    {
+      label: 'Items',
+      rows: [
+        { label: 'weapons', n: weapons.length, href: '/editor/weapons' },
+        { label: 'recipes', n: recipes.length, href: '/editor/recipes' },
+        {
+          label: 'attachments',
+          n: attachments.length,
+          href: '/editor/attachments',
+        },
+      ],
+    },
+    {
+      label: 'Progression',
+      rows: [
+        { label: 'blueprints', n: blueprints.length, href: '/editor/blueprints' },
+      ],
+    },
+    {
+      label: 'Tools',
+      rows: [
+        { label: 'animations', n: animations.length, href: '/editor/animations' },
+      ],
+    },
+  ];
+
   return (
-    <div className="flex items-center justify-center h-full w-full p-12 text-zinc-500">
-      <div className="max-w-md text-sm space-y-3">
-        <h1 className="text-lg font-bold text-zinc-300">Content editor</h1>
-        <p>
-          Pick an entity from the tree on the left to edit it, or
-          click an area header to open its full page (with the
-          area-specific sidebar + form).
-        </p>
-        <ul className="text-[12px] text-zinc-400 list-disc pl-5 space-y-1">
-          <li>
-            <span className="text-zinc-300">
-              Biomes / Rooms / Enemies / Props / Blueprints / Weapons
-            </span>
-            {' '}— authored content stored as JSON under
-            {' '}<code className="text-zinc-300">packages/shared/content/</code>.
-            The sidebar groups these by layer (World / Entities /
-            Items / Progression) so it stays scannable as more
-            areas land.
-          </li>
-          <li>
-            <span className="text-zinc-300">Textures</span> — image uploads
-            served from <code className="text-zinc-300">/textures/&lt;cat&gt;/&lt;id&gt;</code>.
-          </li>
-          <li>
-            <span className="text-zinc-300">Sandbox</span> — isolated arena
-            for spawning enemies / regenerating floors / stamping
-            rooms outside any live world.
-          </li>
-        </ul>
-        <p className="text-[11px] text-zinc-600">
-          Search the tree to filter every entity by id or label.
-        </p>
+    <div className="h-full w-full p-8">
+      <div className="max-w-2xl grid grid-cols-2 sm:grid-cols-3 gap-x-10 gap-y-6">
+        {groups.map((g) => (
+          <div key={g.label}>
+            <h2 className="text-[10px] uppercase tracking-[0.15em] text-zinc-600 mb-2">
+              {g.label}
+            </h2>
+            <div className="space-y-1">
+              {g.rows.map((r) => (
+                <a
+                  key={r.label}
+                  href={r.href}
+                  className="flex items-baseline gap-2 font-mono text-xs hover:text-zinc-100"
+                >
+                  <span className="text-zinc-300 tabular-nums w-8 text-right">
+                    {r.n}
+                  </span>
+                  <span className="text-zinc-500">{r.label}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

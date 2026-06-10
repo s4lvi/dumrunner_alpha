@@ -8,12 +8,6 @@
   "width": 8,
   "height": 6,
   "tilesB64": "AAAAAAAAAAAAAAAAAAAAAAAAAgAAAgAAAAAAAAAAAAAAAAIAAAIAAAAAAAAAAAAA",
-  "entrySides": [
-    "N",
-    "E",
-    "S",
-    "W"
-  ],
   "anchors": [
     {
       "kind": "enemy",

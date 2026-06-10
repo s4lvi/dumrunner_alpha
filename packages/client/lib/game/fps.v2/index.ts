@@ -39,6 +39,7 @@ import {
   createTexturedSectorShader,
 } from './texturedSectorShader';
 import { createTexturedBuildingLayer } from './texturedBuildingLayer';
+import { createGhostCubeLayer } from './ghostCube';
 import { createFogUniforms } from './fogUniforms';
 import { createLightingUniforms } from './lightingUniforms';
 import {
@@ -48,16 +49,17 @@ import {
   stairsDownLightAt,
   type StaticLight,
 } from './lights';
-import { biomePaletteFor } from '@dumrunner/shared';
+import {
+  biomePaletteFor,
+  sectorNoiseOffsetAt,
+  terrainHeightAt,
+} from '@dumrunner/shared';
 import { createTexturedSpriteLayer } from './texturedSpriteLayer';
 import { getAnimationFrame, playEntityState } from '../../entityAnimations';
 
-import type {
-  GameHandle,
-  GameInit,
-  SceneState,
-} from '../pixi';
+import type { GameHandle, GameInit, SceneState } from '../types';
 import {
+  BUILDING_REGISTRY,
   INTERACTABLE_RADIUS,
   WEAPON_PROJECTILE_ANIM,
   WEAPON_VIEW_ANIM,
@@ -76,6 +78,7 @@ import {
   type EnemyState,
   type Interactable,
   type LootState,
+  type PlaceableBuildingKind,
   type Player,
   type ProjectileState,
   type PropState,
@@ -126,6 +129,48 @@ function makePlaceholderGeometry(spawnX: number, spawnY: number): Geometry {
   });
 }
 
+// Placeholder for the textured sector/floor/ceiling/wall meshes.
+// Pixi v8 still binds a hidden mesh's geometry on draw, so the
+// attribute set has to satisfy the textured-sector shader (aPosition
+// + aUV + aBrightness) even when the mesh has visible=false. A
+// degenerate quad keeps the index count valid; visibility is gated
+// elsewhere so nothing actually paints.
+function makeTexturedPlaceholderGeometry(): Geometry {
+  const positions = new Float32Array(12); // 4 verts × xyz, zeroed
+  const uvs = new Float32Array(8);
+  const brightness = new Float32Array(4);
+  const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+  return new Geometry({
+    attributes: {
+      aPosition: {
+        buffer: new Buffer({
+          data: positions,
+          usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+        }),
+        format: 'float32x3',
+      },
+      aUV: {
+        buffer: new Buffer({
+          data: uvs,
+          usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+        }),
+        format: 'float32x2',
+      },
+      aBrightness: {
+        buffer: new Buffer({
+          data: brightness,
+          usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+        }),
+        format: 'float32',
+      },
+    },
+    indexBuffer: new Buffer({
+      data: indices,
+      usage: BufferUsage.INDEX | BufferUsage.COPY_DST,
+    }),
+  });
+}
+
 export function runFpsV2Game(
   host: HTMLElement,
   init: GameInit,
@@ -139,6 +184,10 @@ export function runFpsV2Game(
   // GameHandle's applyLookDelta contract (mouse + touch joystick
   // both call into it through Game.tsx).
   const camera = new Camera();
+  // Initial floor lookup happens before layout is touched — the
+  // first frame's tickSelfSmoothing will overwrite this once
+  // layout is in place. Seeding at 0 keeps the camera math
+  // valid until then.
   camera.setSelfPosition(init.self.x, init.self.y, 0);
 
   // Server-authoritative target for the local player. movePlayer
@@ -158,6 +207,46 @@ export function runFpsV2Game(
   // converge without overshoot.
   const SELF_SMOOTH_TAU_MS = 50;
   let lastSelfTickAt = 0;
+
+  // Smoothed camera floor height. Targets `floorAtSelf()` each
+  // tick; we lerp toward it so step-up onto a platform reads as
+  // a quick rise instead of a snap. Step-down uses the same
+  // tau — short enough that it doesn't feel like floating, long
+  // enough that walking off a ledge doesn't camera-jolt.
+  let cameraFloorZ = 0;
+  const FLOOR_SMOOTH_TAU_MS = 70;
+
+  // Phase 7 — vertical movement state mirrored from the server.
+  // selfJumpZ is the server-reported target; cameraJumpZ is the
+  // per-frame value the camera actually reads. The client runs the
+  // SAME ballistic integration as the server (COMBAT.GRAVITY /
+  // JUMP_VZ_INIT) so the arc renders as a smooth 60 Hz parabola,
+  // with a soft correction lerp toward the 20 Hz server samples so
+  // we never drift from authority (head-bonks, landings).
+  let selfJumpZ = 0;
+  let cameraJumpZ = 0;
+  let predJumpVZ = 0;
+  let selfCrouching = false;
+  const JUMP_CORRECT_TAU_MS = 80;
+  // Mirror of the server's jump physics (COMBAT.JUMP_VZ_INIT /
+  // COMBAT.GRAVITY in packages/server/src/combat.ts) — duplicated
+  // here like STEP_UP_MAX because COMBAT is a server-only module.
+  // Keep in sync or the predicted arc drifts from authority.
+  const JUMP_VZ_INIT = 100;
+  const JUMP_GRAVITY = 200;
+  // Edge-detect for the Space jump press so we send jump=true
+  // only on the press frame, not while held.
+  let lastSpaceDown = false;
+
+  // Bullet impact sprites — transient billboards spawned on
+  // 'hit' despawns. Owned by the renderer (no server state),
+  // GC'd after IMPACT_TTL_MS.
+  type Impact = { id: string; x: number; y: number; z: number; spawnedAt: number };
+  const impacts: Impact[] = [];
+  let impactCursor = 0;
+  const IMPACT_TTL_MS = 220;
+  const IMPACT_SIZE = 6;
+  const IMPACT_COLOR = 0xffe7a8;
 
   // Minimap fog. seenTiles is a per-cell bitmap (1 byte/cell)
   // that the minimap painter reads to dim unexplored tiles.
@@ -228,6 +317,44 @@ export function runFpsV2Game(
   for (const b of init.buildings) buildings.set(b.id, b);
   for (const p of init.props) props.set(p.id, p);
 
+  // ---- HUD / feedback state ----
+  // Build mode: when non-null, the player has a placeable selected
+  // and the renderer paints a translucent ghost at the target tile
+  // + sends a build_request on click. Surface only — Game.tsx
+  // toggles it off on dungeon transitions.
+  let buildMode: PlaceableBuildingKind | null = null;
+  let buildRadiusBonusTiles = 0;
+  // Debounce so one click doesn't fire build_request every frame
+  // while held.
+  let lastBuildSentAt = 0;
+  const BUILD_DEBOUNCE_MS = 200;
+  // Horde mode: surface skybox tints red when true. Drives
+  // `setHordeActive` from the world-clock broadcast.
+  let hordeActive = false;
+  // Self HP — tracks deltas across setPlayerHp calls so a hit
+  // can trigger a red damage overlay. selfDead drives a dimmer,
+  // longer-lasting overlay variant.
+  let lastSelfHp = init.self.hp;
+  let lastSelfMaxHp = init.self.maxHp;
+  let lastHpDropAt = 0;
+  let lastBigHpDropAt = 0;
+  let selfDead = false;
+  // Per-entity hit-flash timestamps. The render passes (enemies,
+  // building cubes, props) read these to apply a brief white tint
+  // when the timestamp is recent. prevHp maps gate "did HP drop?"
+  // so heal events don't trigger a flash.
+  const enemyHitFlashAt = new Map<string, number>();
+  const enemyPrevHp = new Map<string, number>();
+  const buildingHitFlashAt = new Map<string, number>();
+  const buildingPrevHp = new Map<string, number>();
+  const propHitFlashAt = new Map<string, number>();
+  const propPrevHp = new Map<string, number>();
+  const HIT_FLASH_MS = 90;
+  const DAMAGE_FLASH_MS = 240;
+  for (const e of init.enemies) enemyPrevHp.set(e.id, e.hp);
+  for (const b of init.buildings) buildingPrevHp.set(b.id, b.hp);
+  for (const p of init.props) propPrevHp.set(p.id, p.hp);
+
   // Shared fog parameter group — one write per frame in tick()
   // updates every shader sampling it.
   const fog = createFogUniforms();
@@ -263,7 +390,11 @@ export function runFpsV2Game(
       Texture.EMPTY,
     );
     const m = new Mesh({
-      geometry: makePlaceholderGeometry(init.self.x, init.self.y),
+      // Textured-mesh placeholder needs aUV + aBrightness so the
+      // VAO compatibility check passes when the hidden mesh is
+      // bound — the colored placeholder shape only has
+      // aPosition + aBaseColor and trips Pixi v8.
+      geometry: makeTexturedPlaceholderGeometry(),
       shader,
     });
     m.cullable = false;
@@ -289,6 +420,10 @@ export function runFpsV2Game(
   // so the renderer can manage Z-order independently of the
   // surface meshes. Rebuilt on every building event.
   const texturedBuildings = createTexturedBuildingLayer(fog, lighting);
+  // Translucent 3D cube drawn at the targeted tile while build
+  // mode is on. Driven entirely by setBuildMode + per-frame
+  // updateGhostCube().
+  const ghostCube = createGhostCubeLayer(fog);
   // Sprite layer (P3.1): one big mesh, rebuilt each frame from
   // the current entity state, sharing the sector shader for
   // now (untextured colored quads). Added to the stage AFTER
@@ -335,6 +470,13 @@ export function runFpsV2Game(
   // weapons that take up the centre).
   const crosshair = new Graphics();
 
+  // Damage overlay — full-screen red vignette quad that pulses
+  // alpha on hit. Drawn over the 3D scene but under the
+  // view-model + crosshair so a low-HP screen still resolves a
+  // shot's aim point.
+  const damageOverlay = new Graphics();
+  damageOverlay.visible = false;
+
   const VIEW_MODEL_SCREEN_FRACTION = 0.42;
   const viewModel = new Sprite(Texture.EMPTY);
   viewModel.anchor.set(0.5, 1);
@@ -370,6 +512,43 @@ export function runFpsV2Game(
       .stroke({ color, alpha, width: 2 });
   }
 
+  function updateDamageOverlay(): void {
+    if (!canvasEl) return;
+    const now = performance.now();
+    let alpha = 0;
+    if (selfDead) {
+      alpha = 0.55;
+    } else {
+      // Recent hit pulse: fades over DAMAGE_FLASH_MS. Bigger
+      // chunks of HP loss (>10%) get a stronger flash.
+      const ageSmall = now - lastHpDropAt;
+      if (ageSmall < DAMAGE_FLASH_MS) {
+        alpha = Math.max(alpha, 0.32 * (1 - ageSmall / DAMAGE_FLASH_MS));
+      }
+      const ageBig = now - lastBigHpDropAt;
+      if (ageBig < DAMAGE_FLASH_MS * 1.5) {
+        alpha = Math.max(alpha, 0.55 * (1 - ageBig / (DAMAGE_FLASH_MS * 1.5)));
+      }
+      // Low-HP background tint so the player feels the danger
+      // without needing to glance at the HUD bar.
+      if (lastSelfMaxHp > 0) {
+        const hpFrac = Math.max(0, lastSelfHp) / lastSelfMaxHp;
+        if (hpFrac < 0.3) {
+          alpha = Math.max(alpha, 0.14 * (1 - hpFrac / 0.3));
+        }
+      }
+    }
+    if (alpha <= 0.001) {
+      damageOverlay.visible = false;
+      return;
+    }
+    damageOverlay.visible = true;
+    damageOverlay.clear();
+    damageOverlay
+      .rect(0, 0, canvasEl.width, canvasEl.height)
+      .fill({ color: 0x9b0000, alpha });
+  }
+
   function updateSkybox(): void {
     if (!canvasEl) return;
     const biomeId = layout?.biome ?? 'default';
@@ -382,6 +561,11 @@ export function runFpsV2Game(
       skyboxA.texture = tex;
       skyboxB.texture = tex;
     }
+    // Horde mode tints the skybox a deep red — same texture, just
+    // recoloured. Avoids needing a per-biome perihelion variant.
+    const skyTint = hordeActive ? 0xc04030 : 0xffffff;
+    skyboxA.tint = skyTint;
+    skyboxB.tint = skyTint;
     const W = canvasEl.width;
     const H = canvasEl.height;
     // Each sprite renders one full panorama. Width of one
@@ -506,7 +690,10 @@ export function runFpsV2Game(
     // the SectorMap has no triangles for that surface (e.g.
     // surface scene has no walls). When null, hide the mesh;
     // the colored mesh covers everything regardless.
-    swapTexturedMeshGeometry(texturedFloorMesh, buildTexturedFloorGeometry(result.map));
+    swapTexturedMeshGeometry(
+      texturedFloorMesh,
+      buildTexturedFloorGeometry(result.map, layout?.terrain ?? null),
+    );
     swapTexturedMeshGeometry(texturedCeilingMesh, buildTexturedCeilingGeometry(result.map));
     swapTexturedMeshGeometry(texturedWallMesh, buildTexturedWallGeometry(result.map));
     // Textured building cubes — per-kind batched. Ceiling
@@ -520,25 +707,26 @@ export function runFpsV2Game(
       [...buildings.values()],
       tileSize,
       ceilingForBuildings,
+      layout?.terrain,
     );
     refreshStaticLights();
   }
 
-  // Publish a static light at every interactable. stairs_down
-  // (surface portal + deeper descents) reads cool-blue; extract
-  // pads read warm-green. Lights sit at eye height so walls
-  // pick up the glow on top and the floor catches the same
-  // wash from below.
+  // Publish static lights. Two sources:
+  //   1. Interactables — stairs_down / extract_pad get
+  //      stock cool-blue / warm-green glows so portals read
+  //      from across a room.
+  //   2. Authored lights from the level editor — every
+  //      `scene.map.lights` entry flows through to here when
+  //      the layout carries an `authoredSectorMap`. Author
+  //      sets colour / radius / intensity in the inspector;
+  //      we just hand the values to the light manager.
   function refreshStaticLights(): void {
-    if (!layout || layout.interactables.length === 0) {
+    if (!layout) {
       lights.clearStaticLights();
       return;
     }
     const next: StaticLight[] = [];
-    // Eye-height equivalent (half wall, matches the camera Z
-    // offset used elsewhere in this file). Interactables sit on
-    // the floor so this keeps the glow centred around head
-    // level rather than the floor plane.
     const lightZ = 16;
     for (const it of layout.interactables) {
       if (it.kind === 'stairs_down') {
@@ -546,6 +734,26 @@ export function runFpsV2Game(
       } else if (it.kind === 'extract_pad') {
         next.push(extractPadLightAt(it.id, it.x, it.y, lightZ));
       }
+    }
+    const authored = layout.authoredSectorMap?.lights;
+    if (authored) {
+      for (const a of authored) {
+        next.push({
+          id: a.id,
+          x: a.x,
+          y: a.y,
+          z: a.z,
+          radius: a.radius,
+          r: ((a.colour >> 16) & 0xff) / 255,
+          g: ((a.colour >> 8) & 0xff) / 255,
+          b: (a.colour & 0xff) / 255,
+          intensity: a.intensity,
+        });
+      }
+    }
+    if (next.length === 0) {
+      lights.clearStaticLights();
+      return;
     }
     lights.setStaticLights(next);
   }
@@ -562,7 +770,10 @@ export function runFpsV2Game(
       // shows up." A subsequent updateTexturedSectorBindings()
       // call flips visible=true.
     } else {
-      m.geometry = makePlaceholderGeometry(0, 0);
+      // Textured-mesh placeholder needs aUV + aBrightness so
+      // Pixi's VAO compatibility check doesn't trip when the
+      // hidden mesh is bound during a frame's draw sweep.
+      m.geometry = makeTexturedPlaceholderGeometry();
       m.visible = false;
     }
     try {
@@ -590,15 +801,17 @@ export function runFpsV2Game(
     m: Mesh<Geometry, import('pixi.js').Shader>,
     tex: import('pixi.js').Texture | null,
   ): void {
-    if (!tex) {
-      m.visible = false;
-      return;
-    }
     // Mesh.shader is typed as Shader | null because Pixi allows
     // creating a Mesh and assigning a shader later; ours is
     // always constructed with one, but TS doesn't know that.
     if (!m.shader) return;
-    m.shader.resources.uTexture = tex.source;
+    // Bind a fallback white texture when no biome texture is
+    // uploaded — the shader multiplies texture × vertex color so
+    // a white sample reveals the colored-pass vertex color. Keeps
+    // walls / floors / ceilings visible regardless of asset state
+    // (critical for the editor's default biome).
+    const source = tex ? tex.source : Texture.WHITE.source;
+    m.shader.resources.uTexture = source;
     m.visible = true;
   }
   // Convert the initial layout once the renderer is ready —
@@ -624,7 +837,22 @@ export function runFpsV2Game(
       canvasEl?.requestPointerLock?.();
       return;
     }
-    if (e.button === 0) mouseDown = true;
+    if (e.button === 0) {
+      mouseDown = true;
+      // Build mode swallows the click — sendBuild instead of
+      // fire. Debounced so a held click doesn't spam the server
+      // (which silently drops invalid placements).
+      if (buildMode !== null) {
+        const now = performance.now();
+        if (now - lastBuildSentAt > BUILD_DEBOUNCE_MS) {
+          const target = computeBuildTarget();
+          if (target && target.inRange) {
+            init.sendBuild(buildMode, target.tileX, target.tileY);
+            lastBuildSentAt = now;
+          }
+        }
+      }
+    }
   }
   function onMouseUp(e: MouseEvent): void {
     if (e.button === 0) mouseDown = false;
@@ -701,6 +929,8 @@ export function runFpsV2Game(
       app.stage.addChild(texturedBuildings.container);
       app.stage.addChild(sprites.mesh);
       app.stage.addChild(texturedSprites.container);
+      app.stage.addChild(ghostCube.mesh);
+      app.stage.addChild(damageOverlay);
       app.stage.addChild(crosshair);
       app.stage.addChild(viewModel);
       app.ticker.add(tick);
@@ -719,6 +949,7 @@ export function runFpsV2Game(
     tickSelfSmoothing();
     revealAroundSelf();
     updateNearInteractable();
+    updateNearWorkstations();
     if (canvasEl.width !== lastCanvasW || canvasEl.height !== lastCanvasH) {
       lastCanvasW = canvasEl.width;
       lastCanvasH = canvasEl.height;
@@ -728,6 +959,7 @@ export function runFpsV2Game(
     // frame changes between ticks even when the weapon doesn't.
     updateViewModel();
     updateSkybox();
+    updateDamageOverlay();
     camera.build(canvasEl.width, canvasEl.height);
     shaderHandle.uViewProj.set(camera.viewProj.m);
     shaderHandle.flush();
@@ -744,6 +976,9 @@ export function runFpsV2Game(
     // need to sync it too.
     texturedBuildings.cameraMatrix.set(camera.viewProj.m);
     texturedBuildings.flushCamera();
+    ghostCube.cameraMatrix.set(camera.viewProj.m);
+    ghostCube.flushCamera();
+    updateGhostCube();
     // Fog params: camera world position + biome-derived colour.
     // Single write reaches every shader via the shared
     // fogUniforms group. Fog colour is the biome's wall hue
@@ -868,6 +1103,11 @@ export function runFpsV2Game(
       );
       const staticTex = animTex ? null : lookupTexture('enemy', e.kind);
       const tex = animTex ?? staticTex;
+      const groundZ = floorAt(e.x, e.y);
+      // Hit flash: white tint for HIT_FLASH_MS after the server
+      // reports an HP drop. setEnemyHp writes the timestamp.
+      const flashAt = enemyHitFlashAt.get(e.id) ?? 0;
+      const flashing = flashAt > 0 && nowAnim - flashAt < HIT_FLASH_MS;
       if (tex) {
         texturedSprites.push(
           {
@@ -875,10 +1115,10 @@ export function runFpsV2Game(
             texture: tex,
             x: e.x,
             y: e.y,
-            anchorZ: 0,
+            anchorZ: groundZ,
             height: v.size,
             aspect: textureAspect(tex),
-            tint: 0xffffff,
+            tint: flashing ? 0xffd0d0 : 0xffffff,
           },
           camera,
         );
@@ -886,9 +1126,9 @@ export function runFpsV2Game(
         spriteScratch.push({
           x: e.x,
           y: e.y,
-          anchorZ: 0,
+          anchorZ: groundZ,
           height: v.size,
-          color: v.color,
+          color: flashing ? 0xffffff : v.color,
         });
       }
     }
@@ -905,9 +1145,12 @@ export function runFpsV2Game(
       const h = heightFraction * 32;
       // spriteGroundOffset is 0..1 of the room height (matches
       // v1). 0 = floor, 1 = ceiling. We translate to the
-      // explicit anchorZ the sprite layer wants.
+      // explicit anchorZ the sprite layer wants, then lift by
+      // the terrain / platform floor at the prop's position so
+      // it sits on the actual ground.
       const offsetFrac = v.spriteGroundOffset ?? 0;
-      const anchorZ = offsetFrac * Math.max(0, ceilingZ - h);
+      const anchorZ =
+        floorAt(p.x, p.y) + offsetFrac * Math.max(0, ceilingZ - h);
       // Animation frame first, static prop/<kind> texture
       // second, colored tint last. The static fallback is what
       // gives props authored before the animation system shipped
@@ -963,6 +1206,12 @@ export function runFpsV2Game(
       if (dtSec > 2.5) continue;
       const x = pr.x + pr.vx * dtSec;
       const y = pr.y + pr.vy * dtSec;
+      // Server-broadcast z + vz now describe the bullet's
+      // vertical path. Fall back to camera eyeZ if the broadcast
+      // is from a pre-Phase-7 server.
+      const zBase = pr.z ?? eyeZ;
+      const vzS = pr.vz ?? 0;
+      const z = zBase + vzS * dtSec;
       // Wall clip: if the extrapolated position is inside a
       // non-walkable tile, the projectile has visually hit the
       // wall. Server emits the despawn but it may arrive a
@@ -971,14 +1220,31 @@ export function runFpsV2Game(
       if (tg && tiles && !isWalkableTileId(tileIdAt(tg, tiles, x, y))) {
         continue;
       }
-      // Projectile centre at eye level — bottom = eyeZ -
-      // height/2 — matches v1's floats=true horizon-anchored
-      // billboard behaviour.
+      // Projectile centre at z — bottom = z - height/2 — so
+      // pitch-aware aim renders correctly (high shots high, low
+      // shots low) instead of always at the shooter's eye line.
       const h = PROJECTILE_SIZE;
       const animId = resolveProjectileAnimId(pr.weaponId);
-      const tex = animId
+      // Animation manifests are async — the first projectile of
+      // a weaponId may render before its manifest is parsed, so
+      // getAnimationFrame returns null on that first call and
+      // returns the texture on subsequent calls. Without a
+      // static fallback, the first shot is an untextured
+      // billboard. Same lookup chain v1 uses:
+      //   1. ('projectile', weaponId)         — per-weapon override
+      //   2. ('projectile', WEAPON_FAMILY[id]) — family fallback
+      const animTex = animId
         ? getAnimationFrame(animId, `projectile::${pr.id}`, nowAnim, 'idle')
         : null;
+      let staticTex: import('pixi.js').Texture | null = null;
+      if (!animTex && pr.weaponId) {
+        staticTex = lookupTexture('projectile', pr.weaponId);
+        if (!staticTex) {
+          const family = WEAPON_FAMILY[pr.weaponId];
+          if (family) staticTex = lookupTexture('projectile', family);
+        }
+      }
+      const tex = animTex ?? staticTex;
       if (tex) {
         texturedSprites.push(
           {
@@ -986,7 +1252,7 @@ export function runFpsV2Game(
             texture: tex,
             x,
             y,
-            anchorZ: eyeZ - h * 0.5,
+            anchorZ: z - h * 0.5,
             height: h,
             aspect: textureAspect(tex),
             tint: 0xffffff,
@@ -997,7 +1263,7 @@ export function runFpsV2Game(
         spriteScratch.push({
           x,
           y,
-          anchorZ: eyeZ - h * 0.5,
+          anchorZ: z - h * 0.5,
           height: h,
           color: pr.color ?? PROJECTILE_DEFAULT_COLOR,
         });
@@ -1018,6 +1284,7 @@ export function runFpsV2Game(
       } else if (l.content.kind === 'part') {
         color = TIER_COLORS_NUM[l.content.part.tier] ?? PROJECTILE_DEFAULT_COLOR;
       }
+      const groundZ = floorAt(l.x, l.y);
       if (staticTex) {
         texturedSprites.push(
           {
@@ -1025,7 +1292,7 @@ export function runFpsV2Game(
             texture: staticTex,
             x: l.x,
             y: l.y,
-            anchorZ: 0,
+            anchorZ: groundZ,
             height: LOOT_SIZE,
             aspect: textureAspect(staticTex),
             tint: 0xffffff,
@@ -1036,17 +1303,41 @@ export function runFpsV2Game(
         spriteScratch.push({
           x: l.x,
           y: l.y,
-          anchorZ: 0,
+          anchorZ: groundZ,
           height: LOOT_SIZE,
           color,
         });
       }
     }
+    // Bullet impact sprites. In-place compaction GCs old entries
+    // so the list doesn't grow unbounded. Each impact reads as
+    // a small flash that fades by scaling alpha — first cut uses
+    // a flat colored billboard; later we can swap in a texture
+    // override + per-weapon family.
+    {
+      const nowI = performance.now();
+      let write = 0;
+      for (let i = 0; i < impacts.length; i++) {
+        const imp = impacts[i];
+        const age = nowI - imp.spawnedAt;
+        if (age >= IMPACT_TTL_MS) continue;
+        if (write !== i) impacts[write] = imp;
+        write++;
+        spriteScratch.push({
+          x: imp.x,
+          y: imp.y,
+          anchorZ: imp.z - IMPACT_SIZE * 0.5,
+          height: IMPACT_SIZE,
+          color: IMPACT_COLOR,
+        });
+      }
+      impacts.length = write;
+    }
     for (const c of corpses.values()) {
       spriteScratch.push({
         x: c.x,
         y: c.y,
-        anchorZ: 0,
+        anchorZ: floorAt(c.x, c.y),
         height: CORPSE_SIZE,
         color: CORPSE_COLOR,
       });
@@ -1054,18 +1345,111 @@ export function runFpsV2Game(
     // Other players (multiplayer). Skip self — the camera is
     // already at our world position; rendering a sprite there
     // would just paint over the centre of our own screen.
+    // Try the authored ('player', 'default') texture first; fall
+    // back to the solid blue billboard if nothing's uploaded.
+    const playerTex = lookupTexture('player', 'default');
     for (const p of players.values()) {
       if (p.characterId === init.self.characterId) continue;
-      spriteScratch.push({
-        x: p.x,
-        y: p.y,
-        anchorZ: 0,
-        height: OTHER_PLAYER_HEIGHT,
-        color: OTHER_PLAYER_COLOR,
-      });
+      const groundZ = floorAt(p.x, p.y);
+      if (playerTex) {
+        texturedSprites.push(
+          {
+            textureKey: playerTex.uid,
+            texture: playerTex,
+            x: p.x,
+            y: p.y,
+            anchorZ: groundZ,
+            height: OTHER_PLAYER_HEIGHT,
+            aspect: textureAspect(playerTex),
+            tint: 0xffffff,
+          },
+          camera,
+        );
+      } else {
+        spriteScratch.push({
+          x: p.x,
+          y: p.y,
+          anchorZ: groundZ,
+          height: OTHER_PLAYER_HEIGHT,
+          color: OTHER_PLAYER_COLOR,
+        });
+      }
     }
     sprites.update(spriteScratch, camera);
     texturedSprites.endFrame();
+  }
+
+  // Position + colour the translucent ghost cube based on
+  // current build mode + targeted tile. Green when within range,
+  // red when outside (matches server's BUILD_RADIUS_TILES + suit
+  // bonus). Hidden entirely when build mode is off or no surface
+  // layout exists.
+  function updateGhostCube(): void {
+    if (buildMode === null || !layout) {
+      ghostCube.setVisible(false);
+      return;
+    }
+    const target = computeBuildTarget();
+    if (!target) {
+      ghostCube.setVisible(false);
+      return;
+    }
+    const tileSize = layout.tileSize > 0 ? layout.tileSize : 32;
+    const ox = target.tileX * tileSize;
+    const oy = target.tileY * tileSize;
+    // Cube sits on the floor at the target tile's centre. Use
+    // floor at centre so a partially-on-terrain tile picks the
+    // most representative height.
+    const cx = ox + tileSize * 0.5;
+    const cy = oy + tileSize * 0.5;
+    const oz = floorAt(cx, cy);
+    ghostCube.setTransform(ox, oy, oz, tileSize, tileSize, tileSize);
+    const color = target.inRange ? 0x55ff88 : 0xff5555;
+    ghostCube.setColor(color, 0.32);
+    ghostCube.setVisible(true);
+  }
+
+  // Project the camera's look direction onto the floor plane to
+  // pick the target tile for build mode. If pitch is shallow
+  // (looking near horizontal or up), fall back to a tile ~2 in
+  // front of the player so the ghost still appears somewhere
+  // sensible. inRange is the server-style radius check (3 base
+  // tiles + suit bonus) measured in tiles from the player.
+  function computeBuildTarget(): {
+    tileX: number;
+    tileY: number;
+    inRange: boolean;
+  } | null {
+    if (!layout) return null;
+    const tileSize = layout.tileSize > 0 ? layout.tileSize : 32;
+    const eyeZ = camera.floorZ + camera.eyeHeightSmoothed + camera.jumpZ;
+    const groundZAtSelf = floorAt(selfX, selfY);
+    const heightAboveFloor = eyeZ - groundZAtSelf;
+    let tx: number;
+    let ty: number;
+    const fx = camera.fwdX;
+    const fy = camera.fwdY;
+    // Pitch <0 means looking down. Cast onto z = groundZAtSelf.
+    if (camera.pitch < -0.05 && heightAboveFloor > 0) {
+      const t = heightAboveFloor / Math.tan(-camera.pitch);
+      const wx = selfX + fx * t;
+      const wy = selfY + fy * t;
+      tx = Math.floor(wx / tileSize);
+      ty = Math.floor(wy / tileSize);
+    } else {
+      // Shallow / upward pitch — place 2 tiles ahead of the
+      // player so the ghost still has a sensible default.
+      const fallbackDist = tileSize * 2;
+      tx = Math.floor((selfX + fx * fallbackDist) / tileSize);
+      ty = Math.floor((selfY + fy * fallbackDist) / tileSize);
+    }
+    const selfTx = Math.floor(selfX / tileSize);
+    const selfTy = Math.floor(selfY / tileSize);
+    const dx = tx - selfTx;
+    const dy = ty - selfTy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const inRange = dist <= 3 + buildRadiusBonusTiles;
+    return { tileX: tx, tileY: ty, inRange };
   }
 
   // Texture aspect ratio (width / height). Pixi v8 Texture
@@ -1112,20 +1496,160 @@ export function runFpsV2Game(
   // Exponential lerp of the camera toward the server-reported
   // position. Smooths the ~20 Hz network ticks into a ~60 Hz
   // visual without sacrificing server authority. Mirrors v1.
+  // Also smooths the camera's floor height so stepping onto /
+  // off a platform reads as a quick rise / fall instead of a
+  // snap.
   function tickSelfSmoothing(): void {
     const now = performance.now();
     const dt = lastSelfTickAt === 0 ? 16 : now - lastSelfTickAt;
     lastSelfTickAt = now;
     const dx = targetSelfX - selfX;
     const dy = targetSelfY - selfY;
-    if (dx === 0 && dy === 0) return;
-    const t = Math.min(1, 1 - Math.exp(-dt / SELF_SMOOTH_TAU_MS));
-    selfX += dx * t;
-    selfY += dy * t;
-    if (Math.abs(targetSelfX - selfX) < 0.05) selfX = targetSelfX;
-    if (Math.abs(targetSelfY - selfY) < 0.05) selfY = targetSelfY;
-    camera.setSelfPosition(selfX, selfY, 0);
+    const txy = Math.min(1, 1 - Math.exp(-dt / SELF_SMOOTH_TAU_MS));
+    if (dx !== 0 || dy !== 0) {
+      selfX += dx * txy;
+      selfY += dy * txy;
+      if (Math.abs(targetSelfX - selfX) < 0.05) selfX = targetSelfX;
+      if (Math.abs(targetSelfY - selfY) < 0.05) selfY = targetSelfY;
+    }
+    const targetFloor = floorAt(selfX, selfY);
+    const dz = targetFloor - cameraFloorZ;
+    if (dz > 0) {
+      // Step up — snap. Camera lerping behind the floor while the
+      // player's XY is already on the upper tile puts the camera
+      // below the destination floor's plane, which clips through
+      // riser geometry from a downward-looking angle. Snap-up is
+      // the v1 + standard-FPS feel for stair ascent and avoids
+      // the clip entirely.
+      cameraFloorZ = targetFloor;
+    } else if (dz < 0) {
+      // Step / fall down — lerp. Snapping down would feel like a
+      // teleport; the slight delay reads as gravity instead.
+      const tz = Math.min(1, 1 - Math.exp(-dt / FLOOR_SMOOTH_TAU_MS));
+      cameraFloorZ += dz * tz;
+      if (Math.abs(targetFloor - cameraFloorZ) < 0.05) {
+        cameraFloorZ = targetFloor;
+      }
+    }
+    // Ballistic jump prediction. Integrate the same gravity the
+    // server uses so the arc is a smooth per-frame parabola instead
+    // of 20 Hz steps, then softly correct toward the latest server
+    // sample so authority always wins (head-bonk caps, landings,
+    // floor re-anchors).
+    if (cameraJumpZ > 0 || predJumpVZ !== 0 || selfJumpZ > 0) {
+      const dts = dt / 1000;
+      predJumpVZ -= JUMP_GRAVITY * dts;
+      cameraJumpZ += predJumpVZ * dts;
+      const corr = Math.min(1, 1 - Math.exp(-dt / JUMP_CORRECT_TAU_MS));
+      cameraJumpZ += (selfJumpZ - cameraJumpZ) * corr;
+      if (cameraJumpZ <= 0 && selfJumpZ <= 0) {
+        cameraJumpZ = 0;
+        predJumpVZ = 0;
+      }
+    }
+    camera.setSelfPosition(selfX, selfY, cameraFloorZ);
+    camera.setVertical(cameraJumpZ, selfCrouching);
   }
+
+  // Client-side mirror of the server's floor lookup. Terrain
+  // is the baseline; tile-rect platforms + authored sectors
+  // override when higher AND ≤ cap. The cap defaults to the
+  // current camera floor + STEP_UP_MAX so a brief slide past
+  // an angled wall into an overhead's polygon doesn't snap the
+  // camera up to the overhead's floor — same gating principle
+  // as the server's stateful `conn.floorZ`.
+  function floorAt(x: number, y: number): number {
+    let z = 0;
+    const terrain = layout?.terrain;
+    if (terrain) z = terrainHeightAt(terrain, x, y);
+    const cap = cameraFloorZ + STEP_UP_MAX_CLIENT;
+    const platforms = layout?.platforms;
+    if (platforms && platforms.length > 0) {
+      const tileSize = layout?.tileSize ?? 32;
+      if (tileSize > 0) {
+        for (const p of platforms) {
+          const x0 = p.tileX * tileSize;
+          const y0 = p.tileY * tileSize;
+          const x1 = x0 + p.w * tileSize;
+          const y1 = y0 + p.h * tileSize;
+          if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+          if (p.floorZ > cap) continue;
+          if (p.floorZ > z) z = p.floorZ;
+        }
+      }
+    }
+    // Authored sectors (editor playtest scenes). Pick the
+    // SMALLEST containing sector by polygon area and use its
+    // floor — same convention the server uses. This lets pits
+    // (sub-sector with floorZ < parent) lower the camera and
+    // platforms (sub-sector with floorZ > parent) raise it.
+    // Cap-filtered so overheads (containing sub-sector whose
+    // floor is unreachable above current+step-up) are ignored.
+    const sectors = layout?.authoredSectorMap?.sectors;
+    if (sectors) {
+      let bestArea = Infinity;
+      let bestZ: number | null = null;
+      let bestSector: (typeof sectors)[number] | null = null;
+      for (const s of sectors) {
+        if (s.buildingKind !== undefined) continue;
+        if (s.floorZ > cap) continue;
+        if (!pointInPolygonClient(s.verts, x, y)) continue;
+        let signed = 0;
+        for (let i = 0; i < s.verts.length; i++) {
+          const a = s.verts[i];
+          const b = s.verts[(i + 1) % s.verts.length];
+          signed += a.x * b.y - b.x * a.y;
+        }
+        const area = Math.abs(signed) * 0.5;
+        if (area < bestArea) {
+          bestArea = area;
+          bestZ = s.floorZ;
+          bestSector = s;
+        }
+      }
+      if (bestZ !== null) {
+        z = bestZ;
+        // Per-sector noise displacement, mirroring the server's
+        // floorAt. Without this the camera sits at the flat
+        // baseline while the renderer draws hills under it —
+        // the player visibly floats above (or sinks below) the
+        // mesh by up to the noise amplitude.
+        if (bestSector?.floorNoise) {
+          z += sectorNoiseOffsetAt(
+            bestSector.floorNoise,
+            bestSector.verts,
+            bestSector.holes,
+            x,
+            y,
+          );
+        }
+      }
+    }
+    return z;
+  }
+
+  // Local ray-casting point-in-polygon. Same shape as the
+  // shared helper; avoiding an import-loop into renderer code.
+  function pointInPolygonClient(
+    poly: ReadonlyArray<{ x: number; y: number }>,
+    px: number,
+    py: number,
+  ): boolean {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i, i++) {
+      const a = poly[i];
+      const b = poly[j];
+      const intersects =
+        a.y > py !== b.y > py &&
+        px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y) + a.x;
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+  // Camera-side step-up budget. Should track server's
+  // COMBAT.STEP_UP_MAX (12 wu); duplicated here so the renderer
+  // doesn't pull in the server combat constants.
+  const STEP_UP_MAX_CLIENT = 12;
 
   // Mark every cell within FOG_REVEAL_RADIUS_TILES of the player
   // as seen. Circular footprint via dx²+dy² ≤ r² so corners of
@@ -1175,7 +1699,23 @@ export function runFpsV2Game(
     const sy = Math.sin(camera.yaw);
     const mx = fwd * cy + right * -sy;
     const my = fwd * sy + right * cy;
-    init.sendInput(mx, my, sprint);
+    // Vertical inputs. Jump = Space, edge-triggered: we send
+    // `jump=true` only on the frame the press is consumed, then
+    // wait for the key to release before arming again. Crouch =
+    // Ctrl, held.
+    const spaceDown = keys.has('Space');
+    const jumpEdge = spaceDown && !lastSpaceDown;
+    lastSpaceDown = spaceDown;
+    // Kick the local jump prediction on the press frame (grounded
+    // only — the server ignores airborne jump presses). The server
+    // echo confirms/corrects via the smoothing pass.
+    if (jumpEdge && cameraJumpZ <= 0 && selfJumpZ <= 0) {
+      predJumpVZ = JUMP_VZ_INIT;
+      cameraJumpZ = 0.01;
+    }
+    const crouch =
+      keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
+    init.sendInput(mx, my, sprint, jumpEdge, crouch);
 
     // Hold-to-fire while a weapon is equipped. Server gates by
     // per-weapon fire interval + mag + reload, so we can pulse
@@ -1185,7 +1725,12 @@ export function runFpsV2Game(
     const fireHeld =
       (mouseDown && pointerLocked) || mobileFireHeld;
     if (fireHeld && equippedWeapon !== null) {
-      init.sendFire(cy, sy);
+      // Pitch-aware aim: server reads (dirX, dirY) as horizontal,
+      // dirZ as vertical, slope = dirZ / |XY|. Forward XY length
+      // is 1 (cos(pitch) cancels because the server normalises
+      // the XY vec independently), so tan(pitch) is the right
+      // value for dirZ.
+      init.sendFire(cy, sy, Math.tan(camera.pitch));
     }
   }
 
@@ -1207,6 +1752,9 @@ export function runFpsV2Game(
     let bestLabel: string | null = null;
     let bestDsq = r2;
     for (const it of layout.interactables) {
+      // dm_spawn is a respawn anchor for deathmatch — players don't
+      // press E to use it, so it must not surface as a prompt.
+      if (it.kind === 'dm_spawn') continue;
       const dx = it.x - selfX;
       const dy = it.y - selfY;
       const dsq = dx * dx + dy * dy;
@@ -1223,6 +1771,95 @@ export function runFpsV2Game(
         bestId && bestLabel ? { id: bestId, label: bestLabel } : null,
       );
     }
+  }
+
+  // Workstation / chest / container / door proximity. Mirrors the
+  // same interaction radius the server uses for craft + open, so
+  // the prompt only shows when the action is actually available.
+  // v1 ran this same query off pixi.ts; v2 inherited the
+  // `onNearWorkstationsChanged` callback in the GameInit contract
+  // but never wired the per-frame side. Without it, walking up to
+  // a built workbench / chest never surfaces a "Press E" prompt.
+  let lastWorkstationKey: string = '';
+  function updateNearWorkstations(): void {
+    const callback = init.onNearWorkstationsChanged;
+    if (!callback || !layout) return;
+    const r2 = INTERACTABLE_RADIUS * INTERACTABLE_RADIUS;
+    const tileSize = layout.tileSize > 0 ? layout.tileSize : 32;
+    const allKinds = new Set<import('@dumrunner/shared').BuildingKind>();
+    let nearest: import('@dumrunner/shared').BuildingKind | null = null;
+    let nearestDsq = r2;
+    let nearestDoorId: string | null = null;
+    let nearestDoorKind: 'door' | 'wall_door' | null = null;
+    let nearestDoorOpen = false;
+    let nearestDoorDsq = r2;
+    let nearestChestId: string | null = null;
+    let nearestChestDsq = r2;
+    const nearestContainerId: string | null = null;
+    let weaponBenchTier = 0;
+    const weaponBenches: { id: string; tier: number }[] = [];
+    for (const b of buildings.values()) {
+      // Building centre in world coords (tile-aligned, w×h tiles).
+      const cx = (b.tileX + b.width / 2) * tileSize;
+      const cy = (b.tileY + b.height / 2) * tileSize;
+      const dx = cx - selfX;
+      const dy = cy - selfY;
+      const dsq = dx * dx + dy * dy;
+      if (dsq > r2) continue;
+      allKinds.add(b.kind);
+      const def = BUILDING_REGISTRY[b.kind];
+      if (def?.isStation && dsq < nearestDsq) {
+        nearest = b.kind;
+        nearestDsq = dsq;
+      }
+      if (b.kind === 'door' || b.kind === 'wall_door') {
+        if (dsq < nearestDoorDsq) {
+          nearestDoorDsq = dsq;
+          nearestDoorId = b.id;
+          nearestDoorKind = b.kind;
+          nearestDoorOpen = b.open === true;
+        }
+      }
+      if (b.kind === 'storage_chest' && dsq < nearestChestDsq) {
+        nearestChestDsq = dsq;
+        nearestChestId = b.id;
+      }
+      // There's no `magnetic_container` BuildingKind today —
+      // keep the field on the callback (Game.tsx reads it) but
+      // leave it null until a container kind ships.
+      if (b.kind === 'weapon_bench') {
+        const tier = b.benchTier ?? 0;
+        weaponBenches.push({ id: b.id, tier });
+        if (tier > weaponBenchTier) weaponBenchTier = tier;
+      }
+    }
+    const all = [...allKinds];
+    // Dedup change detection. Stringify the relevant state so we
+    // only emit when something the consumer cares about flipped.
+    const key = [
+      all.join(','),
+      nearest ?? '',
+      nearestDoorId ?? '',
+      nearestDoorKind ?? '',
+      String(nearestDoorOpen),
+      nearestChestId ?? '',
+      nearestContainerId ?? '',
+      String(weaponBenchTier),
+      weaponBenches.map((b) => `${b.id}:${b.tier}`).join('|'),
+    ].join('#');
+    if (key === lastWorkstationKey) return;
+    lastWorkstationKey = key;
+    callback({
+      all,
+      nearest,
+      nearestDoorId,
+      nearestDoorKind,
+      nearestDoorOpen,
+      nearestChestId,
+      nearestContainerId,
+      weaponBenchTier,
+      weaponBenches,
+    });
   }
 
   // ---------- GameHandle implementation (mostly stubs in P1) ----------
@@ -1251,30 +1888,32 @@ export function runFpsV2Game(
     return players.get(init.self.characterId) ?? init.self;
   }
 
-  function noop(): void {
-    /* Phase 1: every entity / state method is a no-op until the
-       geometry + sprite layers exist. We deliberately don't throw
-       — keeping the renderer crash-free under welcome / state
-       traffic means the toggle is safe to flip mid-session. */
-  }
-
   return {
     upsertPlayer: (p: Player) => {
       players.set(p.characterId, p);
       if (p.characterId === init.self.characterId) {
         selfX = p.x;
         selfY = p.y;
-        camera.setSelfPosition(p.x, p.y, 0);
+        cameraFloorZ = floorAt(p.x, p.y);
+        camera.setSelfPosition(p.x, p.y, cameraFloorZ);
       }
     },
     removePlayer: (id: string) => {
       players.delete(id);
     },
-    movePlayer: (id: string, x: number, y: number) => {
+    movePlayer: (
+      id: string,
+      x: number,
+      y: number,
+      jumpZ?: number,
+      crouching?: boolean,
+    ) => {
       const p = players.get(id);
       if (p) {
         p.x = x;
         p.y = y;
+        p.jumpZ = jumpZ;
+        p.crouching = crouching;
       }
       if (id === init.self.characterId) {
         // Lerp toward the new server position via the smoothing
@@ -1286,14 +1925,44 @@ export function runFpsV2Game(
         if (dx * dx + dy * dy > SELF_SNAP_PX * SELF_SNAP_PX) {
           selfX = x;
           selfY = y;
-          camera.setSelfPosition(x, y, 0);
+          cameraFloorZ = floorAt(x, y);
+          camera.setSelfPosition(x, y, cameraFloorZ);
         }
         targetSelfX = x;
         targetSelfY = y;
+        // selfJumpZ / selfCrouching are the smoothing pass's
+        // targets — the actual camera value lerps toward them
+        // each frame inside tickSelfSmoothing.
+        selfJumpZ = jumpZ ?? 0;
+        selfCrouching = crouching ?? false;
       }
     },
-    setPlayerHp: noop,
-    setPlayerDead: noop,
+    setPlayerHp: (
+      characterId: string,
+      hp: number,
+      maxHp: number,
+    ) => {
+      if (characterId !== init.self.characterId) return;
+      const now = performance.now();
+      const prev = lastSelfHp;
+      if (hp < prev) {
+        lastHpDropAt = now;
+        const drop = prev - hp;
+        // "Big" hit = more than 15% of max HP in one shot.
+        if (maxHp > 0 && drop / maxHp > 0.15) {
+          lastBigHpDropAt = now;
+        }
+      }
+      lastSelfHp = hp;
+      lastSelfMaxHp = maxHp;
+      if (hp > 0) selfDead = false;
+    },
+    setPlayerDead: (characterId: string) => {
+      if (characterId === init.self.characterId) {
+        selfDead = true;
+        lastSelfHp = 0;
+      }
+    },
     respawnPlayer: (
       id: string,
       x: number,
@@ -1310,12 +1979,39 @@ export function runFpsV2Game(
         selfY = y;
         targetSelfX = x;
         targetSelfY = y;
-        camera.setSelfPosition(x, y, 0);
+        cameraFloorZ = floorAt(x, y);
+        camera.setSelfPosition(x, y, cameraFloorZ);
+        selfDead = false;
+        lastHpDropAt = 0;
+        lastBigHpDropAt = 0;
       }
     },
-    showWeaponSwung: noop,
-    upsertEnemy: (e: EnemyState) => enemies.set(e.id, e),
-    removeEnemy: (id: string) => enemies.delete(id),
+    showWeaponSwung: (
+      characterId: string,
+      weaponId: string,
+    ) => {
+      // Only kick the local view-model — other-player swings
+      // don't have a viewmodel to drive. Reuse the 'fire' state
+      // since melee weapons author their swing as the same key.
+      if (characterId !== init.self.characterId) return;
+      if (!equippedWeapon) return;
+      playEntityState(
+        WEAPON_VIEW_ANIM[equippedWeapon] ??
+          WEAPON_VIEW_ANIM[weaponId as import('@dumrunner/shared').WeaponKind],
+        viewModelKey(equippedWeapon),
+        'fire',
+        { interrupt: true },
+      );
+    },
+    upsertEnemy: (e: EnemyState) => {
+      enemies.set(e.id, e);
+      if (!enemyPrevHp.has(e.id)) enemyPrevHp.set(e.id, e.hp);
+    },
+    removeEnemy: (id: string) => {
+      enemies.delete(id);
+      enemyPrevHp.delete(id);
+      enemyHitFlashAt.delete(id);
+    },
     setEnemyPosition: (id: string, x: number, y: number) => {
       const e = enemies.get(id);
       if (e) {
@@ -1323,7 +2019,15 @@ export function runFpsV2Game(
         e.y = y;
       }
     },
-    setEnemyHp: noop,
+    setEnemyHp: (id: string, hp: number) => {
+      const prev = enemyPrevHp.get(id);
+      if (prev !== undefined && hp < prev) {
+        enemyHitFlashAt.set(id, performance.now());
+      }
+      enemyPrevHp.set(id, hp);
+      const e = enemies.get(id);
+      if (e) e.hp = hp;
+    },
     spawnProjectile: (p: ProjectileState) => {
       const nowMs = performance.now();
       projectiles.set(p.id, p);
@@ -1350,9 +2054,28 @@ export function runFpsV2Game(
         );
       }
     },
-    despawnProjectile: (id: string) => {
+    despawnProjectile: (
+      id: string,
+      reason?: 'hit' | 'expired',
+      x?: number,
+      y?: number,
+      z?: number,
+    ) => {
       projectiles.delete(id);
       projectileSpawnedAt.delete(id);
+      if (
+        reason === 'hit' &&
+        x !== undefined &&
+        y !== undefined &&
+        z !== undefined
+      ) {
+        // Spawn a transient impact sprite at the contact point.
+        // Short TTL — pops as a quick spark / dust puff and
+        // dissipates over a few frames. The sprite layer reads
+        // these and draws billboards at their world position.
+        const now = performance.now();
+        impacts.push({ id: `imp${impactCursor++}`, x, y, z, spawnedAt: now });
+      }
     },
     spawnLoot: (l: LootState) => loot.set(l.id, l),
     despawnLoot: (id: string) => loot.delete(id),
@@ -1360,19 +2083,49 @@ export function runFpsV2Game(
     removeCorpse: (id: string) => corpses.delete(id),
     spawnBuilding: (b: BuildingState) => {
       buildings.set(b.id, b);
+      buildingPrevHp.set(b.id, b.hp);
       rebuildSectorGeometry();
     },
     removeBuilding: (id: string) => {
       buildings.delete(id);
+      buildingPrevHp.delete(id);
+      buildingHitFlashAt.delete(id);
       rebuildSectorGeometry();
     },
-    setBuildingHp: noop,
-    spawnProp: (p: PropState) => props.set(p.id, p),
-    removeProp: (id: string) => props.delete(id),
-    setPropHp: noop,
+    setBuildingHp: (id: string, hp: number) => {
+      const prev = buildingPrevHp.get(id);
+      if (prev !== undefined && hp < prev) {
+        buildingHitFlashAt.set(id, performance.now());
+      }
+      buildingPrevHp.set(id, hp);
+      const b = buildings.get(id);
+      if (b) b.hp = hp;
+    },
+    spawnProp: (p: PropState) => {
+      props.set(p.id, p);
+      propPrevHp.set(p.id, p.hp);
+    },
+    removeProp: (id: string) => {
+      props.delete(id);
+      propPrevHp.delete(id);
+      propHitFlashAt.delete(id);
+    },
+    setPropHp: (id: string, hp: number) => {
+      const prev = propPrevHp.get(id);
+      if (prev !== undefined && hp < prev) {
+        propHitFlashAt.set(id, performance.now());
+      }
+      propPrevHp.set(id, hp);
+      const p = props.get(id);
+      if (p) p.hp = hp;
+    },
     changeProp: (p: PropState) => props.set(p.id, p),
-    setBuildMode: noop,
-    setBuildRadiusBonus: noop,
+    setBuildMode: (kind: PlaceableBuildingKind | null) => {
+      buildMode = kind;
+    },
+    setBuildRadiusBonus: (tiles: number) => {
+      buildRadiusBonusTiles = Math.max(0, Math.floor(tiles));
+    },
     setEquippedWeapon: (weaponId) => {
       equippedWeapon = weaponId;
       if (weaponId === null) mouseDown = false;
@@ -1390,7 +2143,9 @@ export function runFpsV2Game(
         { interrupt: true },
       );
     },
-    setHordeActive: noop,
+    setHordeActive: (active: boolean) => {
+      hordeActive = active;
+    },
     swapScene: (state: SceneState) => {
       layout = state.layout;
       currentSceneId = state.sceneId;
@@ -1432,6 +2187,22 @@ export function runFpsV2Game(
       for (const c of state.corpses) corpses.set(c.id, c);
       for (const b of state.buildings) buildings.set(b.id, b);
       for (const p of state.props) props.set(p.id, p);
+      // Reseed prev-HP maps + clear hit-flash timers so a flash
+      // started in the prior scene doesn't bleed into the new one.
+      enemyPrevHp.clear();
+      enemyHitFlashAt.clear();
+      buildingPrevHp.clear();
+      buildingHitFlashAt.clear();
+      propPrevHp.clear();
+      propHitFlashAt.clear();
+      for (const e of state.enemies) enemyPrevHp.set(e.id, e.hp);
+      for (const b of state.buildings) buildingPrevHp.set(b.id, b.hp);
+      for (const p of state.props) propPrevHp.set(p.id, p.hp);
+      lastSelfHp = state.self.hp;
+      lastSelfMaxHp = state.self.maxHp;
+      lastHpDropAt = 0;
+      lastBigHpDropAt = 0;
+      selfDead = false;
       selfX = state.self.x;
       selfY = state.self.y;
       // Scene swap is a teleport — snap target to match so the
@@ -1439,7 +2210,8 @@ export function runFpsV2Game(
       targetSelfX = selfX;
       targetSelfY = selfY;
       lastSelfTickAt = 0;
-      camera.setSelfPosition(selfX, selfY, 0);
+      cameraFloorZ = floorAt(selfX, selfY);
+      camera.setSelfPosition(selfX, selfY, cameraFloorZ);
       // Rebuild sector geometry against the new layout +
       // buildings. Surface layout with no tileGrid converts to
       // an open-air sector + cubes per building.
@@ -1465,7 +2237,21 @@ export function runFpsV2Game(
         layout,
       };
     },
-    nearbyPlayers: () => [],
+    nearbyPlayers: (radiusPx: number) => {
+      const r2 = radiusPx * radiusPx;
+      const out: { characterId: string; displayName: string }[] = [];
+      for (const p of players.values()) {
+        if (p.characterId === init.self.characterId) continue;
+        const dx = p.x - selfX;
+        const dy = p.y - selfY;
+        if (dx * dx + dy * dy > r2) continue;
+        out.push({
+          characterId: p.characterId,
+          displayName: p.displayName ?? p.characterId,
+        });
+      }
+      return out;
+    },
     getMinimapSnapshot: (): MinimapSnapshot => ({
       selfX,
       selfY,
@@ -1519,13 +2305,19 @@ export function runFpsV2Game(
       if (equippedWeapon === null) return;
       const cy = Math.cos(camera.yaw);
       const sy = Math.sin(camera.yaw);
-      init.sendFire(cy, sy);
+      // Pitch-aware aim: server reads (dirX, dirY) as horizontal,
+      // dirZ as vertical, slope = dirZ / |XY|. Forward XY length
+      // is 1 (cos(pitch) cancels because the server normalises
+      // the XY vec independently), so tan(pitch) is the right
+      // value for dirZ.
+      init.sendFire(cy, sy, Math.tan(camera.pitch));
     },
     destroy() {
       destroyed = true;
       sprites.destroy();
       texturedSprites.destroy();
       texturedBuildings.destroy();
+      ghostCube.destroy();
       detachInputListeners();
       if (canvasEl && document.pointerLockElement === canvasEl) {
         document.exitPointerLock?.();

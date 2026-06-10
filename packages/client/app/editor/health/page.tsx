@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type {
   AssetSlot,
+  RefEdge,
   RefEntity,
   RefsResponse,
 } from '@/app/api/editor/refs/route';
@@ -21,11 +22,11 @@ const AREA_LABEL: Record<RefEntity['area'], string> = {
   enemies: 'Enemies',
   props: 'Props',
   rooms: 'Rooms',
-  corridors: 'Corridors',
 };
 
 export default function AssetHealthPage() {
   const [assets, setAssets] = useState<AssetSlot[]>([]);
+  const [brokenEdges, setBrokenEdges] = useState<RefEdge[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showPresent, setShowPresent] = useState(false);
@@ -40,6 +41,7 @@ export default function AssetHealthPage() {
         const body = (await r.json()) as RefsResponse;
         if (cancelled) return;
         setAssets(body.assets);
+        setBrokenEdges(body.brokenEdges);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -61,7 +63,6 @@ export default function AssetHealthPage() {
       enemies: [],
       props: [],
       rooms: [],
-      corridors: [],
     };
     for (const a of filtered) {
       out[a.required_by.area].push(a);
@@ -99,6 +100,37 @@ export default function AssetHealthPage() {
         <div className="text-emerald-400 text-sm">
           ✓ all required assets are present
         </div>
+      )}
+      {brokenEdges.length > 0 && (
+        <section className="space-y-1">
+          <h2 className="text-xs uppercase text-zinc-500">
+            Broken references{' '}
+            <span className="text-zinc-600 lowercase">
+              ({brokenEdges.length})
+            </span>
+          </h2>
+          <div className="border border-red-900/60 rounded divide-y divide-red-900/30 text-[11px] font-mono">
+            {brokenEdges.map((e, i) => (
+              <div
+                key={i}
+                className="px-2 py-1 flex items-baseline gap-2"
+              >
+                <span className="text-red-400 w-3 text-center">✗</span>
+                <Link
+                  href={`/editor/${e.from.area}?id=${encodeURIComponent(e.from.id)}`}
+                  className="text-zinc-300 hover:text-zinc-100 hover:underline w-32 truncate"
+                >
+                  {e.from.id}
+                </Link>
+                <span className="text-zinc-500 truncate">{e.field}</span>
+                <span className="text-zinc-600">→</span>
+                <span className="text-red-300 truncate">
+                  {e.to.area}/{e.to.id}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
       {(['biomes', 'enemies', 'props', 'rooms'] as const).map((area) => {
         const items = grouped[area];

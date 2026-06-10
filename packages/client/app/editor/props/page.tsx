@@ -6,10 +6,13 @@
 // explode params and/or loot table are required.
 
 import { Suspense, useEffect, useState } from 'react';
+import type { z } from 'zod';
 import type { PropDef } from '@dumrunner/shared';
+import { PropDefSchema } from '@dumrunner/shared';
 import { listEntities } from '@/lib/editorContentClient';
 import {
   Button,
+  ConfirmButton,
   CheckboxField,
   ColorField,
   EnumField,
@@ -61,7 +64,13 @@ function PropEditorBody() {
     createNew,
     error,
     saving,
-  } = useEntityEditor<PropDef>('props', { makeBlank, newIdPrefix: 'prop' });
+    validationError,
+    canSave,
+  } = useEntityEditor<PropDef>('props', {
+    makeBlank,
+    newIdPrefix: 'prop',
+    schema: PropDefSchema as unknown as z.ZodType<PropDef>,
+  });
   const onSave = save;
   const onDelete = remove;
   const onNew = createNew;
@@ -114,10 +123,18 @@ function PropEditorBody() {
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-lg font-bold">{draft.label}</h1>
               <div className="flex gap-2">
-                <Button variant="danger" onClick={onDelete}>
+                <ConfirmButton variant="danger" onConfirm={onDelete}>
                   Delete
-                </Button>
-                <Button variant="primary" disabled={saving} onClick={onSave}>
+                </ConfirmButton>
+                {validationError && (
+                  <span
+                    title={validationError}
+                    className="text-[10px] text-red-300 font-mono max-w-[20rem] truncate self-center mr-2"
+                  >
+                    {validationError}
+                  </span>
+                )}
+                <Button variant="primary" disabled={!canSave} onClick={onSave}>
                   {saving ? 'Saving…' : 'Save'}
                 </Button>
               </div>

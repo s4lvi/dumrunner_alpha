@@ -8,13 +8,6 @@
     "accent": "#22d3ee"
   },
   "generation": {
-    "generator": "walker",
-    "roomCountMin": 6,
-    "roomCountMax": 11,
-    "roomSizeMin": 6,
-    "roomSizeMax": 14,
-    "corridorWidth": 2,
-    "branching": 0.4,
     "propDensity": 0.06,
     "enemyDensity": 0.05,
     "lootDensity": 0.6,

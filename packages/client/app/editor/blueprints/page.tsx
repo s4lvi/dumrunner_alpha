@@ -13,10 +13,12 @@
 // trip.
 
 import { Suspense, useMemo, useState } from 'react';
+import type { z } from 'zod';
 import type { BlueprintDef, BlueprintTier, Recipe } from '@dumrunner/shared';
-import { RECIPES } from '@dumrunner/shared';
+import { BlueprintDefSchema, RECIPES } from '@dumrunner/shared';
 import {
   Button,
+  ConfirmButton,
   CheckboxField,
   EnumField,
   FieldRow,
@@ -102,9 +104,12 @@ function BlueprintEditorBody() {
     createNew,
     error,
     saving,
+    validationError,
+    canSave,
   } = useEntityEditor<BlueprintDef>('blueprints', {
     makeBlank,
     newIdPrefix: 'bp',
+    schema: BlueprintDefSchema as unknown as z.ZodType<BlueprintDef>,
   });
 
   const sortedEntries = useMemo(() => {
@@ -159,7 +164,7 @@ function BlueprintEditorBody() {
     return errs;
   }, [draft, entries, draftCatalog]);
 
-  const blockSave = localErrors.length > 0 || saving;
+  const blockSave = localErrors.length > 0 || !canSave;
 
   function togglePrereq(id: string): void {
     if (!draft) return;
@@ -220,9 +225,9 @@ function BlueprintEditorBody() {
                   >
                     {saving ? 'saving…' : 'save'}
                   </Button>
-                  <Button onClick={remove} variant="danger">
+                  <ConfirmButton onConfirm={remove} variant="danger">
                     delete
-                  </Button>
+                  </ConfirmButton>
                 </div>
               </div>
 
@@ -231,8 +236,9 @@ function BlueprintEditorBody() {
                   {error}
                 </div>
               )}
-              {localErrors.length > 0 && (
+              {(localErrors.length > 0 || validationError) && (
                 <div className="mb-3 px-3 py-2 rounded bg-amber-950/40 border border-amber-900/80 text-amber-200 text-xs space-y-1">
+                  {validationError && <div>• {validationError}</div>}
                   {localErrors.map((e, i) => (
                     <div key={i}>• {e}</div>
                   ))}

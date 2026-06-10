@@ -4,6 +4,11 @@
 
 import type { Rect, TileGrid } from './protocol';
 
+// Shared 2D point. Used by the sector model + helpers below. Kept
+// here rather than in protocol.ts because protocol stays focussed
+// on on-wire shapes; this is geometry.
+export type Vec2 = { x: number; y: number };
+
 // Hit-radius the server uses to decide which Interactable an
 // E-press resolves to. The client renderers read this same value
 // to gate the "Press E to …" prompt — anything bigger on the
@@ -151,6 +156,147 @@ const LOS_THICKNESS_HALF_PX = 4;
 // entirely inside the union of walkable rects. Samples along the
 // centre of the segment AND at ±LOS_THICKNESS_HALF_PX perpendicular
 // offsets so diagonal-corner gaps don't leak sight.
+// ---------- Polygon primitives ----------
+//
+// Used by polygon collision: point-in-sector membership, circle-vs-wall
+// distance for player movement, segment-vs-segment intersection for
+// LOS + projectile traces. All work in world units; callers feed in
+// raw coordinates and don't need to know about tile scaling.
+
+// Standard ray-casting point-in-polygon. Accepts an open polygon
+// (verts in winding order, last vert NOT duplicated). Edge cases:
+// the "on edge" answer is implementation-defined; we don't promise
+// either way. Used for sector membership where a wall solid check
+// catches edge ambiguity separately.
+export function pointInPolygon(
+  poly: ReadonlyArray<Vec2>,
+  px: number,
+  py: number,
+): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i, i++) {
+    const a = poly[i];
+    const b = poly[j];
+    const intersects =
+      a.y > py !== b.y > py &&
+      px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y) + a.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+// Shortest distance from point (px, py) to the line segment a→b.
+// Used for circle-vs-wall: if the result is less than the player
+// radius, the move is blocked. Returns 0 when the point lies on
+// the segment.
+export function pointSegmentDistance(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  px: number,
+  py: number,
+): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+  const abLenSq = abx * abx + aby * aby;
+  if (abLenSq === 0) return Math.hypot(apx, apy);
+  // Project (a → p) onto (a → b), clamped to [0, 1].
+  let t = (apx * abx + apy * aby) / abLenSq;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  const cx = ax + abx * t;
+  const cy = ay + aby * t;
+  return Math.hypot(px - cx, py - cy);
+}
+
+// Swept circle-vs-segment: returns true iff a circle of `radius`
+// moving in a straight line from (x0, y0) to (x1, y1) clears the
+// segment a→b without intersecting it. The conservative test (point
+// (x1,y1)'s distance to a→b ≥ radius) misses early-collision cases
+// where the circle "passes through" a wall on the way; we sample
+// along the swept path at step ≤ radius/2 so the test catches any
+// tunneling at our per-tick move magnitudes (~7 px at PLAYER_RADIUS
+// 10 — well under one sample).
+export function sweptCircleClearsSegment(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  radius: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): boolean {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const moveLen = Math.hypot(dx, dy);
+  if (moveLen === 0) {
+    return pointSegmentDistance(ax, ay, bx, by, x0, y0) >= radius;
+  }
+  const stepLen = radius * 0.5;
+  const steps = Math.max(1, Math.ceil(moveLen / stepLen));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const sx = x0 + dx * t;
+    const sy = y0 + dy * t;
+    if (pointSegmentDistance(ax, ay, bx, by, sx, sy) < radius) return false;
+  }
+  return true;
+}
+
+// Segment-vs-segment intersection. Returns the parameter t along
+// (a → b) at which the segments cross, in [0, 1], or null if they
+// don't cross. Used by LOS + projectile traces — the smallest t
+// over all crossed walls is the first hit.
+export function segmentSegmentIntersect(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx2: number,
+  dy2: number,
+): number | null {
+  const rx = bx - ax;
+  const ry = by - ay;
+  const sx = dx2 - cx;
+  const sy = dy2 - cy;
+  const denom = rx * sy - ry * sx;
+  if (denom === 0) return null; // parallel
+  const t = ((cx - ax) * sy - (cy - ay) * sx) / denom;
+  const u = ((cx - ax) * ry - (cy - ay) * rx) / denom;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return t;
+}
+
+// AABB query helper for spatial indexes that bucket segments into
+// world-grid cells. Returns the inclusive cell range
+// [cellX0..cellX1] × [cellY0..cellY1] that a segment passes through.
+// Caller chooses cellSize.
+export function segmentCellRange(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  cellSize: number,
+): { cellX0: number; cellY0: number; cellX1: number; cellY1: number } {
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
+  return {
+    cellX0: Math.floor(minX / cellSize),
+    cellY0: Math.floor(minY / cellSize),
+    cellX1: Math.floor(maxX / cellSize),
+    cellY1: Math.floor(maxY / cellSize),
+  };
+}
+
 export function segmentInsideWalkables(
   rects: Rect[],
   x1: number,

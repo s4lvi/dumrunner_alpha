@@ -39,6 +39,7 @@ type Phase =
 
 export default function DiscordActivityPage() {
   const router = useRouter();
+  const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useState<Phase>({
     kind: 'boot',
     status: 'Connecting to Discord…',
@@ -158,13 +159,23 @@ export default function DiscordActivityPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
 
   if (phase.kind === 'error') {
     return (
       <Centered>
         <h1 className="text-2xl font-bold mb-2">Couldn&apos;t start the Activity</h1>
-        <p className="text-zinc-400 max-w-md">{phase.message}</p>
+        <p className="text-zinc-400 max-w-md mb-6">{phase.message}</p>
+        <button
+          type="button"
+          onClick={() => {
+            setPhase({ kind: 'boot', status: 'Connecting to Discord…' });
+            setAttempt((a) => a + 1);
+          }}
+          className="px-4 py-2 rounded bg-[color:var(--accent)] text-black font-semibold"
+        >
+          Retry
+        </button>
       </Centered>
     );
   }
@@ -323,13 +334,8 @@ function SetupForm({
       >
         <header>
           <h1 className="text-2xl font-bold">
-            {isFirstUser ? 'Set up the world' : 'Join the world'}
+            {isFirstUser ? 'Set up the world' : `Join ${existing?.name ?? 'this room'}`}
           </h1>
-          <p className="text-xs text-zinc-500 mt-1">
-            {isFirstUser
-              ? 'You’re the first one in this call. Configure the world, then enter.'
-              : `Joining ${existing?.name ?? 'this room'}.`}
-          </p>
         </header>
 
         <Field
@@ -401,7 +407,7 @@ function SetupForm({
               </label>
               <label className="flex items-center gap-2 mt-2 text-sm">
                 <input type="checkbox" name="is_playtest" />
-                <span>Playtest server (debug starter inventory)</span>
+                <span>Playtest server</span>
               </label>
             </div>
           </>

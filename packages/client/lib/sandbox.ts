@@ -38,7 +38,14 @@ export type SandboxHandle = {
     floorIndex: number;
     worldSeed: number;
   }): void;
-  input(moveX: number, moveY: number, sprint: boolean): void;
+  // Replace the sandbox scene with a hand-authored SectorScene
+  // (the editor's playtest path). Server rasterises onto a tile
+  // grid and rebuilds the scene around it.
+  loadAuthoredScene(scene: unknown): void;
+  // Raw WS send. Live-game input / fire messages go straight
+  // through this — no typed shim per message kind. Every field
+  // added to the protocol is one diff away from working in the
+  // sandbox; no parallel typed wrapper to drift.
   send(msg: ClientMessage): void;
   close(): void;
 };
@@ -159,8 +166,8 @@ export async function openSandbox(
         worldSeed,
       });
     },
-    input: (moveX, moveY, sprint) => {
-      send({ type: 'input', moveX, moveY, sprint });
+    loadAuthoredScene: (scene) => {
+      send({ type: 'sandbox_load_authored_scene', scene });
     },
     send,
     close: () => {

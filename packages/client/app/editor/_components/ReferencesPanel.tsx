@@ -23,7 +23,6 @@ const AREA_LABEL: Record<RefEntity['area'], string> = {
   enemies: 'Enemy',
   props: 'Prop',
   rooms: 'Room',
-  corridors: 'Corridor',
 };
 
 export function ReferencesPanel({

@@ -29,46 +29,26 @@ import {
   type Player,
   type SceneLayout,
 } from '@dumrunner/shared';
-import { runGame, type GameHandle, type GameInit } from '@/lib/game/pixi';
-import { runFpsGame } from '@/lib/game/fps';
-import { runTopdownGame } from '@/lib/game/topdown';
+import { type GameHandle, type GameInit } from '@/lib/game/types';
+import { runFpsV2Game } from '@/lib/game/fps.v2';
 import { listEntities } from '@/lib/editorContentClient';
 import { TextureRow } from '../_components/TextureRow';
 
 const BUILDING_KINDS = Object.keys(BUILDING_REGISTRY) as BuildingKind[];
 const MATERIAL_KINDS = Object.keys(MATERIALS) as MaterialKind[];
 
-// World-space tile size for the demo scene. Same as the live game
-// dungeons so iso scaling reads identically.
 const TILE = 32;
-// Walking speed (px/sec). Matches COMBAT.PLAYER_MOVE_SPEED so the
-// editor's local physics feels the same as the live game.
 const WALK_SPEED = 140;
 const SPRINT_MULTIPLIER = 1.6;
-
-type RendererMode = 'topdown' | 'fps';
-const RENDERER_CYCLE: RendererMode[] = ['fps', 'topdown'];
-
-function runnerFor(mode: RendererMode): typeof runGame {
-  return mode === 'fps' ? runFpsGame : runTopdownGame;
-}
 
 const SELF_ID = 'editor_self';
 
 export default function EditorPage() {
   const hostRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<GameHandle | null>(null);
-  // Local self position, advanced by the physics RAF. Persists
-  // across renderer hot-swaps so V-cycling doesn't teleport.
   const selfPosRef = useRef({ x: 0, y: 0 });
-  // Latest movement intent. Captured by the demo init's sendInput
-  // callback (renderer pushes input here as if to a real server).
   const inputRef = useRef({ mx: 0, my: 0, sprint: false });
 
-  const [rendererMode, setRendererMode] = useState<RendererMode>('fps');
-  // Content ids load from the JSON content via API so fresh
-  // authoring shows up here without a code edit. Single fetch
-  // resolves all the lists in parallel.
   const [enemyIds, setEnemyIds] = useState<string[]>([]);
   const [propIds, setPropIds] = useState<string[]>([]);
   const [biomeIds, setBiomeIds] = useState<string[]>([]);
@@ -98,31 +78,6 @@ export default function EditorPage() {
     })();
   }, []);
 
-  // V cycles through renderers. Listening at window level so the
-  // canvas not having focus doesn't swallow the key.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
-      if (e.key === 'v' || e.key === 'V') {
-        e.preventDefault();
-        setRendererMode((m) => {
-          const i = RENDERER_CYCLE.indexOf(m);
-          return RENDERER_CYCLE[(i + 1) % RENDERER_CYCLE.length];
-        });
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  // Mount the active renderer with the demo scene. Re-runs when
-  // rendererMode flips; previous instance is destroyed first.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -134,14 +89,13 @@ export default function EditorPage() {
         inputRef.current = { mx, my, sprint };
       },
     });
-    const runner = runnerFor(rendererMode);
-    gameRef.current = runner(host, init);
+    gameRef.current = runFpsV2Game(host, init);
     return () => {
       gameRef.current?.destroy();
       gameRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rendererMode, enemyIds]);
+  }, [enemyIds]);
 
   // Local physics: advance selfPos by intent × speed × dt and push
   // into the renderer via movePlayer. The renderer handles its own
@@ -175,15 +129,6 @@ export default function EditorPage() {
       <aside className="w-80 shrink-0 border-r border-zinc-800 overflow-y-auto p-4 space-y-6">
         <header>
           <h1 className="text-lg font-bold">Texture Editor</h1>
-          <p className="text-xs text-zinc-400 mt-1">
-            Upload PNG/WEBP to verify in the demo scene. Saved to{' '}
-            <code className="text-zinc-300">public/textures/</code> in
-            the repo — commit to share / persist.
-          </p>
-          <p className="text-[10px] text-zinc-500 mt-2">
-            Active: <span className="text-zinc-300">{rendererMode}</span>
-            <span className="text-zinc-600"> · V to cycle</span>
-          </p>
         </header>
         <Section title="Enemies">
           {enemyIds.length === 0 && (
@@ -384,9 +329,6 @@ export default function EditorPage() {
       </aside>
       <main className="flex-1 relative overflow-hidden">
         <div ref={hostRef} className="absolute inset-0" />
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 text-xs text-zinc-400 bg-zinc-900/70 px-3 py-1 rounded border border-zinc-800 pointer-events-none select-none">
-          {rendererMode} · WASD walk · V cycles renderers
-        </div>
       </main>
     </div>
   );

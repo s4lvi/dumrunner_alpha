@@ -9,7 +9,7 @@
 
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 export function FormSection({
   title,
@@ -31,15 +31,20 @@ export function FormSection({
 export function FieldRow({
   label,
   hint,
+  required,
   children,
 }: {
   label: string;
   hint?: ReactNode;
+  required?: boolean;
   children: ReactNode;
 }) {
   return (
     <label className="flex flex-col gap-0.5 text-xs">
-      <span className="text-zinc-300">{label}</span>
+      <span className="text-zinc-300">
+        {label}
+        {required && <span className="text-amber-400 ml-0.5">*</span>}
+      </span>
       {children}
       {hint && <span className="text-[10px] text-zinc-500">{hint}</span>}
     </label>
@@ -328,5 +333,42 @@ export function Button({
     >
       {children}
     </button>
+  );
+}
+
+const CONFIRM_TIMEOUT_MS = 4000;
+
+export function ConfirmButton({
+  children,
+  onConfirm,
+  variant = 'default',
+  disabled,
+}: {
+  children: ReactNode;
+  onConfirm: () => void;
+  variant?: 'default' | 'primary' | 'danger';
+  disabled?: boolean;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), CONFIRM_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <Button
+      variant={variant}
+      disabled={disabled}
+      onClick={() => {
+        if (armed) {
+          setArmed(false);
+          onConfirm();
+        } else {
+          setArmed(true);
+        }
+      }}
+    >
+      {armed ? 'Confirm' : children}
+    </Button>
   );
 }

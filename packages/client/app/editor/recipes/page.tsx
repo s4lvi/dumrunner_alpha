@@ -16,16 +16,19 @@
 
 import { Suspense, useMemo } from 'react';
 import Link from 'next/link';
+import type { z } from 'zod';
 import type { BlueprintDef, RecipeDef, WeaponDef } from '@dumrunner/shared';
 import {
   ATTACHMENT_DEFS,
   BUILDING_REGISTRY,
   CONSUMABLES,
   MATERIALS,
+  RecipeDefSchema,
   UPGRADES,
 } from '@dumrunner/shared';
 import {
   Button,
+  ConfirmButton,
   EnumField,
   FieldRow,
   FormSection,
@@ -96,9 +99,12 @@ function RecipeEditorBody() {
     createNew,
     error,
     saving,
+    validationError,
+    canSave,
   } = useEntityEditor<RecipeDef>('recipes', {
     makeBlank,
     newIdPrefix: 'recipe',
+    schema: RecipeDefSchema as unknown as z.ZodType<RecipeDef>,
   });
 
   // Cross-reference id pickers. Weapons + blueprints come from
@@ -179,7 +185,7 @@ function RecipeEditorBody() {
     return errs;
   }, [draft, blueprintIds]);
 
-  const blockSave = localErrors.length > 0 || saving;
+  const blockSave = localErrors.length > 0 || !canSave;
 
   return (
     <div className="flex h-full">
@@ -221,9 +227,9 @@ function RecipeEditorBody() {
                   <Button onClick={save} disabled={blockSave}>
                     {saving ? 'saving…' : 'save'}
                   </Button>
-                  <Button onClick={remove} variant="danger">
+                  <ConfirmButton onConfirm={remove} variant="danger">
                     delete
-                  </Button>
+                  </ConfirmButton>
                 </div>
               </div>
 
@@ -232,8 +238,9 @@ function RecipeEditorBody() {
                   {error}
                 </div>
               )}
-              {localErrors.length > 0 && (
+              {(localErrors.length > 0 || validationError) && (
                 <div className="mb-3 px-3 py-2 rounded bg-amber-950/40 border border-amber-900/80 text-amber-200 text-xs space-y-1">
+                  {validationError && <div>• {validationError}</div>}
                   {localErrors.map((e, i) => (
                     <div key={i}>• {e}</div>
                   ))}

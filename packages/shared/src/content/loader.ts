@@ -22,11 +22,15 @@ import {
   AttachmentDefSchema,
   BiomeDefSchema,
   BlueprintDefSchema,
-  CorridorTemplateSchema,
   EnemyDefSchema,
   PropDefSchema,
   RecipeDefSchema,
+  CsgSceneSchema,
+  FloorOverridesSchema,
+  LinedefSceneSchema,
   RoomTemplateSchema,
+  SceneDefSchema,
+  SectorSceneSchema,
   WeaponDefSchema,
   WorldDefSchema,
   BuildingOverrideSchema,
@@ -35,11 +39,11 @@ import {
   type BiomeDef,
   type BlueprintDef,
   type BuildingOverride,
-  type CorridorTemplate,
   type EnemyDef,
   type PropDef,
   type RecipeDef,
   type RoomTemplate,
+  type SceneDef,
   type WeaponDef,
   type WorldDef,
 } from './types';
@@ -57,13 +61,13 @@ export const EDITOR_AREAS = [
   'enemies',
   'props',
   'rooms',
-  'corridors',
   'blueprints',
   'weapons',
   'recipes',
   'attachments',
   'animations',
   'buildings',
+  'scenes',
 ] as const;
 export type EditorArea = (typeof EDITOR_AREAS)[number];
 
@@ -133,8 +137,6 @@ export const loadProps = (): Promise<PropDef[]> =>
   loadArea('props', PropDefSchema);
 export const loadRooms = (): Promise<RoomTemplate[]> =>
   loadArea('rooms', RoomTemplateSchema);
-export const loadCorridors = (): Promise<CorridorTemplate[]> =>
-  loadArea('corridors', CorridorTemplateSchema);
 export const loadBlueprints = (): Promise<BlueprintDef[]> =>
   loadArea('blueprints', BlueprintDefSchema);
 export const loadWeapons = (): Promise<WeaponDef[]> =>
@@ -147,6 +149,8 @@ export const loadAnimations = (): Promise<AnimationDef[]> =>
   loadArea('animations', AnimationDefSchema);
 export const loadBuildingOverrides = (): Promise<BuildingOverride[]> =>
   loadArea('buildings', BuildingOverrideSchema);
+export const loadScenes = (): Promise<SceneDef[]> =>
+  loadArea('scenes', SceneDefSchema);
 
 // Single-entity helpers. The editor's API route writes one file
 // at a time; the GET endpoint may want to fetch one without
@@ -188,8 +192,6 @@ export const loadProp = (id: string) =>
   loadEntity('props', id, PropDefSchema);
 export const loadRoom = (id: string) =>
   loadEntity('rooms', id, RoomTemplateSchema);
-export const loadCorridor = (id: string) =>
-  loadEntity('corridors', id, CorridorTemplateSchema);
 export const loadBlueprint = (id: string) =>
   loadEntity('blueprints', id, BlueprintDefSchema);
 export const loadWeapon = (id: string) =>
@@ -202,6 +204,8 @@ export const loadAnimation = (id: string) =>
   loadEntity('animations', id, AnimationDefSchema);
 export const loadBuildingOverride = (id: string) =>
   loadEntity('buildings', id, BuildingOverrideSchema);
+export const loadScene = (id: string) =>
+  loadEntity('scenes', id, SceneDefSchema);
 
 // Save validates BEFORE writing — a malformed payload from the
 // editor's POST handler can never make it onto disk. The schema
@@ -233,8 +237,6 @@ export const saveProp = (data: unknown) =>
   saveEntity('props', data, PropDefSchema);
 export const saveRoom = (data: unknown) =>
   saveEntity('rooms', data, RoomTemplateSchema);
-export const saveCorridor = (data: unknown) =>
-  saveEntity('corridors', data, CorridorTemplateSchema);
 export const saveBlueprint = (data: unknown) =>
   saveEntity('blueprints', data, BlueprintDefSchema);
 export const saveWeapon = (data: unknown) =>
@@ -247,6 +249,29 @@ export const saveAnimation = (data: unknown) =>
   saveEntity('animations', data, AnimationDefSchema);
 export const saveBuildingOverride = (data: unknown) =>
   saveEntity('buildings', data, BuildingOverrideSchema);
+// Shape-discriminate before validating so the Zod error (if any)
+// comes from ONE schema, not the union of three — half the noise
+// when something does fail.
+export const saveScene = async (data: unknown): Promise<SceneDef> => {
+  const obj =
+    !!data && typeof data === 'object'
+      ? (data as Record<string, unknown>)
+      : null;
+  const looksCsg = obj?.kind === 'csg';
+  const looksLinedef =
+    !!obj &&
+    'map' in obj &&
+    !!obj.map &&
+    Array.isArray((obj.map as Record<string, unknown>).linedefs);
+  const schema = (
+    looksCsg
+      ? CsgSceneSchema
+      : looksLinedef
+        ? LinedefSceneSchema
+        : SectorSceneSchema
+  ) as unknown as z.ZodType<SceneDef>;
+  return saveEntity('scenes', data, schema);
+};
 
 // World config — single file, not file-per-entity. Read at
 // boot; absent / malformed = empty config (no overrides).
@@ -268,6 +293,50 @@ export async function loadWorld(): Promise<WorldDef> {
       `[content] world.json: ${result.error.toString()}`,
     );
   }
+  return result.data;
+}
+
+// Floor overrides — single JSON file that pins authored scene
+// ids to dungeon floor indices. Loaded at server boot, queried
+// before procgen for every floor.
+const FLOOR_OVERRIDES_FILE = join(CONTENT_ROOT, 'floor-overrides.json');
+
+export async function loadFloorOverrides(): Promise<
+  import('./types').FloorOverrides
+> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(FLOOR_OVERRIDES_FILE, 'utf8');
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err?.code === 'ENOENT') return {};
+    throw e;
+  }
+  const parsed: unknown = JSON.parse(raw);
+  const result = FloorOverridesSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(
+      `[content] floor-overrides.json: ${result.error.toString()}`,
+    );
+  }
+  return result.data;
+}
+
+export async function saveFloorOverrides(
+  data: unknown,
+): Promise<import('./types').FloorOverrides> {
+  const result = FloorOverridesSchema.safeParse(data);
+  if (!result.success) {
+    throw new Error(
+      `[content] floor-overrides save validation failed:\n${result.error.toString()}`,
+    );
+  }
+  await fs.mkdir(CONTENT_ROOT, { recursive: true });
+  await fs.writeFile(
+    FLOOR_OVERRIDES_FILE,
+    JSON.stringify(result.data, null, 2) + '\n',
+    'utf8',
+  );
   return result.data;
 }
 

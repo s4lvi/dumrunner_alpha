@@ -18,6 +18,7 @@ import type {
   Inventory,
   InteractableKind,
   Player,
+  RoomTemplate,
   ServerMessage,
   SuitSlotKind,
 } from '@dumrunner/shared';
@@ -25,6 +26,12 @@ import {
   HOTBAR_SIZE,
   INVENTORY_SIZE,
   addInventorySlotToInventory,
+  coerceToPolygonScene,
+  emptyEquipment,
+  emptyInventory,
+  floorOverrideFor,
+  getOverrideScene,
+  rasterizeSectorSceneToLayout,
   resizeInventory,
   swapSlots,
   discardSlot,
@@ -68,6 +75,7 @@ import { supabase } from './supabase.js';
 import { COMBAT } from './combat.js';
 import {
   Scene,
+  applyInputToConnection,
   type SceneBindings,
   type SceneConnection,
   type SceneSnapshot,
@@ -78,8 +86,17 @@ import {
   generateInitialLoot,
   generateInitialProps,
   generateLockedRoomMeta,
+  generateSingleRoomFloor,
+  type InitialEnemySpawn,
+  type InitialLootDrop,
+  type InitialPropSpawn,
 } from './procgen.js';
-import type { SceneLayout } from '@dumrunner/shared';
+import { ROOMS } from './rooms.js';
+import {
+  buildPlaytestEquipment,
+  buildPlaytestInventory,
+} from './starter.js';
+import type { SceneLayout, WorldMode } from '@dumrunner/shared';
 import { getEnemyVisualsForWire } from './ai/templates.js';
 import {
   biomeForFloor,
@@ -93,6 +110,22 @@ import { getBlueprintsForWire } from './blueprints.js';
 import { getWeaponsForWire } from './weapons.js';
 import { getRecipesForWire } from './recipes.js';
 import { getAttachmentsForWire } from './attachments.js';
+
+// Default open arena layout the sandbox spawns into before any
+// editor command swaps in something specific. Empty walkables
+// → no collision walls; enemies can move freely; same shape the
+// live game's surface scene uses.
+function makeSandboxArenaLayout(): SceneLayout {
+  return {
+    worldBounds: { x: -2000, y: -2000, w: 4000, h: 4000 },
+    walkables: [],
+    rooms: [],
+    spawn: { x: 0, y: 0 },
+    interactables: [],
+    tileSize: 32,
+    biome: 'default',
+  };
+}
 
 // Surface is an open scene (no walls) but ships a layout so the client knows
 // where the dungeon entrance is. Walkables are empty → collision is skipped.
@@ -140,20 +173,40 @@ function surfaceLayout(): SceneLayout {
     // biome_ceiling texture lookups so authors can reskin the
     // base entirely from the editor.
     biome: getOverworldBiome()?.id ?? DEFAULT_BIOME_ID,
+    // Rolling terrain on the surface. Signed noise (can dip
+    // below 0), so visual range is roughly [-amp, +amp]. 64 wu
+    // amp = 2 walls peak-to-trough at a ~384 wu period (~12
+    // tiles between hilltops). Per-tick gradient budget (worst-
+    // case all-octaves-in-phase): ~10 wu per 7-px step, under
+    // STEP_UP_MAX 12 with margin. octaves=2 — extra octaves
+    // increase the max gradient without buying much detail
+    // beyond what 384-wu wavelength already shows.
+    terrain: {
+      amplitude: 64,
+      frequency: 1 / 384,
+      octaves: 2,
+      seed: 0x5e7117ed,
+    },
   };
 }
 
-// Stored under world_states.state. Bump WORLD_SNAPSHOT_SCHEMA on incompatible
-// shape changes; older snapshots are discarded (no incremental migration yet).
+// Stored under world_states.state. Bump WORLD_STATE_SCHEMA on incompatible
+// shape changes; incompatible old snapshots are discarded (no incremental
+// migration yet) — additive-optional changes accept the prior schema.
 //   1 — pre-slot inventory (corpse.inventory was CarriedPart[]).
 //   2 — slot-based inventory (corpse.inventory is Inventory).
 //   3 — adds cycle + cycleStartedAt for the perihelion clock.
-const WORLD_SNAPSHOT_SCHEMA = 3;
-type WorldSnapshotV3 = {
-  schema: typeof WORLD_SNAPSHOT_SCHEMA;
+//   4 — adds craftJobs (additive; v3 snapshots still load).
+const WORLD_STATE_SCHEMA = 4;
+type WorldSnapshot = {
+  schema: number;
   scenes: Record<string, SceneSnapshot>;
   cycle: number;
   cycleStartedAt: number;
+  // Active + queued craft jobs. Materials are consumed at enqueue,
+  // so dropping these on restart eats player materials — they must
+  // survive (craft durability). Optional: v3 snapshots lack it.
+  craftJobs?: import('@dumrunner/shared').CraftJobState[];
 };
 
 // Connection — the per-ws record stored on the World. Implements SceneConnection
@@ -165,16 +218,27 @@ type Connection = SceneConnection & {
   // After a scene transition, suppress further interactable triggers for a
   // brief window so the player doesn't re-trigger immediately on arrival.
   interactCooldownUntil: number;
-  // Blueprints the player has access to.
-  //   - knownBlueprints: per-cycle. Wiped at perihelion / endHorde.
-  //   - persistentBlueprints: legendary tier — survive perihelion. Today
-  //     these are in-memory only; once an artifact-trade store grants them,
-  //     we'll round-trip through the characters table.
+  // Blueprints (schematics) the player has learned. Permanent per GDD
+  // §The Economy Law — never wiped at perihelion, round-tripped through
+  // the characters table on persist/hydrate.
+  //   - persistentBlueprints is a legacy split (always empty today);
+  //     mergedBlueprints() still unions it so old in-memory state can't
+  //     lose entries. Collapse fully once a save-data audit confirms
+  //     nothing populates it.
   knownBlueprints: Set<string>;
   persistentBlueprints: Set<string>;
 };
 
 const SURFACE_SCENE_ID = 'surface';
+// Single arena scene id used in deathmatch mode. Mode-private,
+// so we don't clash with any procgen dungeon-floor naming.
+const ARENA_SCENE_ID = 'arena';
+// Round structure constants for deathmatch. First-to-N kills OR
+// wall-clock cap ends the round → intermission → fresh round.
+// Configurable per-server later; sane defaults for now.
+const DM_KILLS_TO_WIN_DEFAULT = 20;
+const DM_ROUND_DURATION_MS_DEFAULT = 10 * 60 * 1000;
+const DM_INTERMISSION_MS = 15 * 1000;
 const DUNGEON_SCENE_PREFIX = 'dungeon:';
 const TRANSITION_COOLDOWN_MS = 800;
 // Per-kind parallel craft job capacity. Defaults to 1; mirror what the
@@ -293,20 +357,86 @@ export class World {
 
   private readonly bindings: SceneBindings;
 
-  constructor(serverId: string) {
+  // World mode — drives which top-level systems boot.
+  //   'live'      → surface scene + dungeon + perihelion (canonical).
+  //   'sandbox'   → editor playtest. Skip surface / dungeon / horde
+  //                 / persistence. Scene arrives via
+  //                 `sandboxLoadAuthoredScene` once the editor
+  //                 connects.
+  //   'deathmatch'→ single authored arena scene loaded at boot.
+  //                 No surface, no dungeon, no perihelion. PvP
+  //                 damage on. Players respawn at `dm_spawn`
+  //                 interactables on a timer.
+  readonly mode: WorldMode;
+  // Scene id for the arena map (deathmatch mode only). Resolved
+  // at boot from the pre-loaded override scene cache.
+  readonly arenaSceneId: string | null;
+  // Deathmatch round state — null in non-deathmatch modes, set
+  // at boot for deathmatch worlds. `intermissionEndsAt` is null
+  // during the active round and set during the post-round
+  // scoreboard window; PvP damage gates on this so kills don't
+  // count during intermission.
+  private deathmatchRound: {
+    startedAt: number;
+    killsToWin: number;
+    durationMs: number;
+    intermissionEndsAt: number | null;
+    winnerCharacterId: string | null;
+    // Latest scoreboard. Frozen snapshot of (kills, deaths) at
+    // round end so the intermission overlay reads consistent
+    // numbers even as players disconnect.
+    finalScores: Array<{
+      characterId: string;
+      displayName: string;
+      kills: number;
+      deaths: number;
+    }> | null;
+  } | null = null;
+  // Kept for backwards compat with existing `if (this.isSandbox)`
+  // call sites. Derived from `mode`.
+  readonly isSandbox: boolean;
+  get isDeathmatch(): boolean {
+    return this.mode === 'deathmatch';
+  }
+  // True for any mode that doesn't get a surface base / dungeon /
+  // perihelion clock.
+  get skipsLiveSystems(): boolean {
+    return this.mode !== 'live';
+  }
+
+  constructor(
+    serverId: string,
+    opts: {
+      sandbox?: boolean;
+      mode?: WorldMode;
+      arenaSceneId?: string | null;
+    } = {},
+  ) {
     this.serverId = serverId;
+    // Backwards-compat: if `sandbox: true` is passed, mode is
+    // 'sandbox'. Otherwise mode comes through directly.
+    this.mode =
+      opts.mode ?? (opts.sandbox === true ? 'sandbox' : 'live');
+    this.isSandbox = this.mode === 'sandbox';
+    this.arenaSceneId = opts.arenaSceneId ?? null;
     this.bindings = {
       connection: (id) => this.connections.get(id),
       send: (id, msg) => this.sendTo(id, msg),
       onInteractable: (id, fromSceneId, kind) =>
         this.onInteractable(id, fromSceneId, kind),
-      onPlayerRespawn: (id) => this.respawnPlayerToSurface(id),
+      onPlayerRespawn: (id) => this.respawnPlayer(id),
       onPlayerDied: (id, killer) => this.notifyPlayerDied(id, killer),
       onPowerLinkDestroyed: () => this.handlePowerLinkDestroyed(),
       isPowerOnline: () => this.powerOnline,
       isPowered: (id: string) => this.poweredBuildings.has(id),
       onBuildingsChanged: () => this.recomputePowerState(),
-      dropItemsOnDeath: () => this.worldConfig.dropItemsOnDeath,
+      dropItemsOnDeath: () =>
+        // Deathmatch never drops loot — gear stays with the
+        // respawning player. Live mode respects the per-server
+        // config flag.
+        this.mode === 'deathmatch'
+          ? false
+          : this.worldConfig.dropItemsOnDeath,
       applyPlayerEffect: (id, effect) => this.applyPlayerEffect(id, effect),
       onPlayerEquipmentChanged: (id) => {
         const conn = this.connections.get(id);
@@ -321,21 +451,65 @@ export class World {
           equipment: conn.equipment,
         });
       },
+      pvpEnabled: () =>
+        this.mode === 'deathmatch' &&
+        this.deathmatchRound?.intermissionEndsAt == null,
+      onDeathmatchKill: (killerId) => {
+        // Round-state side effects only — the kill-feed line lands
+        // in chat via `notifyPlayerDied`, which the existing
+        // ChatPanel already renders in every mode.
+        this.handleDeathmatchKill(killerId);
+      },
     };
-    // Surface always exists so cold servers spawn enemies immediately.
-    const surface = new Scene(
-      SURFACE_SCENE_ID,
-      'surface',
-      this.bindings,
-      surfaceLayout()
-    );
-    this.scenes.set(SURFACE_SCENE_ID, surface);
-    surface.ensurePowerLink(
-      POWER_LINK_TILE_X,
-      POWER_LINK_TILE_Y,
-      POWER_LINK_TILE_W,
-      POWER_LINK_TILE_H
-    );
+    // Live worlds always boot with a surface scene + Power Link
+    // dungeon portal. Sandbox worlds defer scene init — the
+    // editor's authored scene arrives via `loadAuthoredScene`
+    // once the player auths in. Deathmatch worlds load their
+    // single arena scene from the pre-loaded override cache;
+    // players land in it directly on join.
+    if (this.mode === 'live') {
+      const surface = new Scene(
+        SURFACE_SCENE_ID,
+        'surface',
+        this.bindings,
+        surfaceLayout()
+      );
+      this.scenes.set(SURFACE_SCENE_ID, surface);
+      surface.ensurePowerLink(
+        POWER_LINK_TILE_X,
+        POWER_LINK_TILE_Y,
+        POWER_LINK_TILE_W,
+        POWER_LINK_TILE_H
+      );
+    } else if (this.mode === 'deathmatch') {
+      if (!this.arenaSceneId) {
+        throw new Error(
+          '[world] deathmatch mode requires opts.arenaSceneId',
+        );
+      }
+      const polyScene = getOverrideScene(this.arenaSceneId);
+      if (!polyScene) {
+        throw new Error(
+          `[world] deathmatch arena scene "${this.arenaSceneId}" not in cache (pin it first in the editor, or check floor-overrides.json)`,
+        );
+      }
+      const layout = rasterizeSectorSceneToLayout(polyScene);
+      const arena = new Scene(
+        ARENA_SCENE_ID,
+        'dungeon_floor',
+        this.bindings,
+        layout,
+      );
+      this.scenes.set(ARENA_SCENE_ID, arena);
+      this.deathmatchRound = {
+        startedAt: Date.now(),
+        killsToWin: DM_KILLS_TO_WIN_DEFAULT,
+        durationMs: DM_ROUND_DURATION_MS_DEFAULT,
+        intermissionEndsAt: null,
+        winnerCharacterId: null,
+        finalScores: null,
+      };
+    }
   }
 
   get playerCount(): number {
@@ -350,6 +524,10 @@ export class World {
   async hydrate(): Promise<void> {
     if (this.hydrated) return;
     this.hydrated = true;
+    // Sandbox worlds never touch Supabase — no servers row, no
+    // world_states snapshot, no characters row to restore from.
+    // They live for the duration of one editor session.
+    if (this.isSandbox) return;
 
     // Pull per-server world config + seed from the servers row.
     {
@@ -423,6 +601,25 @@ export class World {
       scene.hydrate(sceneSnap);
     }
 
+    // Restore craft jobs AFTER scenes/buildings hydrate so completed
+    // jobs can deposit into their station's (restored) output buffer.
+    // Jobs whose completesAt elapsed during downtime finish on the
+    // first tick. Counters advance past restored ids so new jobs
+    // can't collide.
+    if (snap.craftJobs) {
+      for (const job of snap.craftJobs) {
+        this.activeCraftJobs.set(job.id, job);
+        const n = Number(job.id.replace(/^cj/, ''));
+        if (Number.isFinite(n) && n >= this.nextCraftJobId) {
+          this.nextCraftJobId = n + 1;
+        }
+        if ((job.queueIndex ?? 0) >= this.nextQueueIndex) {
+          this.nextQueueIndex = (job.queueIndex ?? 0) + 1;
+        }
+      }
+      if (snap.craftJobs.length > 0) this.recomputePowerState();
+    }
+
     // Playtest sandbox: drop a starter set of workstations on the
     // surface so the tester doesn't have to hand-craft + place each
     // station to start exercising Phase 2 flows. Idempotent — only
@@ -448,20 +645,25 @@ export class World {
     }
   }
 
-  private buildSnapshot(): WorldSnapshotV3 {
+  private buildSnapshot(): WorldSnapshot {
     const scenes: Record<string, SceneSnapshot> = {};
     for (const [id, scene] of this.scenes) {
       scenes[id] = scene.snapshot();
     }
     return {
-      schema: WORLD_SNAPSHOT_SCHEMA,
+      schema: WORLD_STATE_SCHEMA,
       scenes,
       cycle: this.cycle,
       cycleStartedAt: this.cycleStartedAt,
+      craftJobs: [...this.activeCraftJobs.values()],
     };
   }
 
   private async flushSnapshot(): Promise<void> {
+    if (this.isSandbox) return;
+    await this.flushSnapshotInner();
+  }
+  private async flushSnapshotInner(): Promise<void> {
     const snap = this.buildSnapshot();
     const { error } = await supabase
       .from('world_states')
@@ -480,7 +682,457 @@ export class World {
 
   // ---------- lifecycle ----------
 
-  add(ws: WebSocket, player: Player, inventory: Inventory, equipment: Equipment): void {
+  // Sandbox player add. Mirrors `add` but skips the surface-
+  // join, Supabase rehydrate, and starter-blueprint logic that
+  // only make sense in a live world. Creates a Connection in
+  // limbo (no sceneId) — the caller follows up with
+  // `loadAuthoredScene` (or `regenSandboxFloor`) to drop the
+  // player into an actual Scene. Inventory + equipment default
+  // to the playtest kit so the editor's playtest button gives
+  // the author a real combat loadout without separate plumbing.
+  addSandboxPlayer(
+    ws: WebSocket,
+    characterId: string,
+    displayName: string,
+    inventory: Inventory,
+    equipment: Equipment,
+  ): void {
+    this.cancelIdleShutdown();
+    const conn: Connection = {
+      ws,
+      characterId,
+      accountId: 'sandbox',
+      displayName,
+      x: 0,
+      y: 0,
+      hp: COMBAT.PLAYER_MAX_HP,
+      maxHp: COMBAT.PLAYER_MAX_HP,
+      stamina: COMBAT.PLAYER_MAX_STAMINA,
+      maxStamina: COMBAT.PLAYER_MAX_STAMINA,
+      shield: COMBAT.PLAYER_DEFAULT_MAX_SHIELD,
+      maxShield: COMBAT.PLAYER_DEFAULT_MAX_SHIELD,
+      lastDamageAt: 0,
+      alive: true,
+      inventory,
+      equipment,
+      hotbarSelection: 0,
+      sceneId: '',
+      inputX: 0,
+      inputY: 0,
+      inputAt: 0,
+      inputSprint: false,
+      inputJump: false,
+      inputCrouch: false,
+      jumpZ: 0,
+      jumpVZ: 0,
+      crouching: false,
+      floorZ: 0,
+      lastLandedAt: 0,
+      lastJumpZSent: 0,
+      lastCrouchSent: false,
+      lastFireAt: 0,
+      reloadingUntil: 0,
+      reloadingSlot: -1,
+      respawnAt: null,
+      respawnImmunityUntil: 0,
+      activeEffects: [],
+      dirty: false,
+      inventoryDirty: false,
+      lastStaminaSentAt: 0,
+      lastShieldSentAt: 0,
+      lastStaminaSent: -1,
+      lastShieldSent: -1,
+      staminaRegenAt: 0,
+      suitSpeedMult: 0,
+      suitStaminaRegenBonus: 0,
+      suitBuildRadiusBonus: 0,
+      suitHeatResist: 0,
+      suitColdResist: 0,
+      suitRadiationResist: 0,
+      suitToxicResist: 0,
+      kills: 0,
+      deaths: 0,
+      interactCooldownUntil: 0,
+      knownBlueprints: new Set<string>(Object.keys(BLUEPRINT_CATALOG)),
+      persistentBlueprints: new Set<string>(),
+    };
+    this.connections.set(characterId, conn);
+    this.recomputePlayerStats(conn);
+    // Cap pools to the (possibly raised) maxes after suit eval.
+    conn.hp = conn.maxHp;
+    conn.shield = conn.maxShield;
+    conn.stamina = conn.maxStamina;
+    this.ensureTimers();
+  }
+
+  // ---------- Sandbox helpers ----------
+  //
+  // These are the editor-only operations that don't have an
+  // analogue in the live game (regen a procgen floor, stamp a
+  // single-room template, load a hand-authored sector scene,
+  // swap loadout to the playtest kit). All operate on the
+  // sandbox connection's current scene. Live-game messages
+  // (input, fire, hotbar, reload, …) ride the existing
+  // handleInput/handleFire/etc — same code path either way.
+
+  // Build a Scene from a SceneLayout and drop the editor player
+  // into it, replacing whatever scene they were in. Lower-level
+  // primitive that the other sandbox helpers compose on.
+  sandboxSwapScene(
+    characterId: string,
+    sceneId: string,
+    layout: SceneLayout,
+    initialSpawns: InitialEnemySpawn[] | null = null,
+    initialLoot: InitialLootDrop[] | null = null,
+    initialProps: InitialPropSpawn[] | null = null,
+    broadcast: boolean = true,
+  ): void {
+    if (!this.isSandbox) return;
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    // Tear down the current scene if any.
+    if (conn.sceneId) {
+      const old = this.scenes.get(conn.sceneId);
+      old?.removeMember(characterId);
+      this.scenes.delete(conn.sceneId);
+    }
+    const scene = new Scene(
+      sceneId,
+      'dungeon_floor',
+      this.bindings,
+      layout,
+      initialSpawns,
+      initialLoot,
+      null,
+      initialProps,
+    );
+    this.scenes.set(sceneId, scene);
+    scene.addMember(characterId);
+    conn.sceneId = sceneId;
+    conn.x = layout.spawn.x;
+    conn.y = layout.spawn.y;
+    // Reset vertical state so a swap doesn't leave the player
+    // mid-jump or stuck in a stale jumpZ from the prior scene.
+    conn.jumpZ = 0;
+    conn.jumpVZ = 0;
+    conn.lastJumpZSent = 0;
+    // Seed the stateful floor from the spawn position. Use the
+    // LOWEST sector at this XY (spawnFloorAt) — if the author's
+    // spawn happens to land inside an overlapping platform's
+    // polygon, we want the player on the ground, not on top of
+    // the platform.
+    conn.floorZ =
+      layout.spawnZ !== undefined
+        ? layout.spawnZ
+        : scene.spawnFloorAt(layout.spawn.x, layout.spawn.y);
+    if (!broadcast) return;
+    const snap = scene.toWireSnapshot();
+    this.sendTo(characterId, {
+      type: 'scene_changed',
+      sceneId,
+      self: this.toPlayerWire(conn),
+      players: [],
+      enemies: snap.enemies,
+      projectiles: snap.projectiles,
+      loot: snap.loot,
+      corpses: snap.corpses,
+      buildings: snap.buildings,
+      props: snap.props,
+      equipment: conn.equipment,
+      layout: scene.layout,
+    });
+  }
+
+  // First-cut sandbox scene the editor lands in before the user
+  // does anything — empty 12×12 arena, no enemies, no objectives.
+  // Skips the scene_changed broadcast because the follow-up
+  // welcome carries the full snapshot anyway, and the openSandbox
+  // helper on the client drops messages received before the
+  // welcome.
+  sandboxLoadInitialScene(characterId: string): void {
+    this.sandboxSwapScene(
+      characterId,
+      `sandbox:${characterId}:arena`,
+      makeSandboxArenaLayout(),
+      null,
+      null,
+      null,
+      false,
+    );
+  }
+
+  // Editor playtest button → load a SectorScene authored in the
+  // level editor. Rasterises onto a tile grid + carries the
+  // authoredSectorMap so polygon collision + the v2 renderer
+  // both consume the original polygons.
+  sandboxLoadAuthoredScene(characterId: string, raw: unknown): void {
+    if (!this.isSandbox) return;
+    if (!raw || typeof raw !== 'object') return;
+    let layout: SceneLayout;
+    try {
+      // Accept either polygon-shaped or linedef-shaped scenes.
+      // Linedef scenes round-trip through the polygon model so
+      // existing rasterise + collision pipeline stays unchanged.
+      const polygonScene = coerceToPolygonScene(raw);
+      layout = rasterizeSectorSceneToLayout(polygonScene);
+    } catch (e) {
+      console.error('[world.sandbox] load authored failed:', e);
+      return;
+    }
+    this.sandboxSwapScene(
+      characterId,
+      `sandbox:${characterId}:authored`,
+      layout,
+    );
+  }
+
+  // Biome-editor "regen this floor with these params" command.
+  // Runs the live procgen + sticks the output into a fresh scene.
+  sandboxRegenFloor(
+    characterId: string,
+    biome: string,
+    cycle: number,
+    floorIndex: number,
+    worldSeed: number,
+  ): void {
+    if (!this.isSandbox) return;
+    const layout = generateFloorLayout(worldSeed, cycle, floorIndex, biome);
+    const meta = generateLockedRoomMeta(layout, worldSeed, cycle, floorIndex);
+    const initialSpawns = generateInitialEnemies(
+      layout, worldSeed, cycle, floorIndex,
+    );
+    const initialLoot = generateInitialLoot(
+      layout, worldSeed, cycle, floorIndex, meta.lockedRoomIndices,
+    );
+    const initialProps = generateInitialProps(
+      layout, worldSeed, cycle, floorIndex,
+    );
+    this.sandboxSwapScene(
+      characterId,
+      `sandbox:${characterId}:${biome}:${floorIndex}`,
+      layout,
+      initialSpawns,
+      initialLoot,
+      initialProps,
+    );
+  }
+
+  // Room-editor "preview this template" command. Stamps the
+  // template's tile bytes directly + drives spawns from anchors.
+  sandboxStampRoom(
+    characterId: string,
+    templateId: string,
+    biomeOverride?: string,
+  ): void {
+    if (!this.isSandbox) return;
+    const template: RoomTemplate | undefined = ROOMS[templateId];
+    if (!template) {
+      this.sendTo(characterId, {
+        type: 'error',
+        message: `unknown room template: ${templateId}`,
+      });
+      return;
+    }
+    const biome = biomeOverride ?? template.biomeAffinity[0] ?? 'default';
+    const layout = generateSingleRoomFloor(template, biome, 1);
+    const initialSpawns: InitialEnemySpawn[] = [];
+    const initialProps: InitialPropSpawn[] = [];
+    const initialLoot: InitialLootDrop[] = [];
+    if (layout.anchors) {
+      for (const a of layout.anchors) {
+        if (a.kind === 'enemy') {
+          initialSpawns.push({
+            templateId: a.overrideId ?? 'chaser_melee',
+            x: a.x, y: a.y,
+          });
+        } else if (a.kind === 'prop') {
+          initialProps.push({
+            kind: a.overrideId ?? 'barrel',
+            x: a.x, y: a.y,
+          });
+        } else if (a.kind === 'loot') {
+          initialLoot.push({
+            materialId: 'scrap', count: 5, x: a.x, y: a.y,
+          });
+        }
+      }
+    }
+    this.sandboxSwapScene(
+      characterId,
+      `sandbox:${characterId}:room:${templateId}`,
+      layout,
+      initialSpawns,
+      initialLoot,
+      initialProps,
+    );
+  }
+
+  // Swap the editor player's inventory + equipment to one of
+  // the canned playtest kits. Recomputes suit stats / pools.
+  sandboxSetLoadout(characterId: string, kind: 'creative' | 'unarmed'): void {
+    if (!this.isSandbox) return;
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const inventory =
+      kind === 'creative' ? buildPlaytestInventory() : emptyInventory();
+    const equipment =
+      kind === 'creative' ? buildPlaytestEquipment() : emptyEquipment();
+    // Replace inventory in-place so the cargo-grid bonus path
+    // (resizeInventory) still applies via recomputePlayerStats.
+    for (let i = 0; i < conn.inventory.length; i++) {
+      conn.inventory[i] = { kind: 'empty' };
+    }
+    resizeInventory(conn.inventory, INVENTORY_SIZE);
+    for (let i = 0; i < inventory.length; i++) {
+      conn.inventory[i] = inventory[i] ?? { kind: 'empty' };
+    }
+    conn.equipment = equipment;
+    conn.hotbarSelection = 0;
+    this.recomputePlayerStats(conn);
+    conn.hp = conn.maxHp;
+    conn.shield = conn.maxShield;
+    conn.stamina = conn.maxStamina;
+    this.sendTo(characterId, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+    this.sendTo(characterId, {
+      type: 'equipment_changed',
+      equipment: conn.equipment,
+    });
+  }
+
+  // Spawn one enemy at world-coord (x, y). Used by the enemy
+  // editor's "spawn one in front of me" button.
+  sandboxSpawnEnemy(
+    characterId: string,
+    kind: string,
+    x: number,
+    y: number,
+  ): boolean {
+    if (!this.isSandbox) return false;
+    const conn = this.connections.get(characterId);
+    if (!conn) return false;
+    const scene = this.scenes.get(conn.sceneId);
+    if (!scene) return false;
+    const ok = scene.spawnEnemyFromTemplate(kind, x, y);
+    if (!ok) {
+      this.sendTo(characterId, {
+        type: 'error',
+        message: `unknown enemy kind: ${kind}`,
+      });
+    }
+    return ok;
+  }
+
+  // Bulk-remove enemies / props in the current sandbox scene.
+  sandboxClear(
+    characterId: string,
+    scope: 'enemies' | 'props' | 'all',
+  ): void {
+    if (!this.isSandbox) return;
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const scene = this.scenes.get(conn.sceneId);
+    if (!scene) return;
+    if (scope === 'enemies' || scope === 'all') scene.clearAllEnemies();
+    if (scope === 'props' || scope === 'all') scene.clearAllProps();
+  }
+
+  // Sandbox-flavoured welcome — same shape live-game uses,
+  // emitted after addSandboxPlayer + initial scene swap.
+  sendSandboxWelcome(characterId: string): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const scene = this.scenes.get(conn.sceneId);
+    if (!scene) return;
+    const snap = scene.toWireSnapshot();
+    this.sendTo(characterId, {
+      type: 'welcome',
+      sceneId: scene.id,
+      self: this.toPlayerWire(conn),
+      players: [],
+      enemies: snap.enemies,
+      projectiles: snap.projectiles,
+      loot: snap.loot,
+      corpses: snap.corpses,
+      buildings: snap.buildings,
+      props: snap.props,
+      inventory: conn.inventory,
+      equipment: conn.equipment,
+      hotbarSelection: conn.hotbarSelection,
+      layout: scene.layout,
+      knownBlueprints: [],
+      blueprints: getBlueprintsForWire(),
+      weapons: getWeaponsForWire(),
+      recipes: getRecipesForWire(),
+      attachments: getAttachmentsForWire(),
+      enemyVisuals: getEnemyVisualsForWire(),
+      biomes: getBiomesForWire(),
+      propVisuals: getPropVisualsForWire(),
+      buildingVisuals: getBuildingVisualsForWire(),
+      mode: this.mode,
+      deathmatchRound: this.dmRoundForWire(),
+    });
+  }
+
+  // Build the deathmatch-round payload included in welcome messages.
+  // Returns null for non-deathmatch worlds so the client knows not
+  // to mount the HUD.
+  private dmRoundForWire(): {
+    startedAt: number;
+    killsToWin: number;
+    durationMs: number;
+    intermissionEndsAt: number | null;
+    scores: Array<{
+      characterId: string;
+      displayName: string;
+      kills: number;
+      deaths: number;
+    }>;
+  } | null {
+    const round = this.deathmatchRound;
+    if (!round) return null;
+    const scores = [...this.connections.values()].map((c) => ({
+      characterId: c.characterId,
+      displayName: c.displayName,
+      kills: c.kills,
+      deaths: c.deaths,
+    }));
+    scores.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+    return {
+      startedAt: round.startedAt,
+      killsToWin: round.killsToWin,
+      durationMs: round.durationMs,
+      intermissionEndsAt: round.intermissionEndsAt,
+      scores: round.finalScores ?? scores,
+    };
+  }
+
+  private toPlayerWire(conn: SceneConnection): Player {
+    return {
+      characterId: conn.characterId,
+      accountId: 'sandbox',
+      displayName: conn.displayName,
+      x: conn.x,
+      y: conn.y,
+      hp: conn.hp,
+      maxHp: conn.maxHp,
+      stamina: conn.stamina,
+      maxStamina: conn.maxStamina,
+      shield: conn.shield,
+      maxShield: conn.maxShield,
+      alive: conn.alive,
+    };
+  }
+
+  add(
+    ws: WebSocket,
+    player: Player,
+    inventory: Inventory,
+    equipment: Equipment,
+    savedBlueprints?: string[],
+  ): void {
     this.cancelIdleShutdown();
 
     const existing = this.connections.get(player.characterId);
@@ -494,18 +1146,28 @@ export class World {
       this.connections.delete(player.characterId);
     }
 
-    const sceneId = SURFACE_SCENE_ID;
-    // Always rehydrate at the surface portal regardless of the saved
-    // pos_x / pos_y. The DB doesn't persist which scene the player
-    // was in, so a player who logged out in a dungeon would otherwise
-    // land at those world coords on the surface — typically far from
-    // the portal. Dungeon scenes are per-cycle anyway, so dungeon
-    // resume isn't a real feature; surface-portal-on-join is the
-    // safe default.
-    const surface = this.scenes.get(SURFACE_SCENE_ID);
-    const spawn = surface
-      ? surface.findSafeSpawnNear(SURFACE_ENTRANCE_X, SURFACE_ENTRANCE_Y)
-      : { x: SURFACE_ENTRANCE_X, y: SURFACE_ENTRANCE_Y };
+    // Initial scene + spawn point branch by world mode.
+    //   live      → surface scene, at the portal entrance.
+    //   deathmatch→ arena scene, at a random dm_spawn marker.
+    //   sandbox   → still uses surface here; sandbox scene is
+    //               swapped in via sandboxLoadAuthoredScene
+    //               immediately after welcome.
+    let sceneId: string;
+    let spawn: { x: number; y: number };
+    if (this.mode === 'deathmatch') {
+      sceneId = ARENA_SCENE_ID;
+      spawn = this.pickDeathmatchSpawn();
+    } else {
+      sceneId = SURFACE_SCENE_ID;
+      // Always rehydrate at the surface portal regardless of the
+      // saved pos_x / pos_y. Dungeon scenes are per-cycle so
+      // resuming inside one isn't useful; surface-portal-on-join
+      // is the safe default.
+      const surface = this.scenes.get(SURFACE_SCENE_ID);
+      spawn = surface
+        ? surface.findSafeSpawnNear(SURFACE_ENTRANCE_X, SURFACE_ENTRANCE_Y)
+        : { x: SURFACE_ENTRANCE_X, y: SURFACE_ENTRANCE_Y };
+    }
     const conn: Connection = {
       ws,
       characterId: player.characterId,
@@ -529,8 +1191,18 @@ export class World {
       inputY: 0,
       inputAt: 0,
       inputSprint: false,
+      inputJump: false,
+      inputCrouch: false,
+      jumpZ: 0,
+      jumpVZ: 0,
+      crouching: false,
+      floorZ: 0,
+      lastLandedAt: 0,
+      lastJumpZSent: 0,
+      lastCrouchSent: false,
       lastFireAt: 0,
       reloadingUntil: 0,
+      reloadingSlot: -1,
       respawnAt: null,
       respawnImmunityUntil: 0,
       activeEffects: [],
@@ -548,17 +1220,19 @@ export class World {
       suitColdResist: 0,
       suitRadiationResist: 0,
       suitToxicResist: 0,
+      kills: 0,
+      deaths: 0,
       // Mild grace window so the surface stairs aren't triggered the moment
       // a returning player reconnects on top of them.
       interactCooldownUntil: Date.now() + TRANSITION_COOLDOWN_MS,
-      // Alpha grant: every fresh cycle hands out the turret blueprint so
-      // there's a complete crafting loop to test. Replace with the artifact
-      // uplink trade store once that ships. Playtest servers grant the
-      // entire blueprint catalog up front so contributors can exercise
-      // every recipe without grinding artifacts.
+      // Schematics are permanent (GDD §The Economy Law): the saved set
+      // round-trips through the characters table, plus the starter grant
+      // so a fresh character always has a complete loop to test. Playtest
+      // servers grant the entire catalog up front so contributors can
+      // exercise every recipe without grinding artifacts.
       knownBlueprints: this.worldConfig.isPlaytest
         ? new Set<string>(Object.keys(BLUEPRINT_CATALOG))
-        : new Set<string>(STARTER_BLUEPRINTS),
+        : new Set<string>([...STARTER_BLUEPRINTS, ...(savedBlueprints ?? [])]),
       persistentBlueprints: new Set<string>(),
     };
     this.connections.set(player.characterId, conn);
@@ -624,12 +1298,18 @@ export class World {
       biomes: getBiomesForWire(),
       propVisuals: getPropVisualsForWire(),
       buildingVisuals: getBuildingVisualsForWire(),
+      mode: this.mode,
+      deathmatchRound: this.dmRoundForWire(),
     });
 
     scene.broadcast(
       { type: 'player_joined', player: toPlayer(conn) },
       player.characterId
     );
+    // Surface this player on the deathmatch scoreboard immediately
+    // (with 0/0) so the leader banner picks them up before their
+    // first kill.
+    if (this.deathmatchRound) this.broadcastDeathmatchScores();
     this.systemChat(`${conn.displayName} joined the server.`);
 
     // Sync any in-flight craft jobs the player owns so the workstation
@@ -729,7 +1409,26 @@ export class World {
   // Called by Scene after a dead player's respawn timer fires. Restores
   // their HP and sends them to the surface base. The corpse the Scene
   // already spawned stays where it dropped for recovery.
-  private respawnPlayerToSurface(characterId: string): void {
+  // Pick a random `dm_spawn` interactable on the arena scene to
+  // teleport a (re)spawning player to. Falls back to the scene's
+  // canonical spawn point when no dm_spawn markers exist (sane
+  // default for an unprepared arena map). Self-occupancy isn't
+  // checked: a transient overlap on a busy spawn is acceptable
+  // and self-resolves on the next tick.
+  private pickDeathmatchSpawn(): { x: number; y: number } {
+    const arena = this.scenes.get(ARENA_SCENE_ID);
+    if (!arena || !arena.layout) return { x: 0, y: 0 };
+    const dmSpawns = arena.layout.interactables.filter(
+      (i) => i.kind === 'dm_spawn',
+    );
+    if (dmSpawns.length === 0) {
+      return { x: arena.layout.spawn.x, y: arena.layout.spawn.y };
+    }
+    const pick = dmSpawns[Math.floor(Math.random() * dmSpawns.length)];
+    return { x: pick.x, y: pick.y };
+  }
+
+  private respawnPlayer(characterId: string): void {
     const conn = this.connections.get(characterId);
     if (!conn) return;
     conn.alive = true;
@@ -740,6 +1439,38 @@ export class World {
     // search couldn't find anywhere clean (whole arena swarmed) and
     // the few frames between teleport and the player taking input.
     conn.respawnImmunityUntil = Date.now() + 2000;
+
+    // Deathmatch: re-enter the arena scene at a random dm_spawn
+    // interactable. No corpse cleanup needed — killPlayer skipped
+    // it in PvP mode (see Scene.killPlayer's bindings.dropItemsOnDeath
+    // check; deathmatch's binding returns false so equipment stays).
+    if (this.mode === 'deathmatch') {
+      const arena = this.scenes.get(ARENA_SCENE_ID);
+      const drop = this.pickDeathmatchSpawn();
+      if (arena && conn.sceneId === ARENA_SCENE_ID) {
+        conn.x = drop.x;
+        conn.y = drop.y;
+        conn.floorZ = arena.spawnFloorAt(drop.x, drop.y);
+        conn.dirty = true;
+        arena.broadcast({
+          type: 'player_respawned',
+          characterId: conn.characterId,
+          x: conn.x,
+          y: conn.y,
+          hp: conn.hp,
+          maxHp: conn.maxHp,
+          stamina: conn.stamina,
+          maxStamina: conn.maxStamina,
+          shield: conn.shield,
+          maxShield: conn.maxShield,
+        });
+        return;
+      }
+      // Mode mismatch (somehow not in arena) — fall through to
+      // transition; this shouldn't happen in practice.
+      this.transition(characterId, ARENA_SCENE_ID, drop.x, drop.y);
+      return;
+    }
 
     const surface = this.scenes.get(SURFACE_SCENE_ID);
     const safe = surface
@@ -840,21 +1571,25 @@ export class World {
     characterId: string,
     moveX: number,
     moveY: number,
-    sprint: boolean
+    sprint: boolean,
+    jump: boolean = false,
+    crouch: boolean = false,
   ): void {
     const conn = this.connections.get(characterId);
     if (!conn || !conn.alive) return;
-    conn.inputX = clamp(moveX, -1, 1);
-    conn.inputY = clamp(moveY, -1, 1);
-    conn.inputSprint = sprint;
-    conn.inputAt = Date.now();
+    applyInputToConnection(conn, moveX, moveY, sprint, jump, crouch);
   }
 
-  handleFire(characterId: string, dirX: number, dirY: number): void {
+  handleFire(
+    characterId: string,
+    dirX: number,
+    dirY: number,
+    dirZ: number = 0,
+  ): void {
     const conn = this.connections.get(characterId);
     if (!conn) return;
     const scene = this.scenes.get(conn.sceneId);
-    scene?.handleFire(characterId, dirX, dirY);
+    scene?.handleFire(characterId, dirX, dirY, dirZ);
   }
 
   handleReloadWeapon(characterId: string): void {
@@ -1491,10 +2226,11 @@ export class World {
     return dx * dx + dy * dy <= REACH * REACH;
   }
 
-  // Player spends artifacts at an artifact_uplink to learn a blueprint.
+  // Player spends artifacts at an artifact_uplink to learn a schematic.
   // Validates: player is on the surface, within range of an uplink, has
   // enough artifacts, and doesn't already know it. Consumes the artifacts
-  // and adds the bp to the per-cycle known set.
+  // and adds the bp to the known set — permanent; persisted with the
+  // character row on the next dirty flush.
   handlePurchaseBlueprint(characterId: string, blueprintId: string): void {
     const conn = this.connections.get(characterId);
     if (!conn) return;
@@ -2345,7 +3081,12 @@ export class World {
       COMBAT.PLAYER_DEFAULT_MAX_SHIELD + stats.shieldBonus + effectShieldFlat
     );
     conn.maxStamina = Math.round(COMBAT.PLAYER_MAX_STAMINA + stats.staminaMaxBonus);
-    conn.suitSpeedMult = stats.moveSpeedMult + effectSpeedMult;
+    // Floor the composed multiplier so stacked slows can't drive
+    // move speed to zero or negative (worst case: 0.2× base).
+    conn.suitSpeedMult = Math.max(
+      -0.8,
+      stats.moveSpeedMult + effectSpeedMult,
+    );
     conn.suitStaminaRegenBonus = stats.staminaRegenBonus + effectStaminaRegen;
     conn.suitBuildRadiusBonus = Math.floor(stats.buildRadiusBonus);
     conn.suitHeatResist = stats.heatResist;
@@ -2402,6 +3143,7 @@ export class World {
     this.tickHordeClock(now);
     this.tickCraftJobs(now);
     this.tickPlayerEffects(now);
+    this.tickDeathmatch(now);
     void this.checkPausedFlag(now);
 
     for (const scene of this.scenes.values()) {
@@ -2613,16 +3355,9 @@ export class World {
     this.deepestFloorReached = 1;
     this.recomputePowerState();
 
-    // Cycle reset: per-cycle blueprints wipe; persistent (legendary) ones
-    // stay. Re-grant the alpha starter set so testing isn't dead-ended once
-    // the artifact-trade store hasn't shipped yet — drop this once that does.
-    for (const conn of this.connections.values()) {
-      conn.knownBlueprints = new Set(STARTER_BLUEPRINTS);
-      this.sendDirect(conn.ws, {
-        type: 'blueprints_changed',
-        knownBlueprints: mergedBlueprints(conn),
-      });
-    }
+    // Schematics are NOT wiped at cycle reset — knowledge is permanent
+    // (GDD §The Economy Law). The per-cycle wipe that used to live here
+    // was an implementation artifact, never design.
   }
 
   private broadcastWorldClock(now: number): void {
@@ -2787,8 +3522,12 @@ export class World {
     for (const conn of this.connections.values()) {
       if (conn.activeEffects.length === 0) continue;
       // DoT damage. Each burn / poison effect ticks per-tick damage.
+      // Expiry is checked here too — an effect past expiresAt must
+      // not land one final tick of damage before the filter below
+      // removes it.
       let dotTotal = 0;
       for (const e of conn.activeEffects) {
+        if (e.expiresAt <= now) continue;
         if (e.kind === 'burn_dps' || e.kind === 'poison_dps') {
           dotTotal += e.magnitude * dt;
         }
@@ -2818,7 +3557,143 @@ export class World {
     }
   }
 
+  // Deathmatch round state machine. Pure timer-driven — kill-cap
+  // detection is handled inline by `handleDeathmatchKill` so a
+  // winning kill triggers intermission immediately instead of
+  // waiting up to a tick. This tick is for the OTHER end
+  // conditions: duration timeout (round ran the clock out without
+  // anyone hitting the cap) and intermission expiry (start the
+  // next round).
+  private tickDeathmatch(now: number): void {
+    const round = this.deathmatchRound;
+    if (!round) return;
+    if (round.intermissionEndsAt === null) {
+      // Active round — check wall-clock timeout.
+      if (now - round.startedAt >= round.durationMs) {
+        this.endDeathmatchRound(now, /*reason*/ 'timeout');
+      }
+      return;
+    }
+    // Intermission — start the next round when the timer elapses.
+    if (now >= round.intermissionEndsAt) {
+      this.beginDeathmatchRound(now);
+    }
+  }
+
+  // Called from the SceneBindings.onDeathmatchKill hook on every
+  // PvP kill. Checks whether the kill ends the round; if not,
+  // broadcasts a score update so clients can refresh the scoreboard.
+  private handleDeathmatchKill(killerCharacterId: string): void {
+    const round = this.deathmatchRound;
+    if (!round) return;
+    if (round.intermissionEndsAt !== null) return; // shouldn't fire
+    const killer = this.connections.get(killerCharacterId);
+    if (!killer) return;
+    if (killer.kills >= round.killsToWin) {
+      this.endDeathmatchRound(Date.now(), 'cap', killerCharacterId);
+      return;
+    }
+    this.broadcastDeathmatchScores();
+  }
+
+  // Round → intermission transition. Snapshots final scores so
+  // late disconnects don't mutate the displayed scoreboard, sets
+  // the intermission timer, and broadcasts the round-end event.
+  // PvP gates off automatically via the `pvpEnabled` binding.
+  private endDeathmatchRound(
+    now: number,
+    reason: 'cap' | 'timeout',
+    winnerCharacterId: string | null = null,
+  ): void {
+    const round = this.deathmatchRound;
+    if (!round) return;
+    if (round.intermissionEndsAt !== null) return;
+    // Pick winner by highest kills if reason was timeout (no one
+    // hit the cap). Ties resolve by lowest deaths; if still tied,
+    // first-by-id is fine — surfaced to the UI either way.
+    let winner = winnerCharacterId;
+    if (winner === null) {
+      let bestKills = -1;
+      let bestDeaths = Infinity;
+      for (const c of this.connections.values()) {
+        if (
+          c.kills > bestKills ||
+          (c.kills === bestKills && c.deaths < bestDeaths)
+        ) {
+          bestKills = c.kills;
+          bestDeaths = c.deaths;
+          winner = c.characterId;
+        }
+      }
+    }
+    round.winnerCharacterId = winner;
+    round.intermissionEndsAt = now + DM_INTERMISSION_MS;
+    round.finalScores = [...this.connections.values()].map((c) => ({
+      characterId: c.characterId,
+      displayName: c.displayName,
+      kills: c.kills,
+      deaths: c.deaths,
+    }));
+    round.finalScores.sort((a, b) =>
+      b.kills - a.kills || a.deaths - b.deaths,
+    );
+    this.broadcastAll({
+      type: 'dm_round_end',
+      reason,
+      winnerCharacterId: winner,
+      intermissionEndsAt: round.intermissionEndsAt,
+      scores: round.finalScores,
+    });
+  }
+
+  // Intermission → fresh round. Zeroes every connection's score
+  // counters, kicks any still-dead players back to a spawn (so
+  // the next round doesn't start with corpses), and broadcasts
+  // the round-start event with the new timer.
+  private beginDeathmatchRound(now: number): void {
+    const round = this.deathmatchRound;
+    if (!round) return;
+    for (const c of this.connections.values()) {
+      c.kills = 0;
+      c.deaths = 0;
+    }
+    round.startedAt = now;
+    round.intermissionEndsAt = null;
+    round.winnerCharacterId = null;
+    round.finalScores = null;
+    // Any players still in the dead/respawning state get yanked
+    // back into the round immediately. The respawn path handles
+    // pickering a fresh spawn point.
+    for (const c of this.connections.values()) {
+      if (!c.alive) this.respawnPlayer(c.characterId);
+    }
+    this.broadcastAll({
+      type: 'dm_round_start',
+      startedAt: round.startedAt,
+      killsToWin: round.killsToWin,
+      durationMs: round.durationMs,
+    });
+    this.broadcastDeathmatchScores();
+  }
+
+  // Push the current per-player kill/death table. Used after every
+  // PvP kill that doesn't end the round, and once at round start.
+  private broadcastDeathmatchScores(): void {
+    const scores = [...this.connections.values()].map((c) => ({
+      characterId: c.characterId,
+      displayName: c.displayName,
+      kills: c.kills,
+      deaths: c.deaths,
+    }));
+    scores.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+    this.broadcastAll({
+      type: 'dm_scores',
+      scores,
+    });
+  }
+
   private async checkPausedFlag(now: number): Promise<void> {
+    if (this.isSandbox) return;
     if (this.pausing) return;
     if (now - this.lastPauseCheckAt < 5_000) return;
     this.lastPauseCheckAt = now;
@@ -2833,13 +3708,18 @@ export class World {
     }
   }
 
-  // Called by Scene whenever a player dies. Posts a system chat line
-  // and lets the world do any cross-scene bookkeeping in one place.
+  // Called by Scene whenever a player dies. Posts a system chat
+  // line — the kill feed in every mode goes through here. The
+  // `killer` arg is a characterId (or null for environmental
+  // deaths); we resolve it to a display name so chat reads
+  // "A was killed by B" instead of leaking the opaque id.
   notifyPlayerDied(characterId: string, killer: string | null): void {
     const conn = this.connections.get(characterId);
     if (!conn) return;
-    const text = killer
-      ? `${conn.displayName} was killed by ${killer}.`
+    const killerConn = killer ? this.connections.get(killer) : null;
+    const killerName = killerConn?.displayName ?? null;
+    const text = killerName
+      ? `${killerName} killed ${conn.displayName}.`
       : `${conn.displayName} died.`;
     this.systemChat(text);
   }
@@ -2895,12 +3775,41 @@ export class World {
     // Same (worldSeed, cycle, band) inputs across the cycle, so
     // every player on the server sees the same biome layout.
     const biome = biomeForFloor(this.worldSeed, this.cycle, floorIndex);
-    const layout = generateFloorLayout(
-      this.worldSeed,
-      this.cycle,
-      floorIndex,
-      biome,
-    );
+    // Floor override: an authored scene pinned to this floor
+    // index bypasses procgen entirely. Per-server takes priority
+    // over global; cycle is ignored — pinned floors are stable
+    // across perihelion (the dungeon's "skeleton").
+    // Per-server overrides need a world identity that isn't yet
+    // wired through to this class; pass null so only `global`
+    // entries resolve. Wire the real server id when scene_overrides
+    // gains per-server pinning (admin UI follow-up).
+    const overrideSceneId = floorOverrideFor(null, floorIndex);
+    let layout: SceneLayout;
+    if (overrideSceneId) {
+      const polyScene = getOverrideScene(overrideSceneId);
+      if (polyScene) {
+        layout = rasterizeSectorSceneToLayout(polyScene);
+      } else {
+        // Reference points at a missing/broken scene. Log and
+        // fall through to procgen so the floor still loads.
+        console.warn(
+          `[world] floor ${floorIndex} override "${overrideSceneId}" missing from scene cache; falling back to procgen`,
+        );
+        layout = generateFloorLayout(
+          this.worldSeed,
+          this.cycle,
+          floorIndex,
+          biome,
+        );
+      }
+    } else {
+      layout = generateFloorLayout(
+        this.worldSeed,
+        this.cycle,
+        floorIndex,
+        biome,
+      );
+    }
     const meta = generateLockedRoomMeta(
       layout,
       this.worldSeed,
@@ -2966,7 +3875,8 @@ export class World {
       this.lastTickAt = Date.now();
       this.tickTimer = setInterval(() => this.tick(), COMBAT.TICK_MS);
     }
-    if (!this.persistTimer) {
+    // No persistence in sandbox mode — there's nothing to save.
+    if (!this.persistTimer && !this.isSandbox) {
       this.persistTimer = setInterval(() => this.flushConnections(), 5000);
     }
   }
@@ -3017,6 +3927,7 @@ export class World {
   }
 
   private async persistConnection(conn: Connection): Promise<void> {
+    if (this.isSandbox) return;
     const { error } = await supabase
       .from('characters')
       .update({
@@ -3027,6 +3938,9 @@ export class World {
           slots: conn.inventory,
           equipment: conn.equipment,
           hotbarSelection: conn.hotbarSelection,
+          // Learned schematics are permanent — additive optional field,
+          // old schema-4 saves without it hydrate to the starter set.
+          blueprints: mergedBlueprints(conn),
         },
       })
       .eq('id', conn.characterId);
@@ -3040,10 +3954,6 @@ export class World {
 }
 
 // ---------- helpers ----------
-
-function clamp(n: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, n));
-}
 
 function mergedBlueprints(conn: Connection): string[] {
   const merged = new Set<string>(conn.knownBlueprints);
@@ -3068,14 +3978,16 @@ function toPlayer(conn: Connection): Player {
   };
 }
 
-// Defensive parse — anything that doesn't match the current schema is dropped
-// rather than crashing the world boot. Snapshots from older schema numbers
-// silently get treated as "no snapshot" so a fresh world is built.
-function parseWorldSnapshot(raw: unknown): WorldSnapshotV3 | null {
+// Defensive parse — anything that doesn't match a loadable schema is dropped
+// rather than crashing the world boot. v3 is accepted (v4 only added the
+// optional craftJobs field) so live worlds don't lose their buildings and
+// corpses on the upgrade boundary; anything older is treated as "no
+// snapshot" and a fresh world is built.
+function parseWorldSnapshot(raw: unknown): WorldSnapshot | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as { schema?: unknown; scenes?: unknown };
-  if (r.schema !== WORLD_SNAPSHOT_SCHEMA) return null;
+  if (r.schema !== WORLD_STATE_SCHEMA && r.schema !== 3) return null;
   if (!r.scenes || typeof r.scenes !== 'object') return null;
   // Trust the rest — we wrote it ourselves in flushSnapshot.
-  return raw as WorldSnapshotV3;
+  return raw as WorldSnapshot;
 }

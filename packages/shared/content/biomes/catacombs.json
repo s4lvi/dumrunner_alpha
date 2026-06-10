@@ -8,14 +8,6 @@
     "accent": "#a855f7"
   },
   "generation": {
-    "roomCountMin": 10,
-    "roomCountMax": 32,
-    "roomSizeMin": 4,
-    "roomSizeMax": 9,
-    "corridorWidth": 2,
-    "branching": 0.5,
-    "roomTemplateChance": 0.45,
-    "tunnelerCount": 1,
     "propDensity": 0.065,
     "enemyDensity": 0.06,
     "lootDensity": 0.5,

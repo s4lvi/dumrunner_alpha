@@ -23,7 +23,7 @@ import type { SandboxConnectionStatus } from '@/lib/sandbox';
 export function EnemyPreview({ enemyId }: { enemyId: string }) {
   const previewRef = useRef<SandboxPreviewHandle | null>(null);
   const [status, setStatus] = useState<SandboxConnectionStatus>('idle');
-  const [mode, setMode] = useState<SandboxPreviewMode>('fps');
+  const mode: SandboxPreviewMode = 'fps-v2';
   const [error, setError] = useState<string | null>(null);
   const [loadoutApplied, setLoadoutApplied] = useState(false);
 
@@ -47,21 +47,7 @@ export function EnemyPreview({ enemyId }: { enemyId: string }) {
   return (
     <div className="flex flex-col h-full w-full">
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/40 shrink-0">
-        <span className="text-[10px] font-mono text-zinc-500">
-          {status} · {mode}
-        </span>
-        <div className="flex gap-1 ml-2">
-          <ToolButton
-            active={mode === 'fps'}
-            label="fps"
-            onClick={() => setMode('fps')}
-          />
-          <ToolButton
-            active={mode === 'topdown'}
-            label="topdown"
-            onClick={() => setMode('topdown')}
-          />
-        </div>
+        <span className="text-[10px] font-mono text-zinc-500">{status}</span>
         <span className="ml-3 text-[10px] font-mono text-zinc-500">
           spawning: <span className="text-zinc-300">{enemyId || '(no id)'}</span>
         </span>
@@ -96,26 +82,3 @@ export function EnemyPreview({ enemyId }: { enemyId: string }) {
   );
 }
 
-function ToolButton({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`text-[10px] px-2 py-0.5 rounded border ${
-        active
-          ? 'bg-zinc-800 border-zinc-600 text-zinc-100'
-          : 'border-zinc-800 text-zinc-400 hover:bg-zinc-800/50'
-      }`}
-    >
-      {label}
-    </button>
-  );
-}

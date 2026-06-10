@@ -26,14 +26,13 @@ import {
   type RecipeDef,
 } from '@dumrunner/shared';
 import {
+  contentDir,
   deleteEntity,
   isEditorArea,
   loadBiome,
   loadBiomes,
   loadBlueprint,
   loadBlueprints,
-  loadCorridor,
-  loadCorridors,
   loadEnemies,
   loadEnemy,
   loadProp,
@@ -48,6 +47,8 @@ import {
   loadRecipes,
   loadRoom,
   loadRooms,
+  loadScene,
+  loadScenes,
   loadWeapon,
   loadWeapons,
   saveAnimation,
@@ -55,14 +56,46 @@ import {
   saveBiome,
   saveBlueprint,
   saveBuildingOverride,
-  saveCorridor,
   saveEnemy,
   saveProp,
   saveRecipe,
   saveRoom,
+  saveScene,
   saveWeapon,
   type EditorArea,
 } from '@dumrunner/shared/content/loader';
+
+// Cheap per-file mtime lookup. The loader doesn't expose stats,
+// so the API route stats the directory directly. Production
+// (manifest-only) never calls this — there's nothing to overwrite.
+async function entityMtimes(
+  area: EditorArea,
+  ids: string[],
+): Promise<Record<string, number>> {
+  const dir = contentDir(area);
+  const out: Record<string, number> = {};
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const stat = await fs.stat(path.join(dir, `${id}.json`));
+        out[id] = stat.mtimeMs;
+      } catch {
+        // Missing file — leave the id out so the client treats
+        // the entry as new (no If-Match header).
+      }
+    }),
+  );
+  return out;
+}
+
+async function entityMtime(area: EditorArea, id: string): Promise<number | null> {
+  try {
+    const stat = await fs.stat(path.join(contentDir(area), `${id}.json`));
+    return stat.mtimeMs;
+  } catch {
+    return null;
+  }
+}
 
 const SAFE_ID = /^[a-z0-9_-]+$/;
 
@@ -124,39 +157,39 @@ const LIST: Record<EditorArea, () => Promise<unknown[]>> = {
   enemies: loadEnemies,
   props: loadProps,
   rooms: loadRooms,
-  corridors: loadCorridors,
   blueprints: loadBlueprints,
   weapons: loadWeapons,
   recipes: loadRecipes,
   attachments: loadAttachments,
   animations: loadAnimations,
   buildings: loadBuildingOverrides,
+  scenes: loadScenes,
 };
 const ONE: Record<EditorArea, (id: string) => Promise<unknown | null>> = {
   biomes: loadBiome,
   enemies: loadEnemy,
   props: loadProp,
   rooms: loadRoom,
-  corridors: loadCorridor,
   blueprints: loadBlueprint,
   weapons: loadWeapon,
   recipes: loadRecipe,
   attachments: loadAttachment,
   animations: loadAnimation,
   buildings: loadBuildingOverride,
+  scenes: loadScene,
 };
 const SAVE: Record<EditorArea, (data: unknown) => Promise<unknown>> = {
   biomes: saveBiome,
   enemies: saveEnemy,
   props: saveProp,
   rooms: saveRoom,
-  corridors: saveCorridor,
   blueprints: saveBlueprint,
   weapons: saveWeapon,
   recipes: saveRecipe,
   attachments: saveAttachment,
   animations: saveAnimation,
   buildings: saveBuildingOverride,
+  scenes: saveScene,
 };
 
 export async function GET(
@@ -207,8 +240,12 @@ export async function GET(
     }
   }
   try {
-    const entries = await LIST[area]();
-    return NextResponse.json({ entries });
+    const entries = (await LIST[area]()) as Array<{ id: string }>;
+    const mtimes = await entityMtimes(
+      area,
+      entries.map((e) => e.id),
+    );
+    return NextResponse.json({ entries, mtimes });
   } catch (e) {
     return NextResponse.json(
       { error: (e as Error).message },
@@ -242,6 +279,25 @@ export async function POST(
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
+  }
+  // Snapshot conflict guard. If the client provides an If-Match
+  // header and the existing file's mtime differs, reject — the
+  // file changed since the client loaded it.
+  const ifMatch = req.headers.get('if-match');
+  if (ifMatch) {
+    const id = (body as { id?: string }).id;
+    if (typeof id === 'string' && SAFE_ID.test(id)) {
+      const current = await entityMtime(area, id);
+      if (current !== null && Math.abs(current - Number(ifMatch)) > 0.5) {
+        return NextResponse.json(
+          {
+            error:
+              'This entity changed on disk since you opened it. Reload before saving.',
+          },
+          { status: 409 },
+        );
+      }
+    }
   }
   // Cross-area validation runs BEFORE the per-file Zod parse so
   // referential errors (missing recipe, dangling prereq, cycle in

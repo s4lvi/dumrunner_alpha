@@ -22,9 +22,11 @@ import type {
   WeaponFamilyKind,
   ProjectileKind,
 } from '@dumrunner/shared';
-import { BUILDING_REGISTRY } from '@dumrunner/shared';
+import { BUILDING_REGISTRY, WeaponDefSchema } from '@dumrunner/shared';
+import type { z } from 'zod';
 import {
   Button,
+  ConfirmButton,
   EnumField,
   FieldRow,
   FormSection,
@@ -122,9 +124,12 @@ function WeaponEditorBody() {
     createNew,
     error,
     saving,
+    validationError,
+    canSave,
   } = useEntityEditor<WeaponDef>('weapons', {
     makeBlank,
     newIdPrefix: 'weapon',
+    schema: WeaponDefSchema as unknown as z.ZodType<WeaponDef>,
   });
 
   const sortedEntries = useMemo(
@@ -189,9 +194,8 @@ function WeaponEditorBody() {
     return errs;
   }, [draft]);
 
-  const blockSave = localErrors.some(
-    (e) => !e.startsWith('note:'),
-  ) || saving;
+  const blockSave =
+    localErrors.some((e) => !e.startsWith('note:')) || !canSave;
 
   return (
     <div className="flex h-full">
@@ -237,9 +241,9 @@ function WeaponEditorBody() {
                   <Button onClick={save} disabled={blockSave}>
                     {saving ? 'saving…' : 'save'}
                   </Button>
-                  <Button onClick={remove} variant="danger">
+                  <ConfirmButton onConfirm={remove} variant="danger">
                     delete
-                  </Button>
+                  </ConfirmButton>
                 </div>
               </div>
 
@@ -248,8 +252,9 @@ function WeaponEditorBody() {
                   {error}
                 </div>
               )}
-              {localErrors.length > 0 && (
+              {(localErrors.length > 0 || validationError) && (
                 <div className="mb-3 px-3 py-2 rounded bg-amber-950/40 border border-amber-900/80 text-amber-200 text-xs space-y-1">
+                  {validationError && <div>• {validationError}</div>}
                   {localErrors.map((e, i) => (
                     <div key={i}>• {e}</div>
                   ))}

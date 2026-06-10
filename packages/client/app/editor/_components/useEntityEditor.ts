@@ -14,12 +14,14 @@
 // Renaming the id is handled — after a save we re-select the
 // (possibly-renamed) draft.id.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import type { z } from 'zod';
 import {
-  listEntities,
+  listEntitiesWithMtimes,
   saveEntity,
   deleteEntity,
+  type EntityMtimes,
 } from '@/lib/editorContentClient';
 import type { EditorArea } from '@dumrunner/shared/content/loader';
 
@@ -32,25 +34,24 @@ export type EntityEditorState<T extends { id: string }> = {
   refresh: () => Promise<void>;
   save: () => Promise<boolean>;
   remove: () => Promise<boolean>;
-  createNew: () => void;
+  createNew: (id?: string) => boolean;
   error: string | null;
   setError: (e: string | null) => void;
   saving: boolean;
+  validationError: string | null;
+  canSave: boolean;
 };
 
+const ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
+
 export type EntityEditorOptions<T extends { id: string }> = {
-  // Called when the user clicks "+ new". Returns a fresh entity
-  // with a unique-ish id seeded from the area name + a timestamp
-  // suffix; pages can override the seed by passing makeBlank that
-  // takes their own id.
   makeBlank: (id: string) => T;
-  // Override the auto-generated new entity id prefix. Defaults to
-  // the area name (e.g. 'biome_<ts>' or 'enemy_<ts>').
   newIdPrefix?: string;
-  // Hook called BEFORE save so pages can inject computed fields
-  // (e.g. rooms editor derives entrySides from anchor positions).
-  // Returning the input unchanged is the no-op.
   beforeSave?: (draft: T) => T;
+  // Optional Zod schema. When provided, the draft is parsed on
+  // every change and the first issue's message surfaces as
+  // `validationError`; save is gated through `canSave`.
+  schema?: z.ZodType<T>;
 };
 
 export function useEntityEditor<T extends { id: string }>(
@@ -58,23 +59,71 @@ export function useEntityEditor<T extends { id: string }>(
   options: EntityEditorOptions<T>,
 ): EntityEditorState<T> {
   const [entries, setEntries] = useState<T[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mtimes, setMtimes] = useState<EntityMtimes>({});
+  const [selectedId, setSelectedIdRaw] = useState<string | null>(null);
   const [draft, setDraft] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Stable ref so refresh() doesn't capture a stale selectedId
-  // (the closure runs against the value at refresh-time, not at
-  // hook-invocation-time).
+  // Stable ref so refresh() doesn't capture a stale selectedId.
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
 
+  // Dirty = the in-flight draft differs from the saved version of
+  // the selected entry. Cheap structural compare via stringify;
+  // entity payloads are small.
+  const selectedEntry = selectedId
+    ? entries.find((e) => e.id === selectedId) ?? null
+    : null;
+  const dirty =
+    draft !== null &&
+    selectedEntry !== null &&
+    JSON.stringify(draft) !== JSON.stringify(selectedEntry);
+
+  // Guarded selection swap — confirm before discarding dirty edits.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const setSelectedId = useCallback((next: string | null) => {
+    if (dirtyRef.current && next !== selectedIdRef.current) {
+      if (!confirm('Discard unsaved changes?')) return;
+    }
+    setSelectedIdRaw(next);
+  }, []);
+
+  // Browser-level guard for tab close / refresh / navigation.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+
+  // Cmd/Ctrl-S → save. Stable ref so the listener picks up the
+  // latest closure (save changes on every draft mutation).
+  const saveRef = useRef<() => Promise<boolean>>(async () => false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        void saveRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
-      const r = (await listEntities(area as 'biomes')) as unknown as T[];
-      setEntries(r);
+      const { entries: r, mtimes: m } = await listEntitiesWithMtimes(
+        area as 'biomes',
+      );
+      setEntries(r as unknown as T[]);
+      setMtimes(m);
       const sel = selectedIdRef.current;
-      if (sel && !r.some((e) => e.id === sel)) {
-        setSelectedId(null);
+      if (sel && !(r as unknown as T[]).some((e) => e.id === sel)) {
+        setSelectedIdRaw(null);
         setDraft(null);
       }
     } catch (e) {
@@ -94,7 +143,7 @@ export function useEntityEditor<T extends { id: string }>(
   const urlId = searchParams.get('id');
   useEffect(() => {
     if (urlId && urlId !== selectedIdRef.current) {
-      setSelectedId(urlId);
+      setSelectedIdRaw(urlId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlId]);
@@ -109,34 +158,38 @@ export function useEntityEditor<T extends { id: string }>(
     if (found) setDraft(structuredClone(found));
   }, [selectedId, entries]);
 
-  const save = useCallback(async (): Promise<boolean> => {
+  const save: () => Promise<boolean> = useCallback(async (): Promise<boolean> => {
     if (!draft) return false;
     setSaving(true);
     setError(null);
     try {
       const payload = options.beforeSave ? options.beforeSave(draft) : draft;
-      // The content client is typed per-area; areas other than
-      // 'biomes' work the same way at runtime so we cast through
-      // unknown for the generic call.
-      await saveEntity(area as 'biomes', payload as never);
+      const ifMatch = mtimes[selectedIdRef.current ?? ''];
+      await saveEntity(area as 'biomes', payload as never, ifMatch);
       await refresh();
-      // After a save the entry's id may have been renamed via
-      // form edit — re-select on the (possibly new) id so the
-      // form stays open on the just-saved entity.
-      setSelectedId(payload.id);
+      setSelectedIdRaw(payload.id);
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      const msg = (e as Error).message;
+      setError(msg);
+      // 409 surfaces from the server with a "changed on disk"
+      // message. Offer a reload — accept = pull the latest version
+      // into the draft (loses unsaved edits).
+      if (/changed on disk/i.test(msg)) {
+        if (confirm('File changed on disk. Reload (discard edits)?')) {
+          await refresh();
+        }
+      }
       return false;
     } finally {
       setSaving(false);
     }
-  }, [area, draft, options, refresh]);
+  }, [area, draft, mtimes, options, refresh]);
+  saveRef.current = save;
 
   const remove = useCallback(async (): Promise<boolean> => {
     const id = selectedId;
     if (!id) return false;
-    if (!confirm(`Delete ${area.replace(/s$/, '')} "${id}"?`)) return false;
     try {
       await deleteEntity(area as 'biomes', id);
       await refresh();
@@ -147,13 +200,44 @@ export function useEntityEditor<T extends { id: string }>(
     }
   }, [area, refresh, selectedId]);
 
-  const createNew = useCallback(() => {
-    const prefix = options.newIdPrefix ?? area.replace(/s$/, '');
-    const id = `${prefix}_${Date.now().toString(36)}`;
-    const blank = options.makeBlank(id);
-    setEntries((cur) => [...cur, blank]);
-    setSelectedId(id);
-  }, [area, options]);
+  const createNew = useCallback(
+    (id?: string): boolean => {
+      const prefix = options.newIdPrefix ?? area.replace(/s$/, '');
+      const requested = (id ?? '').trim().toLowerCase();
+      const finalId = requested.length > 0
+        ? requested
+        : `${prefix}_${Date.now().toString(36)}`;
+      if (!ID_PATTERN.test(finalId)) {
+        setError(`Invalid id "${finalId}" — use lowercase letters, digits, _ or -.`);
+        return false;
+      }
+      if (entries.some((e) => e.id === finalId)) {
+        setError(`"${finalId}" already exists.`);
+        return false;
+      }
+      if (dirtyRef.current) {
+        if (!confirm('Discard unsaved changes?')) return false;
+      }
+      const blank = options.makeBlank(finalId);
+      setEntries((cur) => [...cur, blank]);
+      setSelectedIdRaw(finalId);
+      setError(null);
+      return true;
+    },
+    [area, entries, options],
+  );
+
+  const validationError = useMemo<string | null>(() => {
+    if (!draft || !options.schema) return null;
+    const result = options.schema.safeParse(draft);
+    if (result.success) return null;
+    const first = result.error.issues[0];
+    if (!first) return 'invalid';
+    const path = first.path.join('.');
+    return path ? `${path}: ${first.message}` : first.message;
+  }, [draft, options.schema]);
+
+  const canSave = !saving && !validationError && draft !== null;
 
   return {
     entries,
@@ -168,5 +252,7 @@ export function useEntityEditor<T extends { id: string }>(
     error,
     setError,
     saving,
+    validationError,
+    canSave,
   };
 }

@@ -13,7 +13,6 @@ import { useRef, useState } from 'react';
 import {
   SandboxPreview,
   type SandboxPreviewHandle,
-  type SandboxPreviewMode,
 } from '../_components/SandboxPreview';
 import { Button } from '../_components/Form';
 import type { SandboxConnectionStatus } from '@/lib/sandbox';
@@ -21,7 +20,6 @@ import type { SandboxConnectionStatus } from '@/lib/sandbox';
 export default function SandboxTestPage() {
   const previewRef = useRef<SandboxPreviewHandle | null>(null);
   const [status, setStatus] = useState<SandboxConnectionStatus>('idle');
-  const [mode, setMode] = useState<SandboxPreviewMode>('fps');
   const [enemyKinds, setEnemyKinds] = useState<string[]>([]);
   const [biomeIds, setBiomeIds] = useState<string[]>([]);
   const [selectedKind, setSelectedKind] = useState<string>('');
@@ -65,30 +63,6 @@ export default function SandboxTestPage() {
         <span className="text-[10px] font-mono text-zinc-500">
           status: <span className="text-zinc-300">{status}</span>
         </span>
-        <div className="ml-2 flex gap-1">
-          <button
-            type="button"
-            onClick={() => setMode('fps')}
-            className={`text-[10px] px-2 py-0.5 rounded border ${
-              mode === 'fps'
-                ? 'bg-zinc-800 border-zinc-600 text-zinc-100'
-                : 'border-zinc-800 text-zinc-400 hover:bg-zinc-800/50'
-            }`}
-          >
-            fps
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('topdown')}
-            className={`text-[10px] px-2 py-0.5 rounded border ${
-              mode === 'topdown'
-                ? 'bg-zinc-800 border-zinc-600 text-zinc-100'
-                : 'border-zinc-800 text-zinc-400 hover:bg-zinc-800/50'
-            }`}
-          >
-            topdown
-          </button>
-        </div>
         <label className="ml-4 flex items-center gap-1 text-xs">
           <span className="text-zinc-300">enemy kind</span>
           <select
@@ -197,7 +171,7 @@ export default function SandboxTestPage() {
       <div className="flex-1 min-h-0 relative">
         <SandboxPreview
           ref={previewRef}
-          mode={mode}
+          mode="fps-v2"
           onStatusChange={setStatus}
           onError={(e) => setError(e.message)}
           onWelcome={(welcome) => {

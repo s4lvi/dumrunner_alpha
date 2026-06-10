@@ -16,7 +16,6 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AnchorKind,
   BiomeDef,
-  RoomEdge,
   RoomRole,
   RoomTemplate,
   TileDef,
@@ -24,8 +23,10 @@ import type {
 import {
   DEFAULT_FLOOR_TILE_ID,
   DEFAULT_WALL_TILE_ID,
+  RoomTemplateSchema,
   VOID_TILE_ID,
 } from '@dumrunner/shared';
+import type { z } from 'zod';
 import { listEntities } from '@/lib/editorContentClient';
 import { useEntityEditor } from '../_components/useEntityEditor';
 import { EntityList } from '../_components/EntityList';
@@ -33,6 +34,7 @@ import { RoomPreview as SandboxRoomPreview } from '../_components/RoomPreview';
 import { ReferencesPanel } from '../_components/ReferencesPanel';
 import {
   Button,
+  ConfirmButton,
   EnumField,
   FormSection,
   NumberField,
@@ -135,7 +137,6 @@ function makeBlank(id = 'new_room'): RoomTemplate {
     width,
     height,
     tilesB64: encodeTiles(tiles),
-    entrySides: ['N', 'S', 'E', 'W'],
     anchors: [],
     role: 'normal',
     weight: 1,
@@ -181,14 +182,16 @@ function RoomEditorBody() {
     createNew,
     error,
     saving,
+    validationError,
+    canSave,
   } = useEntityEditor<RoomTemplate>('rooms', {
     makeBlank,
     newIdPrefix: 'room',
     beforeSave: (d) => ({
       ...d,
       tilesB64: encodeTiles(tilesRef.current),
-      entrySides: deriveEntrySides({ ...d, tilesB64: '' }),
     }),
+    schema: RoomTemplateSchema as unknown as z.ZodType<RoomTemplate>,
   });
 
   useEffect(() => {
@@ -348,10 +351,18 @@ function RoomEditorBody() {
           </button>
           {draft && (
             <div className="ml-auto flex gap-2">
-              <Button variant="danger" onClick={onDelete}>
+              <ConfirmButton variant="danger" onConfirm={onDelete}>
                 Delete
-              </Button>
-              <Button variant="primary" disabled={saving} onClick={onSave}>
+              </ConfirmButton>
+              {validationError && (
+                <span
+                  title={validationError}
+                  className="text-[10px] text-red-300 font-mono max-w-[20rem] truncate self-center mr-2"
+                >
+                  {validationError}
+                </span>
+              )}
+              <Button variant="primary" disabled={!canSave} onClick={onSave}>
                 {saving ? 'Saving…' : 'Save'}
               </Button>
             </div>
@@ -801,20 +812,3 @@ function BiomeAffinityField({
   );
 }
 
-// Auto-derive the entrySides flags from the template's entry
-// anchors at save time. Author drops 'entry' anchors on the
-// canvas; whichever sides they sit on become eligible. When no
-// entry anchors are placed, default to all four sides so a
-// template missing the metadata is still usable everywhere.
-function deriveEntrySides(draft: RoomTemplate): RoomEdge[] {
-  const sides = new Set<RoomEdge>();
-  for (const a of draft.anchors) {
-    if (a.kind !== 'entry') continue;
-    if (a.tx === 0) sides.add('W');
-    if (a.tx === draft.width - 1) sides.add('E');
-    if (a.ty === 0) sides.add('N');
-    if (a.ty === draft.height - 1) sides.add('S');
-  }
-  if (sides.size === 0) return ['N', 'S', 'E', 'W'];
-  return Array.from(sides);
-}

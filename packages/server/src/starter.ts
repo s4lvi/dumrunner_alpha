@@ -77,7 +77,7 @@ export function buildPlaytestInventory(): Inventory {
   inv[4] = { kind: 'weapon', weapon: makeWeapon('sniper', 2) };
   inv[5] = { kind: 'weapon', weapon: makeWeapon('heavy', 3) };
   inv[6] = { kind: 'weapon', weapon: makeWeapon('energy', 4) };
-  inv[7] = { kind: 'weapon', weapon: makeWeapon('sword') };
+  inv[7] = { kind: 'weapon', weapon: makeWeapon('energy_blade') };
   inv[8] = { kind: 'weapon', weapon: makeWeapon('knife') };
 
   // Bag: ammo, materials, upgrade items, attachments, consumables.

@@ -155,6 +155,11 @@ export function effectiveWeaponStats(
   const family = weaponFamily(weapon.weaponId);
   if (family === 'melee') return null;
   const base = WEAPON_STATS[family];
+  // Unknown family (registry not yet hydrated, or weaponId
+  // points at a removed / unauthored kind). Return null so
+  // callers can short-circuit the same way they do for melee
+  // — no callsite needs to defensively handle a missing base.
+  if (!base) return null;
   const eff = computeWeaponEffect(weapon);
   const tier = tierStatScale(weapon.tier);
   const fireIntervalMs = base.fireIntervalMs * tier.fireInterval * eff.fireIntervalMult;

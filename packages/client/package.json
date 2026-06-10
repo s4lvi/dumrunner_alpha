@@ -16,6 +16,7 @@
     "@dumrunner/shared": "*",
     "@supabase/ssr": "^0.5.1",
     "@supabase/supabase-js": "^2.45.4",
+    "earcut": "^3.0.2",
     "next": "^15.0.0",
     "pixi.js": "^8.5.1",
     "react": "^19.0.0",

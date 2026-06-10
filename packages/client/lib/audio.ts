@@ -190,6 +190,31 @@ class AudioManager {
     this.applyMusicTarget();
   }
 
+  // Synchronously stop all background music + cancel any in-progress
+  // fade. Used by the play-session cleanup so music doesn't bleed
+  // into the lobby / editor pages after the player exits — the
+  // fade-based playMusic(null) was unreliable when unmounting raced
+  // against the 600ms fade and an audio element was left playing
+  // at near-zero volume that the browser kept alive across navigation.
+  stopMusic() {
+    if (typeof window === 'undefined') return;
+    if (this.fadeRaf) {
+      cancelAnimationFrame(this.fadeRaf);
+      this.fadeRaf = null;
+    }
+    for (const a of this.music.values()) {
+      try {
+        a.pause();
+        a.currentTime = 0;
+        a.volume = 0;
+      } catch {
+        /* best-effort */
+      }
+    }
+    this.currentMusic = null;
+    this.targetMusic = null;
+  }
+
   private applyMusicTarget() {
     if (!this.unlocked || typeof window === 'undefined') return;
     if (this.targetMusic === this.currentMusic && !this.fadeRaf) return;

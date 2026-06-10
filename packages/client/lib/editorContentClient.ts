@@ -12,11 +12,11 @@ import type {
   BiomeDef,
   BlueprintDef,
   BuildingOverride,
-  CorridorTemplate,
   EnemyDef,
   PropDef,
   RecipeDef,
   RoomTemplate,
+  SceneDef,
   WeaponDef,
 } from '@dumrunner/shared';
 import type { EditorArea } from '@dumrunner/shared/content/loader';
@@ -29,13 +29,13 @@ type Schema = {
   enemies: EnemyDef;
   props: PropDef;
   rooms: RoomTemplate;
-  corridors: CorridorTemplate;
   blueprints: BlueprintDef;
   weapons: WeaponDef;
   recipes: RecipeDef;
   attachments: AttachmentDefData;
   animations: AnimationDef;
   buildings: BuildingOverride;
+  scenes: SceneDef;
 };
 type Area = EditorArea;
 
@@ -59,6 +59,11 @@ async function safeError(r: Response): Promise<string> {
   }
 }
 
+// Mtime carried per-entry by the list endpoint. Used by the
+// editor to detect "this file changed since you loaded it" on
+// save (If-Match header → 409 on mismatch).
+export type EntityMtimes = Record<string, number>;
+
 export async function listEntities<A extends Area>(
   area: A,
 ): Promise<Schema[A][]> {
@@ -68,13 +73,28 @@ export async function listEntities<A extends Area>(
   return entries;
 }
 
+export async function listEntitiesWithMtimes<A extends Area>(
+  area: A,
+): Promise<{ entries: Schema[A][]; mtimes: EntityMtimes }> {
+  const { entries, mtimes } = await getJson<{
+    entries: Schema[A][];
+    mtimes?: EntityMtimes;
+  }>(`${BASE}/${area}`);
+  return { entries, mtimes: mtimes ?? {} };
+}
+
 export async function saveEntity<A extends Area>(
   area: A,
   data: Schema[A],
+  ifMatch?: number,
 ): Promise<Schema[A]> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+  };
+  if (ifMatch !== undefined) headers['If-Match'] = String(ifMatch);
   const r = await fetch(`${BASE}/${area}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify(data),
   });
   if (!r.ok) throw new Error(await safeError(r));

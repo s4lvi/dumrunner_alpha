@@ -122,111 +122,21 @@ const biomePaletteSchema = z
   })
   .strict();
 
-// Floor generator selector. 'tunneling' = the legacy rect-rooms +
-// MST/loop corridor pipeline (Catacombs / Frozen / Sun-Bleached);
-// 'walker' = drunkard's-walk carve producing one organic blob with
-// implicit chambers (Alien Core). Walker output skips room
-// templates and locked rooms in this slice — those are
-// rect-coupled and don't fit the carved-region model. New biomes
-// without an explicit value default to 'tunneling'.
-export const BiomeGeneratorKindSchema = z.enum(['tunneling', 'walker']);
+// Procgen generator picker. 'bsp' subdivides the bounds into
+// rect leaves; 'tunneler' walks agents that carve corridors +
+// rooms. Both feed the same assembler / finalize pipeline.
+export const BiomeGeneratorKindSchema = z.enum(['bsp', 'tunneler']);
 export type BiomeGeneratorKind = z.infer<typeof BiomeGeneratorKindSchema>;
 
 const biomeGenerationSchema = z
   .object({
     generator: BiomeGeneratorKindSchema.optional(),
-    // ---- tunneling params (rect rooms + MST/loop corridors) ----
-    // All optional with built-in defaults so walker biomes don't
-    // need to author them. Tunneling biomes that don't set these
-    // get the legacy hardcoded values: 10 rooms of 5..64 tiles,
-    // 2-tile corridors, 0.25 loop chance.
-    roomCountMin: z.number().int().positive().optional(),
-    roomCountMax: z.number().int().positive().optional(),
-    // Tiles per dim — 4 means a min 4×4 room.
-    roomSizeMin: z.number().int().positive().optional(),
-    roomSizeMax: z.number().int().positive().optional(),
-    // Initial tunneler width in tiles. Tunnelers can step their
-    // width up / down via widthChangeChance, but most corridors
-    // settle around this value. 1 = thin Cogmind-style corridors,
-    // 3 = wide industrial halls.
-    corridorWidth: z.number().int().positive().optional(),
-    // When true, every tunneler (parents + babies) keeps the
-    // initial corridorWidth — no jitter on spawn, no width-change
-    // rolls per step. Useful when a biome wants strictly uniform
-    // corridors (e.g. a vault layout where every door fits).
-    lockCorridorWidth: z.boolean().optional(),
-    // 0..1 — chance per step a tunneler spawns a child tunneler
-    // (a new agent at the same position with a perpendicular
-    // direction). Higher = denser, more-junction maps.
-    branching: z.number().min(0).max(1).optional(),
-    // 0..1 — chance an eligible authored room template is used
-    // for a room slot. 1 = always try template first (legacy);
-    // 0 = ignore templates entirely and keep every room as a
-    // procedural rect sized by roomSizeMin / roomSizeMax. Lower
-    // values mix designed rooms with random rects so a biome
-    // doesn't feel hand-crafted at every step.
-    roomTemplateChance: z.number().min(0).max(1).optional(),
-    // ---- tunneler-only knobs ----
-    // Number of agents seeded at origin at the start of generation.
-    // 2 produces a Cogmind-style "two-arm" map; 4 fills the floor
-    // faster from all directions.
-    tunnelerCount: z.number().int().positive().optional(),
-    // Cap on total agent steps across the whole generation. The
-    // run stops early if all agents die first; this is just a
-    // fail-safe + density knob.
-    tunnelerStepBudget: z.number().int().positive().optional(),
-    // 0..1 per step: chance an agent rotates 90° (left or right
-    // with equal probability). 0 = straight tunnels forever; 0.2
-    // = jagged, lots of corners.
-    turnChance: z.number().min(0).max(1).optional(),
-    // 0..1 per step: chance an agent spawns a room next to its
-    // current position (perpendicular to its direction). Stops
-    // once roomCountMax is reached.
-    roomChance: z.number().min(0).max(1).optional(),
-    // 0..1 per step: chance an agent's width steps by ±1 (clamped
-    // to 1..corridorWidth+2). Low values = uniform corridors;
-    // high values = corridors that pinch and bulge.
-    widthChangeChance: z.number().min(0).max(1).optional(),
-    // 0..1 per step: chance an agent dies. The run also forces
-    // agents to live until at least roomCountMin rooms exist.
-    quitChance: z.number().min(0).max(1).optional(),
-    // ---- walker params (drunkard's walk carve + chambers) ----
-    // Cells the walker tries to carve. Higher = bigger floors.
-    // 600 reads as a typical multi-room cave; 1200 is sprawling.
-    walkerCellTarget: z.number().int().positive().optional(),
-    // Chamber count = "rooms" the walker bulges into the carve.
-    // Each chamber is a small rect placed on a carved cell, used
-    // by prop / enemy density passes (corridors stay quiet).
-    walkerChamberCount: z.number().int().positive().optional(),
-    // Half-extent of each chamber rect in tiles. 2 = 5×5 chamber.
-    walkerChamberRadius: z.number().int().positive().optional(),
-    // 0..1 — chance the walker keeps its last direction this step
-    // instead of rolling a fresh random one. 0 = pure random
-    // (jittery, blob-shaped); 0.7 = mostly straight (long
-    // corridor-like passages with the occasional turn).
-    walkerMomentum: z.number().min(0).max(1).optional(),
-    // Densities are "fraction of walkable tiles that get one";
-    // generators clamp to per-room caps.
     propDensity: z.number().min(0).max(1),
     enemyDensity: z.number().min(0).max(1),
     lootDensity: z.number().min(0).max(1),
-    // Multiplier on the dominant hazard's per-tick damage.
     hazardIntensity: z.number().min(0).max(1),
-    // 0..1 — fraction of non-entrance, non-stairs rooms that roll
-    // as `safe` hazard zones (breather pockets). Entrance always
-    // forces safe regardless of this; stairs-down always forces
-    // hazard. 0 = no breather rooms; 0.3 = ~3 of 10 rooms.
     safeRoomChance: z.number().min(0).max(1).optional(),
-    // 0..1 — fraction of non-special rooms that roll as `extreme`
-    // (high-risk, high-reward pockets). Mutually exclusive with
-    // safe; the safe roll is checked first. Boss / champion rooms
-    // (band-end floors) force extreme regardless.
     extremeRoomChance: z.number().min(0).max(1).optional(),
-    // Per-category intensity overrides. Sparse — any category not
-    // listed falls through to DEFAULT_HAZARD_ZONE_INTENSITIES.
-    // Useful for Alien Core "even safe rooms aren't really safe"
-    // (lift the safe value to 0.2) or Frozen "corridors are deadly
-    // exposure" (lift corridor to 0.7).
     hazardZoneIntensities: z
       .object({
         safe: z.number().min(0).optional(),
@@ -237,27 +147,7 @@ const biomeGenerationSchema = z
       .strict()
       .optional(),
   })
-  .strict()
-  .refine(
-    (g) =>
-      g.roomCountMin === undefined ||
-      g.roomCountMax === undefined ||
-      g.roomCountMax >= g.roomCountMin,
-    {
-      message: 'roomCountMax must be ≥ roomCountMin',
-      path: ['roomCountMax'],
-    },
-  )
-  .refine(
-    (g) =>
-      g.roomSizeMin === undefined ||
-      g.roomSizeMax === undefined ||
-      g.roomSizeMax >= g.roomSizeMin,
-    {
-      message: 'roomSizeMax must be ≥ roomSizeMin',
-      path: ['roomSizeMax'],
-    },
-  );
+  .strict();
 
 const biomeRosterEntrySchema = z
   .object({
@@ -641,9 +531,6 @@ export type PropContainerDef = z.infer<typeof propContainerSchema>;
 //   - a tile grid (row-major byte array of tile ids matching the
 //     biome's TileDef.id values; base64-encoded so JSON files stay
 //     compact for larger templates)
-//   - entrySides flags marking which edges have at least one
-//     corridor-connectable floor cell, so procgen can match a
-//     template against a slot's connectivity needs
 //   - anchors marking spawn points for enemies / props / loot /
 //     interactables (extract pad, stairs, doors). Anchors are tile
 //     coords relative to the template's top-left.
@@ -670,9 +557,6 @@ export const AnchorKindSchema = z.enum([
 ]);
 export type AnchorKind = z.infer<typeof AnchorKindSchema>;
 
-export const RoomEdgeSchema = z.enum(['N', 'S', 'E', 'W']);
-export type RoomEdge = z.infer<typeof RoomEdgeSchema>;
-
 export const RoomAnchorSchema = z
   .object({
     kind: AnchorKindSchema,
@@ -695,65 +579,6 @@ export const RoomRoleSchema = z.enum([
 ]);
 export type RoomRole = z.infer<typeof RoomRoleSchema>;
 
-// ---------- CorridorTemplate ----------
-//
-// Authored connector that procgen stamps between two rooms.
-// Today's procgen uses hardcoded 2-tile-wide rect strips for
-// every corridor; corridor templates let each biome ship its own
-// width + (eventually) decorative tile patterns so spaceship
-// corridors look pressurized + ribbed while cave tunnels look
-// organic.
-//
-// Phase 1 — width-only (this slice). The procgen reads `width`
-// to size the corridor strip per biome. `tilesB64` is reserved
-// for a future pattern-stamping pass: a small grid that tiles
-// along the corridor's length axis and lays decorative cells
-// (support beams, conduit panels) on top of the strip.
-export const CorridorStyleSchema = z.enum([
-  'door',
-  'open',
-  'tunnel',
-  'organic',
-]);
-export type CorridorStyle = z.infer<typeof CorridorStyleSchema>;
-
-export const CorridorTemplateSchema = z
-  .object({
-    id: idSchema,
-    label: z.string().min(1),
-    biomeAffinity: z.array(idSchema),
-    // Width perpendicular to the corridor's length axis. 1-6
-    // tiles covers everything from a creep-tube to a 3-lane
-    // industrial walkway.
-    width: z.number().int().min(1).max(6),
-    // Selection weight when picking among biome-affinity matches.
-    weight: z.number().positive(),
-    // Style hint for future per-edge matching (e.g. doors only at
-    // room boundaries, organic only in walker biomes). Procgen
-    // ignores this in the first slice; reserved.
-    style: CorridorStyleSchema,
-    // Optional length-axis tile pattern that repeats along the
-    // corridor strip. Same encoding as room templates'
-    // `tilesB64` (row-major byte array, base64). Pattern dim is
-    // `width × patternLength`, where `patternLength` is derived
-    // from `tilesB64.length / width` after decode. Absent =
-    // plain floor strip with biome's default tiles.
-    tilesB64: z.string().optional(),
-    // Optional explicit pattern length when `tilesB64` is set —
-    // saves clients from having to decode just to know the
-    // length. Required when `tilesB64` is set.
-    patternLength: z.number().int().positive().max(32).optional(),
-  })
-  .strict()
-  .refine(
-    (d) => !d.tilesB64 || d.patternLength !== undefined,
-    {
-      message: 'patternLength required when tilesB64 is set',
-      path: ['patternLength'],
-    },
-  );
-export type CorridorTemplate = z.infer<typeof CorridorTemplateSchema>;
-
 export const RoomTemplateSchema = z
   .object({
     id: idSchema,
@@ -768,10 +593,6 @@ export const RoomTemplateSchema = z
     // matching the biome's TileDef.id values. Encoded as base64 so
     // larger templates stay compact in JSON.
     tilesB64: z.string(),
-    // Edges with at least one corridor-connectable floor cell.
-    // Empty = leaf template (boss/vault), can only attach via one
-    // explicit corridor entry.
-    entrySides: z.array(RoomEdgeSchema),
     anchors: z.array(RoomAnchorSchema),
     role: RoomRoleSchema,
     weight: z.number().positive(),
@@ -1398,3 +1219,311 @@ export const AnimationDefSchema = z
     }
   });
 export type AnimationDef = z.infer<typeof AnimationDefSchema>;
+
+// ---------------- Sector scenes ----------------
+//
+// Hand-authored level-editor output. Stored under
+// packages/shared/content/scenes/<id>.json. Schemas are loose
+// where the runtime types allow it — sector verts may be
+// anywhere in world space, walls reference sectors by index,
+// etc. The editor is a trusted authoring surface; validation
+// here just prevents malformed JSON from corrupting the disk.
+
+const Vec2Schema = z.object({ x: z.number(), y: z.number() });
+
+const TerrainConfigSchema = z
+  .object({
+    amplitude: z.number(),
+    frequency: z.number(),
+    octaves: z.number().int().min(1).max(6),
+    seed: z.number().int(),
+  })
+  .strict();
+
+const SectorSchema = z
+  .object({
+    id: z.number().int().min(0),
+    verts: z.array(Vec2Schema).min(3),
+    holes: z.array(z.array(Vec2Schema).min(3)).optional(),
+    floorZ: z.number(),
+    ceilingZ: z.number(),
+    floorTextureId: z.string().nullable(),
+    ceilingTextureId: z.string().nullable(),
+    ambient: z.number().min(0).max(4),
+    biomeId: z.string(),
+    buildingKind: z.string().optional(),
+    floorNoise: TerrainConfigSchema.optional(),
+    ceilingNoise: TerrainConfigSchema.optional(),
+  })
+  .strict();
+
+const WallSchema = z
+  .object({
+    sectorId: z.number().int().min(0),
+    vertIdx: z.number().int().min(0),
+    backSectorId: z.number().int().nullable(),
+    textureId: z.string().nullable(),
+    solid: z.boolean(),
+    floorZOverride: z.number().optional(),
+    ceilingZOverride: z.number().optional(),
+    buildingKind: z.string().optional(),
+  })
+  .strict();
+
+const SectorLightSchema = z
+  .object({
+    id: z.string(),
+    x: z.number(),
+    y: z.number(),
+    z: z.number(),
+    radius: z.number().positive(),
+    colour: z.number().int().min(0).max(0xffffff),
+    intensity: z.number(),
+    reachableSectors: z.array(z.number().int().min(0)).optional(),
+  })
+  .strict();
+
+const SectorMapSchema = z
+  .object({
+    sectors: z.array(SectorSchema),
+    walls: z.array(WallSchema),
+    lights: z.array(SectorLightSchema),
+    bounds: z.object({
+      x: z.number(),
+      y: z.number(),
+      w: z.number(),
+      h: z.number(),
+    }),
+  })
+  .strict();
+
+const InteractableSchema = z
+  .object({
+    id: z.string(),
+    kind: z.enum(['stairs_down', 'extract_pad', 'dm_spawn']),
+    x: z.number(),
+    y: z.number(),
+    label: z.string(),
+  })
+  .strict();
+
+const SceneAnchorSchema = z
+  .object({
+    kind: z.enum([
+      'spawn',
+      'extract',
+      'stairs_down',
+      'enemy',
+      'prop',
+      'loot',
+      'door',
+      'entry',
+    ]),
+    x: z.number(),
+    y: z.number(),
+    overrideId: z.string().optional(),
+  })
+  .strict();
+
+export const SectorSceneSchema = z
+  .object({
+    id: idSchema,
+    name: z.string().min(1),
+    biome: z.string(),
+    map: SectorMapSchema,
+    interactables: z.array(InteractableSchema),
+    anchors: z.array(SceneAnchorSchema).optional(),
+    spawn: Vec2Schema,
+    terrain: TerrainConfigSchema.optional(),
+    meta: z
+      .object({
+        author: z.string().optional(),
+        createdAt: z.string().optional(),
+        modifiedAt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type SectorSceneDef = z.infer<typeof SectorSceneSchema>;
+
+// ---------------- Linedef scenes ----------------
+//
+// Refactor target for SectorScene. Same outer shape (id, biome,
+// interactables, spawn, terrain, meta) but the geometry layer
+// changes — sectors are derived from linedefs instead of stored
+// as polygons. See `packages/shared/src/linedef.ts`.
+
+const LinedefSchema = z
+  .object({
+    v1: z.number().int().min(0),
+    v2: z.number().int().min(0),
+    front: z.number().int().min(0),
+    back: z.number().int().min(0).nullable(),
+    impassable: z.boolean(),
+    blockProjectiles: z.boolean(),
+    blockMonsters: z.boolean(),
+  })
+  .strict();
+
+const SidedefSchema = z
+  .object({
+    // sectorId can be the SENTINEL_SECTOR_ID (-1) for linedefs
+    // authored before any sector adopts them. The runtime
+    // adjacency builder skips sentinel sidedefs so they don't
+    // pollute real sectors' perimeter walks.
+    sectorId: z.number().int().min(-1),
+    midTex: z.string().nullable(),
+    upperTex: z.string().nullable(),
+    lowerTex: z.string().nullable(),
+    texOffsetX: z.number(),
+    texOffsetY: z.number(),
+  })
+  .strict();
+
+const LinedefSectorSchema = z
+  .object({
+    id: z.number().int().min(0),
+    floorZ: z.number(),
+    ceilingZ: z.number(),
+    floorTextureId: z.string().nullable(),
+    ceilingTextureId: z.string().nullable(),
+    ambient: z.number().min(0).max(4),
+    biomeId: z.string(),
+    buildingKind: z.string().optional(),
+    floorNoise: TerrainConfigSchema.optional(),
+    ceilingNoise: TerrainConfigSchema.optional(),
+  })
+  .strict();
+
+const LinedefMapSchema = z
+  .object({
+    vertices: z.array(Vec2Schema),
+    linedefs: z.array(LinedefSchema),
+    sidedefs: z.array(SidedefSchema),
+    sectors: z.array(LinedefSectorSchema),
+    lights: z.array(SectorLightSchema),
+    bounds: z.object({
+      x: z.number(),
+      y: z.number(),
+      w: z.number(),
+      h: z.number(),
+    }),
+  })
+  .strict();
+
+export const LinedefSceneSchema = z
+  .object({
+    id: idSchema,
+    name: z.string().min(1),
+    biome: z.string(),
+    map: LinedefMapSchema,
+    interactables: z.array(InteractableSchema),
+    anchors: z.array(SceneAnchorSchema).optional(),
+    spawn: Vec2Schema,
+    spawnZ: z.number().optional(),
+    terrain: TerrainConfigSchema.optional(),
+    meta: z
+      .object({
+        author: z.string().optional(),
+        createdAt: z.string().optional(),
+        modifiedAt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type LinedefSceneDef = z.infer<typeof LinedefSceneSchema>;
+
+// ---------------- CSG scenes ----------------
+//
+// Polygon-CSG authoring model. Each shape is a 2D polygon with
+// elevation overrides; the editor stores the source shape list,
+// and `csgSceneToLinedefScene` derives the runtime LinedefScene
+// at save / load time via boolean ops. Lets the editor avoid the
+// entire class of linedef-topology corruption bugs by maintaining
+// authoring intent in a higher-level representation.
+
+const CsgShapeSchema = z
+  .object({
+    id: z.number().int().min(0),
+    name: z.string().optional(),
+    outer: z.array(Vec2Schema).min(3),
+    holes: z.array(z.array(Vec2Schema).min(3)).optional(),
+    floorZ: z.number(),
+    ceilingZ: z.number(),
+    biomeId: z.string(),
+    ambient: z.number().min(0).max(4).optional(),
+    floorTextureId: z.string().nullable().optional(),
+    ceilingTextureId: z.string().nullable().optional(),
+    zOrder: z.number(),
+    buildingKind: z.string().optional(),
+    subtractive: z.boolean().optional(),
+    floorNoise: TerrainConfigSchema.optional(),
+    ceilingNoise: TerrainConfigSchema.optional(),
+  })
+  .strict();
+
+export const CsgSceneSchema = z
+  .object({
+    id: idSchema,
+    name: z.string().min(1),
+    biome: z.string(),
+    spawn: Vec2Schema,
+    spawnZ: z.number().optional(),
+    shapes: z.array(CsgShapeSchema),
+    lights: z.array(SectorLightSchema),
+    interactables: z.array(InteractableSchema),
+    anchors: z.array(SceneAnchorSchema).optional(),
+    terrain: TerrainConfigSchema.optional(),
+    // CSG sentinel field — disambiguates from LinedefScene at
+    // file-shape detection time in the union below.
+    kind: z.literal('csg'),
+    meta: z
+      .object({
+        author: z.string().optional(),
+        createdAt: z.string().optional(),
+        modifiedAt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type CsgSceneDef = z.infer<typeof CsgSceneSchema>;
+
+// Union for on-disk scene storage. During the linedef migration
+// (v2-finish-plan.md §3) the loader accepts either shape; new
+// saves go through the linedef converter. The `id` field is
+// guaranteed by both branches so generic helpers that key on it
+// (loadArea cross-checking filename, etc.) keep working.
+export const SceneDefSchema = z.union([
+  CsgSceneSchema,
+  LinedefSceneSchema,
+  SectorSceneSchema,
+]);
+export type SceneDef = z.infer<typeof SceneDefSchema>;
+
+// ---------------- Floor overrides ----------------
+//
+// Pins an authored scene to a specific dungeon floor index.
+// Server's `createDungeonScene` consults this BEFORE procgen,
+// loads the referenced scene from `content/scenes/`, and uses
+// that layout instead of generating one. Persists across
+// perihelion cycles (overrides are the dungeon's "skeleton",
+// procgen fills the gaps).
+//
+// Two scopes:
+//   `global` — applies to every server.
+//   `servers[<serverId>]` — applies to one specific server world.
+// Resolution order: server scope wins over global if both exist
+// for the same floor. Per-server is post-MVP (no UI for it yet);
+// global is the everyday case.
+export const FloorOverridesSchema = z
+  .object({
+    global: z.record(z.string(), idSchema).optional(),
+    servers: z
+      .record(z.string(), z.record(z.string(), idSchema))
+      .optional(),
+  })
+  .strict();
+export type FloorOverrides = z.infer<typeof FloorOverridesSchema>;

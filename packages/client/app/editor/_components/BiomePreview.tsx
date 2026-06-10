@@ -1,47 +1,59 @@
 'use client';
 
-// Biome preview pane. Top-down generation overview only —
-// designed for validating procgen output (room placement,
-// corridor shape, hazard pockets) at a glance. The full iso /
-// fps sandbox lives at /editor/sandbox-test for actual play
-// testing. This view is passive: regen sliders + the topdown
-// canvas, no input.
+// Biome preview pane. Hits /api/editor/procgen for a top-down
+// view of the generated dungeon — no game server WS, no sandbox,
+// no rendering pipeline. Just procgen output.
 
-import { useEffect, useRef, useState } from 'react';
-import {
-  SandboxPreview,
-  type SandboxPreviewHandle,
-} from './SandboxPreview';
+import { useCallback, useEffect, useState } from 'react';
+import type { SceneLayout } from '@dumrunner/shared';
 import { Button } from './Form';
-import type { SandboxConnectionStatus } from '@/lib/sandbox';
+import { TopdownMap } from './TopdownMap';
 
 export function BiomePreview({ biomeId }: { biomeId: string }) {
-  const previewRef = useRef<SandboxPreviewHandle | null>(null);
-  const [status, setStatus] = useState<SandboxConnectionStatus>('idle');
   const [cycle, setCycle] = useState<number>(0);
   const [floorIndex, setFloorIndex] = useState<number>(1);
   const [worldSeed, setWorldSeed] = useState<number>(42);
   const [error, setError] = useState<string | null>(null);
-  const [autoRegenned, setAutoRegenned] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [layout, setLayout] = useState<SceneLayout | null>(null);
 
-  // Auto-regen on first connect so the canvas starts on the
-  // biome rather than the empty surface.
-  useEffect(() => {
-    if (status !== 'connected' || autoRegenned || !biomeId) return;
-    previewRef.current?.regenFloor({ biome: biomeId, cycle, floorIndex, worldSeed });
-    setAutoRegenned(true);
-  }, [status, autoRegenned, biomeId, cycle, floorIndex, worldSeed]);
-
-  function regen(): void {
+  const regen = useCallback(async (): Promise<void> => {
     if (!biomeId) return;
-    previewRef.current?.regenFloor({ biome: biomeId, cycle, floorIndex, worldSeed });
-  }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/editor/procgen', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ biome: biomeId, worldSeed, cycle, floorIndex }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `procgen ${res.status}`);
+      }
+      const body = (await res.json()) as { layout: SceneLayout };
+      setLayout(body.layout);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [biomeId, cycle, floorIndex, worldSeed]);
+
+  // Auto-fetch on mount + when the biome id changes.
+  useEffect(() => {
+    void regen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [biomeId]);
 
   return (
     <div className="flex flex-col h-full w-full">
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/40 shrink-0 text-[10px] text-zinc-400">
-        <span className="font-mono">{status}</span>
-        <span className="ml-2">biome: <span className="text-zinc-300 font-mono">{biomeId || '(no id)'}</span></span>
+        <span className="font-mono">{loading ? 'generating…' : 'ready'}</span>
+        <span className="ml-2">
+          biome:{' '}
+          <span className="text-zinc-300 font-mono">{biomeId || '(no id)'}</span>
+        </span>
         <label className="flex items-center gap-1 ml-3">
           <span>cycle</span>
           <input
@@ -73,10 +85,7 @@ export function BiomePreview({ biomeId }: { biomeId: string }) {
             className="w-20 bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 font-mono"
           />
         </label>
-        <Button
-          onClick={regen}
-          disabled={status !== 'connected' || !biomeId}
-        >
+        <Button onClick={regen} disabled={loading || !biomeId}>
           Regenerate
         </Button>
         {error && (
@@ -86,12 +95,7 @@ export function BiomePreview({ biomeId }: { biomeId: string }) {
         )}
       </div>
       <div className="flex-1 min-h-0 relative">
-        <SandboxPreview
-          ref={previewRef}
-          mode="topdown"
-          onStatusChange={setStatus}
-          onError={(e) => setError(e.message)}
-        />
+        <TopdownMap layout={layout} />
       </div>
     </div>
   );

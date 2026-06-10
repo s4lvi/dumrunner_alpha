@@ -33,6 +33,7 @@ import {
   addAmmo,
   addAttachment,
   addConsumable,
+  addUpgrade,
   addInventorySlotToInventory,
   addMaterial,
   addPart,
@@ -71,13 +72,29 @@ import {
   ensureMaterialAsset,
 } from './assetGenClient.js';
 import {
+  createWallIndex,
   decodeTileGrid,
   INTERACTABLE_RADIUS,
   isInsideAny,
   isWalkableTileId,
+  pointInPolygon,
+  pointSegmentDistance,
+  riserifyWalls,
+  splitOverlappingWalls,
   segmentInsideWalkables,
+  segmentSegmentIntersect,
+  sectorNoiseOffsetAt,
+  sweptCircleClearsSegment,
+  terrainHeightAt,
   tileIdAt,
+  type SectorMap,
+  type WallIndex,
 } from '@dumrunner/shared';
+import {
+  buildSectorMap,
+  emitBuildingCubes,
+  WALL_HEIGHT_WORLD,
+} from './sectorBuild.js';
 import {
   type InitialDoor,
   type InitialEnemySpawn,
@@ -96,6 +113,54 @@ import {
 // INTERACTABLE_RADIUS now lives in shared/geometry.ts so the
 // client renderers + server can't drift apart. Both halves
 // import the same constant; adjusting the value adjusts both.
+
+// Polygon-collision toggle. v2 phase 2 swaps grid sampling for
+// swept-circle-vs-wall + point-in-walkable-sector. Defaults on;
+// set POLY_COLLISION=0 to revert to the legacy tile path while
+// the swap is bedding in.
+const POLY_COLLISION = process.env.POLY_COLLISION !== '0';
+
+// Resolve a wall's endpoints. Inner-loop walls (around carved
+// sub-sectors) carry explicit ax/ay/bx/by coords because their
+// vertIdx doesn't index into sector.verts (which holds only the
+// outer perimeter loop in linedef-sourced maps). Outer-loop walls
+// and procgen/tile-grid walls fall back to the modulo wrap.
+function wallEndpoints(
+  wall: import('@dumrunner/shared').Wall,
+  sector: import('@dumrunner/shared').Sector,
+): { a: import('@dumrunner/shared').Vec2; b: import('@dumrunner/shared').Vec2 } | null {
+  const a =
+    wall.ax !== undefined && wall.ay !== undefined
+      ? { x: wall.ax, y: wall.ay }
+      : sector.verts[wall.vertIdx];
+  const b =
+    wall.bx !== undefined && wall.by !== undefined
+      ? { x: wall.bx, y: wall.by }
+      : sector.verts[(wall.vertIdx + 1) % sector.verts.length];
+  if (!a || !b) return null;
+  return { a, b };
+}
+
+// Single source of truth for stamping an InputMsg onto a
+// SceneConnection. Both the live World and the editor sandbox
+// import this so movement / sprint / jump / crouch behave
+// identically in either context — adding a new input field
+// touches this one helper, not two parallel call sites.
+export function applyInputToConnection(
+  conn: SceneConnection,
+  moveX: number,
+  moveY: number,
+  sprint: boolean,
+  jump: boolean = false,
+  crouch: boolean = false,
+): void {
+  conn.inputX = clamp(moveX, -1, 1);
+  conn.inputY = clamp(moveY, -1, 1);
+  conn.inputSprint = sprint;
+  if (jump) conn.inputJump = true;
+  conn.inputCrouch = crouch;
+  conn.inputAt = Date.now();
+}
 
 // 16 unit-circle directions used by Scene.circlePassable. Mirrors the
 // shared geometry sampler so player and AI bounding-circle tests are
@@ -132,6 +197,36 @@ export interface SceneConnection {
   inputY: number;
   inputAt: number;
   inputSprint: boolean;
+  // Vertical-movement input. `inputJump` is edge-triggered:
+  // the World writes `true` when the client reports a fresh
+  // jump press; Scene clears it after consuming the impulse.
+  // `inputCrouch` is held-state — true while the key is down.
+  inputJump: boolean;
+  inputCrouch: boolean;
+  // Vertical-movement state (Phase 7). jumpZ rides above the
+  // current floor; gravity pulls it back down each tick. The
+  // player can't fire while > grounded? actually they can; this
+  // is purely positional. crouching halves the hitbox height
+  // and dims walk speed.
+  jumpZ: number;
+  jumpVZ: number;
+  crouching: boolean;
+  // Server-tracked floor height under the player. Updated each
+  // tick AFTER the move resolves, bounded by the previous
+  // floor + STEP_UP_MAX — so the player can only climb one
+  // step-height per tick, even when their XY happens to fall
+  // inside an overhead sector's polygon. Without this state,
+  // `floorAt(x, y)` (stateless) would snap them up to that
+  // overhead's floor on the next tick.
+  floorZ: number;
+  // Epoch ms of the most recent landing. Step-up gate ignores
+  // floor deltas for JUMP_LANDING_GRACE_MS after a landing so
+  // touching down on a platform doesn't read as "step too tall".
+  lastLandedAt: number;
+  // Last broadcast vertical state — triggers a fresh player_moved
+  // whenever jump or crouch changes even if XY is unchanged.
+  lastJumpZSent: number;
+  lastCrouchSent: boolean;
   inventory: Inventory;
   equipment: Equipment;
   hotbarSelection: number;
@@ -143,6 +238,11 @@ export interface SceneConnection {
   // Epoch ms at which an in-progress reload completes. 0 = not
   // reloading. Fire is locked while now < reloadingUntil.
   reloadingUntil: number;
+  // Inventory index the reload was started on. The refill applies
+  // to THIS slot, not whatever is equipped when the timer expires —
+  // otherwise swapping mid-reload transfers a fast weapon's reload
+  // time onto a slow one. -1 = none.
+  reloadingSlot: number;
   respawnAt: number | null;
   // Damage immunity window after respawn so a player doesn't get
   // re-killed by enemies clustered around the spawn point. Set in
@@ -179,12 +279,26 @@ export interface SceneConnection {
   suitColdResist: number;
   suitRadiationResist: number;
   suitToxicResist: number;
+  // Deathmatch score counters. Incremented by `killPlayer` when the
+  // mode binding has PvP on; broadcast in the round-end summary.
+  // Reset to 0 on `World.beginDeathmatchRound`. Always present so
+  // we don't need to special-case the type — they just stay 0 in
+  // live mode.
+  kills: number;
+  deaths: number;
 }
 
 type ProjectileRuntime = ProjectileState & {
   expiresAt: number;
   damage: number;
   radius: number;
+  // World-Z height the projectile travels at. Captured from the
+  // shooter's eye position at spawn so a crouching shooter's
+  // bullet flies low and a jumping shooter's bullet flies high.
+  // Used to filter player-hit checks against the target's
+  // vertical span (floor + jumpZ to floor + jumpZ + height).
+  // Server-only; no wire impact.
+  originZ: number;
   // Optional status effects to apply to whatever this projectile
   // lands on. Populated when the firing weapon has imbue mods (see
   // computeWeaponImbues in shared). Each on-hit handler walks this
@@ -402,6 +516,24 @@ export class Scene {
   // damage and reset.
   private hazardAccumulator = 0;
 
+  // Sector-model collision data, built from the tile grid (until
+  // the procgen rewrite emits sectors natively). Rebuilt when
+  // buildings change so cube walls track placement / destruction.
+  // Null when the scene has no geometry (e.g. surface without
+  // worldBounds).
+  private sectorMap: SectorMap | null = null;
+  private wallIndex: WallIndex | null = null;
+  // Per-tile walkable-sector lookup, populated alongside the
+  // sector map when the layout has a tileGrid. Key = ly * width
+  // + lx in the grid's local frame; value = sector index. Lets
+  // walkableSectorAt skip the O(N) point-in-polygon scan in the
+  // common (tile-derived) case. Null on tile-less layouts
+  // (surface), where the polygon scan is still cheap (1-N sectors).
+  private sectorByTile: Int32Array | null = null;
+  // Cell size for the wall-bucket index. 32 px matches tile size
+  // and keeps per-cell wall counts small for tile-derived scenes.
+  private static readonly WALL_INDEX_CELL = 32;
+
   constructor(
     id: string,
     kind: SceneKind,
@@ -425,6 +557,8 @@ export class Scene {
     } else {
       this.floorIndex = 0;
     }
+
+    this.rebuildSectorMap();
 
     if (kind === 'surface') {
       this.populateSurface();
@@ -632,13 +766,12 @@ export class Scene {
     this.buildings.clear();
     if (snap.buildings) {
       for (const saved of snap.buildings) {
-        // Storage chests persist contents across sessions; station
-        // output buffers reset (the assumption is that whoever was
-        // crafting picked up before the world idle-shut-down).
+        // Storage chests AND station output buffers persist across
+        // restarts — completed-but-uncollected craft outputs must
+        // survive an idle shutdown or crash (craft durability; the
+        // world snapshot now also restores in-flight jobs).
         const restoredOutput =
-          saved.kind === 'storage_chest' &&
-          Array.isArray(saved.output) &&
-          saved.output.length > 0
+          Array.isArray(saved.output) && saved.output.length > 0
             ? saved.output
             : emptyBufferForKind(saved.kind);
         // Default benchTier to 1 for Weapon Benches that pre-date
@@ -830,7 +963,7 @@ export class Scene {
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
-    this.bindings.onBuildingsChanged();
+    this.notifyBuildingsChanged();
     ensureBuildingAsset(kind);
   }
 
@@ -843,7 +976,7 @@ export class Scene {
     if (!b) return;
     this.buildings.delete(buildingId);
     this.broadcast({ type: 'building_destroyed', id: buildingId });
-    this.bindings.onBuildingsChanged();
+    this.notifyBuildingsChanged();
 
     // Refund the placeable item itself (so demolish lets you reposition
     // without losing the wall). Demolish doesn't refund any of the scrap
@@ -856,7 +989,12 @@ export class Scene {
     });
   }
 
-  handleFire(characterId: string, dirX: number, dirY: number): void {
+  handleFire(
+    characterId: string,
+    dirX: number,
+    dirY: number,
+    dirZ: number = 0,
+  ): void {
     const conn = this.bindings.connection(characterId);
     if (!conn || !conn.alive) return;
 
@@ -864,16 +1002,25 @@ export class Scene {
     const slot = conn.inventory[conn.hotbarSelection];
     if (!slot || slot.kind !== 'weapon') return;
 
-    const len = Math.hypot(dirX, dirY);
-    if (!Number.isFinite(len) || len < 0.001) return;
-    const nx = dirX / len;
-    const ny = dirY / len;
+    // Normalise the full 3D aim. Players send the raw camera-
+    // forward vector; we keep the XY components for the existing
+    // 2D spread / pellet math and propagate the Z for the
+    // projectile's vertical velocity.
+    const len3 = Math.hypot(dirX, dirY, dirZ);
+    if (!Number.isFinite(len3) || len3 < 0.001) return;
+    const len2 = Math.hypot(dirX, dirY);
+    if (len2 < 0.001) return;
+    const nx = dirX / len2;
+    const ny = dirY / len2;
+    // Slope: dirZ per unit horizontal distance. Multiplied into
+    // projectile speed below to yield vz.
+    const slope = dirZ / len2;
 
     const family = weaponFamily(slot.weapon.weaponId);
     if (family === 'melee') {
       this.swingMelee(conn, nx, ny);
     } else {
-      this.fireRanged(conn, nx, ny, family);
+      this.fireRanged(conn, nx, ny, slope, family);
     }
   }
 
@@ -881,6 +1028,7 @@ export class Scene {
     conn: SceneConnection,
     nx: number,
     ny: number,
+    slope: number,
     family: Exclude<WeaponFamily, 'melee'>
   ): void {
     const slot = conn.inventory[conn.hotbarSelection];
@@ -953,6 +1101,20 @@ export class Scene {
         ttlMs: stats.projectileTtlMs,
         radius: stats.projectileRadius,
         color: stats.color,
+        // Shooter eye height — crouching flips the bullet origin
+        // low, so a duck-and-shoot exchange between two crouching
+        // players reads naturally and a standing shot misses a
+        // crouched target.
+        originZ:
+          this.floorAt(conn.x, conn.y) +
+          conn.jumpZ +
+          (conn.crouching ? COMBAT.EYE_HEIGHT_CROUCH : COMBAT.EYE_HEIGHT_STAND),
+        // Vertical velocity from the camera pitch (slope = dz/dxy
+        // at fire time). projectileSpeed is the horizontal speed;
+        // multiplying yields wu/s vertical. Per-pellet spread
+        // does not jitter Z — keeps shotgun pellet patterns flat
+        // for now.
+        vzInit: slope * projectileSpeed,
         imbues: imbues.length > 0 ? imbues : undefined,
         // Stamp the weapon id so the FPS client can swap to a
         // per-weapon (or per-family) projectile sprite.
@@ -979,6 +1141,7 @@ export class Scene {
     if (countAmmo(conn.inventory, stats.ammoKind) <= 0) return;
 
     conn.reloadingUntil = now + stats.reloadMs;
+    conn.reloadingSlot = conn.hotbarSelection;
     this.broadcast({
       type: 'reload_started',
       characterId: conn.characterId,
@@ -993,11 +1156,16 @@ export class Scene {
       if (!conn) continue;
       if (conn.reloadingUntil === 0) continue;
       if (now < conn.reloadingUntil) continue;
-      // Reload just finished — refill the equipped weapon's mag from
-      // reserve. If the player swapped slots mid-reload, no-op.
+      // Reload just finished — refill the mag of the weapon the
+      // reload was STARTED on (reloadingSlot), not whatever is
+      // currently equipped. Swapping mid-reload neither transfers
+      // the reload to the new weapon nor eats it.
       const completedAt = conn.reloadingUntil;
       conn.reloadingUntil = 0;
-      const slot = conn.inventory[conn.hotbarSelection];
+      const slotIdx = conn.reloadingSlot;
+      conn.reloadingSlot = -1;
+      if (slotIdx < 0) continue;
+      const slot = conn.inventory[slotIdx];
       if (!slot || slot.kind !== 'weapon') continue;
       const stats = effectiveWeaponStats(slot.weapon);
       if (!stats) continue; // melee
@@ -1269,8 +1437,15 @@ export class Scene {
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const r = ringRadius + (Math.random() - 0.5) * 100;
-      const x = Math.cos(angle) * r;
-      const y = Math.sin(angle) * r;
+      let x = Math.cos(angle) * r;
+      let y = Math.sin(angle) * r;
+      // The raw ring point can land inside terrain-height walls or
+      // a building footprint, leaving the enemy embedded where the
+      // pather can't free it. Snap to the nearest clear tile (no
+      // enemy-clearance requirement — hordes are allowed to clump).
+      const safe = this.findSafeSpawnNear(x, y, 0, 6);
+      x = safe.x;
+      y = safe.y;
 
       // Composition by cycle: more variety + harder enemies later.
       let templateId = 'chaser_melee';
@@ -1353,6 +1528,9 @@ export class Scene {
             break;
           case 'consumable':
             addConsumable(closest.inventory, slot.consumableId, slot.count);
+            break;
+          case 'upgrade':
+            addUpgrade(closest.inventory, slot.upgradeId, slot.count);
             break;
         }
       }
@@ -1450,12 +1628,90 @@ export class Scene {
         }
       }
 
-      if (!moving) continue;
+      // ---------- Vertical: jump + crouch ----------
+      // Always runs (even when XY input is zero) so the player
+      // falls naturally after walking off a platform / hill.
+      if (conn.inputCrouch) {
+        conn.crouching = true;
+      } else if (conn.crouching) {
+        // Stand up only if standing height fits under the ceiling —
+        // releasing crouch in a low passage keeps the player crouched
+        // instead of clipping the head through the ceiling.
+        const standFloor = this.floorAt(conn.x, conn.y);
+        const standCeiling = this.ceilingAt(conn.x, conn.y, standFloor);
+        if (
+          standFloor + conn.jumpZ + COMBAT.PLAYER_HEIGHT_STAND <=
+          standCeiling
+        ) {
+          conn.crouching = false;
+        }
+      }
+      const grounded = conn.jumpZ <= 0 && conn.jumpVZ <= 0;
+      if (conn.inputJump && grounded) {
+        conn.jumpVZ = COMBAT.JUMP_VZ_INIT;
+        conn.jumpZ = 0.01; // nudge off the ground so grounded next tick is false
+      }
+      conn.inputJump = false;
+      if (!(conn.jumpZ <= 0 && conn.jumpVZ === 0)) {
+        // In the air OR falling onto a lower floor — integrate.
+        conn.jumpVZ -= COMBAT.GRAVITY * dt;
+        conn.jumpZ += conn.jumpVZ * dt;
+        // Head-bonk: if the player's head would clip into a
+        // ceiling at the current XY, cap jumpZ and zero out the
+        // upward velocity so they drop back down instead of
+        // tunneling through. PLAYER_HEIGHT_STAND is the upper
+        // bound — crouching mid-air gives no extra clearance
+        // since we don't auto-uncrouch.
+        if (conn.jumpVZ > 0) {
+          const playerFloor = this.floorAt(conn.x, conn.y);
+          const ceiling = this.ceilingAt(conn.x, conn.y, playerFloor);
+          const headTop = playerFloor + conn.jumpZ + COMBAT.PLAYER_HEIGHT_STAND;
+          if (headTop > ceiling) {
+            conn.jumpZ = Math.max(
+              0,
+              ceiling - playerFloor - COMBAT.PLAYER_HEIGHT_STAND,
+            );
+            conn.jumpVZ = 0;
+          }
+        }
+        if (conn.jumpZ <= 0 && conn.jumpVZ <= 0) {
+          conn.jumpZ = 0;
+          conn.jumpVZ = 0;
+          conn.lastLandedAt = now;
+        }
+      }
+
+      // Vertical-only updates still need to reach clients (e.g.
+      // jumping in place). Skip the XY-simulation block when not
+      // moving, but fall through to the broadcast check below.
+      if (!moving) {
+        // Jump straight to the broadcast check.
+        const verticalChanged =
+          conn.jumpZ !== conn.lastJumpZSent ||
+          conn.crouching !== conn.lastCrouchSent;
+        if (verticalChanged) {
+          conn.lastJumpZSent = conn.jumpZ;
+          conn.lastCrouchSent = conn.crouching;
+          this.broadcast({
+            type: 'player_moved',
+            characterId: conn.characterId,
+            x: conn.x,
+            y: conn.y,
+            jumpZ: conn.jumpZ,
+            crouching: conn.crouching,
+          });
+        }
+        continue;
+      }
 
       const baseSpeed = COMBAT.PLAYER_MOVE_SPEED * (1 + conn.suitSpeedMult);
-      const speed = sprintActive
+      let speed = sprintActive
         ? baseSpeed * COMBAT.SPRINT_SPEED_MULTIPLIER
         : baseSpeed;
+      // Crouch slows ground movement (sprint + crouch interacts
+      // multiplicatively — crouch-sprint is rare but possible if
+      // both keys are held).
+      if (conn.crouching) speed *= COMBAT.CROUCH_SPEED_MULT;
 
       const len = Math.hypot(ix, iy);
       const nx = len > 0 ? ix / len : 0;
@@ -1476,36 +1732,150 @@ export class Scene {
         COMBAT.PLAYER_BOUND
       );
 
-      // Wall collision: scene walkables (dungeon floors) OR player-placed
-      // buildings (surface bases) act as blockers.
+      // Wall collision. POLY_COLLISION switches between the legacy
+      // tile-sampled circle test and the v2 polygon path (swept
+      // circle vs. wall segments, point-in-walkable-sector for the
+      // candidate). Step-up rule applies in both modes — a wall /
+      // platform delta > STEP_UP_MAX reads as blocked.
+      // Step-down is unrestricted.
       if (this.hasCollisionGeometry()) {
-        const fits = (x: number, y: number) =>
-          this.circlePassable(x, y, COMBAT.PLAYER_RADIUS);
+        // Stateful floor — only ever changes by ±STEP_UP_MAX per
+        // tick (climb) or unbounded down (gravity). Reading
+        // `floorAt(x, y)` raw would snap the player up to any
+        // overhead sector whose polygon they incidentally fall
+        // inside (sliding past an angled wall, for example).
+        const fromFloor = conn.floorZ;
+        const usePolygon = POLY_COLLISION && this.sectorMap !== null;
+        const fits = usePolygon
+          ? (x: number, y: number) =>
+              this.circleSweepPassable(
+                conn.x,
+                conn.y,
+                x,
+                y,
+                COMBAT.PLAYER_RADIUS,
+                fromFloor,
+                conn.jumpZ,
+                conn.crouching,
+              )
+          : (x: number, y: number) => {
+              if (!this.circlePassable(x, y, COMBAT.PLAYER_RADIUS)) return false;
+              const toFloor = this.floorAt(x, y);
+              if (toFloor - fromFloor > COMBAT.STEP_UP_MAX) return false;
+              return true;
+            };
         if (!fits(proposedX, proposedY)) {
-          const xOnly = fits(proposedX, conn.y);
-          const yOnly = fits(conn.x, proposedY);
-          if (xOnly) {
-            proposedY = conn.y;
-          } else if (yOnly) {
-            proposedX = conn.x;
-          } else {
-            proposedX = conn.x;
-            proposedY = conn.y;
+          // First try sliding ALONG the blocking wall, not just
+          // along cardinal axes. Project the desired (dx, dy)
+          // onto the wall's tangent vector, see if that slid
+          // position is clear. This gives proper wall-slide on
+          // angled geometry; the X/Y fallback below is the
+          // last-resort for the rare case the projection lands
+          // in another wall.
+          const dxFull = proposedX - conn.x;
+          const dyFull = proposedY - conn.y;
+          let resolved = false;
+          if (usePolygon) {
+            const tangent = this.findBlockingWall(
+              conn.x,
+              conn.y,
+              proposedX,
+              proposedY,
+              COMBAT.PLAYER_RADIUS,
+              fromFloor,
+              conn.jumpZ,
+            );
+            if (tangent) {
+              const dot = dxFull * tangent.tx + dyFull * tangent.ty;
+              const slideX = conn.x + tangent.tx * dot;
+              const slideY = conn.y + tangent.ty * dot;
+              if (fits(slideX, slideY)) {
+                proposedX = slideX;
+                proposedY = slideY;
+                resolved = true;
+              }
+            }
+          }
+          if (!resolved) {
+            const xOnly = fits(proposedX, conn.y);
+            const yOnly = fits(conn.x, proposedY);
+            if (xOnly) {
+              proposedY = conn.y;
+            } else if (yOnly) {
+              proposedX = conn.x;
+            } else {
+              proposedX = conn.x;
+              proposedY = conn.y;
+            }
           }
         }
       }
 
-      if (proposedX === conn.x && proposedY === conn.y) continue;
+      // Depenetration: stepping off a platform crosses the riser
+      // wall freely (it's skip-overable from above), but lands
+      // the player with their center too close to the wall's
+      // back face — the wall, now non-skip from the lower side,
+      // blocks every subsequent move ("stuck on the side of the
+      // platform"). Push the player back to PLAYER_RADIUS distance
+      // from any blocking wall. A few iterations settle multi-
+      // wall corner cases.
+      if (POLY_COLLISION && this.sectorMap && this.wallIndex) {
+        const pushed = this.depenetratePosition(
+          proposedX,
+          proposedY,
+          conn.jumpZ,
+          conn.crouching,
+        );
+        proposedX = pushed.x;
+        proposedY = pushed.y;
+      }
 
-      conn.x = proposedX;
-      conn.y = proposedY;
-      conn.dirty = true;
+      const xyMoved = proposedX !== conn.x || proposedY !== conn.y;
+      const verticalChanged =
+        conn.jumpZ !== conn.lastJumpZSent ||
+        conn.crouching !== conn.lastCrouchSent;
+      if (!xyMoved && !verticalChanged) continue;
 
+      if (xyMoved) {
+        conn.x = proposedX;
+        conn.y = proposedY;
+        conn.dirty = true;
+        // Resolve the new floor with a one-step cap. The player
+        // climbs at most STEP_UP_MAX per tick (anything taller
+        // was already blocked by circleSweepPassable). This
+        // prevents an overhead sector at the new XY from
+        // snapping them up; they'd have to enter through a
+        // legitimate step-up boundary.
+        const airborne = conn.jumpZ > 0 || conn.jumpVZ !== 0;
+        const oldFloorZ = conn.floorZ;
+        conn.floorZ = this.floorAt(
+          proposedX,
+          proposedY,
+          // Airborne: can land on any floor at or below the feet —
+          // never snap up past them. Grounded: normal step-up cap.
+          airborne
+            ? conn.floorZ + conn.jumpZ
+            : conn.floorZ + COMBAT.STEP_UP_MAX,
+        );
+        // Jump height is floor-relative; re-anchoring the floor mid-air
+        // (crossing over a pit or platform) must not move the player's
+        // absolute height. Compensate so floorZ + jumpZ is invariant
+        // while airborne — landing still resolves naturally when the
+        // arc brings jumpZ to 0 against the floor below.
+        if (airborne) {
+          conn.jumpZ += oldFloorZ - conn.floorZ;
+        }
+      }
+
+      conn.lastJumpZSent = conn.jumpZ;
+      conn.lastCrouchSent = conn.crouching;
       this.broadcast({
         type: 'player_moved',
         characterId: conn.characterId,
         x: proposedX,
         y: proposedY,
+        jumpZ: conn.jumpZ,
+        crouching: conn.crouching,
       });
     }
   }
@@ -1556,6 +1926,8 @@ export class Scene {
             tx: number,
             ty: number
           ) => this.segmentClear(fx, fy, tx, ty),
+          nextWaypoint: (fx: number, fy: number, tx: number, ty: number) =>
+            this.nextAiWaypoint(fx, fy, tx, ty),
         }
       : {};
 
@@ -1982,7 +2354,7 @@ export class Scene {
       // dungeon scenes, evict players, reset deepest-floor counter,
       // disable powered defences). World handles the cascade.
       if (wasPowerLink) this.bindings.onPowerLinkDestroyed();
-      this.bindings.onBuildingsChanged();
+      this.notifyBuildingsChanged();
       return;
     }
     this.broadcast({
@@ -2002,10 +2374,17 @@ export class Scene {
       // each potential target's radius and stop at the earliest hit.
       const fromX = p.x;
       const fromY = p.y;
+      const fromZ = p.z ?? p.originZ;
       const stepX = p.vx * dt;
       const stepY = p.vy * dt;
+      // No gravity on projectiles for first cut — they fly in a
+      // straight 3D line from the aim. vz comes from the camera
+      // pitch at fire time and persists. Gravity-affected
+      // ballistics (grenade / arc) are a v2.1 follow-up.
+      const stepZ = (p.vz ?? 0) * dt;
       const newX = fromX + stepX;
       const newY = fromY + stepY;
+      const newZ = fromZ + stepZ;
 
       if (now >= p.expiresAt) {
         this.projectiles.delete(id);
@@ -2102,6 +2481,45 @@ export class Scene {
             hitAction = () => this.damageProp(target, p.damage, now);
           }
         }
+        // Player-vs-player damage. Gated by the world rule so the
+        // live PvE game never accidentally fires friendly damage;
+        // enabled for deathmatch arenas. Self-hits are filtered
+        // by the ownerCharacterId check.
+        if (this.bindings.pvpEnabled()) {
+          for (const memberId of this.members) {
+            if (memberId === p.ownerCharacterId) continue;
+            const conn = this.bindings.connection(memberId);
+            if (!conn || !conn.alive) continue;
+            const t = sweptCircleHit(
+              fromX,
+              fromY,
+              stepX,
+              stepY,
+              conn.x,
+              conn.y,
+              COMBAT.PLAYER_RADIUS + p.radius,
+            );
+            if (t === null || t >= earliestT) continue;
+            // Vertical hit filter — same shape as enemy → player.
+            const hitZ = fromZ + stepZ * t;
+            const tFloor = this.floorAt(conn.x, conn.y);
+            const tBot = tFloor + conn.jumpZ;
+            const tTop =
+              tBot +
+              (conn.crouching
+                ? COMBAT.PLAYER_HEIGHT_CROUCH
+                : COMBAT.PLAYER_HEIGHT_STAND);
+            if (hitZ < tBot || hitZ > tTop) continue;
+            earliestT = t;
+            const targetConn = conn;
+            const killerId = p.ownerCharacterId;
+            hitAction = () => {
+              this.applyDamage(targetConn, p.damage, now);
+              if (targetConn.hp <= 0)
+                this.killPlayer(targetConn, now, killerId);
+            };
+          }
+        }
       } else {
         for (const memberId of this.members) {
           const conn = this.bindings.connection(memberId);
@@ -2115,13 +2533,27 @@ export class Scene {
             conn.y,
             COMBAT.PLAYER_RADIUS + p.radius
           );
-          if (t !== null && t < earliestT) {
-            earliestT = t;
-            hitAction = () => {
-              this.applyDamage(conn, p.damage, now);
-              if (conn.hp <= 0) this.killPlayer(conn, now);
-            };
-          }
+          if (t === null || t >= earliestT) continue;
+          // Vertical hit filter — the bullet's Z at the hit time
+          // must overlap the target's silhouette. Bullet Z
+          // travels linearly along (fromZ → newZ), interpolated
+          // by t; the target's vertical span is floor + jumpZ to
+          // floor + jumpZ + height. Crouching halves the
+          // silhouette so head-height shots sail over.
+          const hitZ = fromZ + stepZ * t;
+          const tFloor = this.floorAt(conn.x, conn.y);
+          const tBot = tFloor + conn.jumpZ;
+          const tTop =
+            tBot +
+            (conn.crouching
+              ? COMBAT.PLAYER_HEIGHT_CROUCH
+              : COMBAT.PLAYER_HEIGHT_STAND);
+          if (hitZ < tBot || hitZ > tTop) continue;
+          earliestT = t;
+          hitAction = () => {
+            this.applyDamage(conn, p.damage, now);
+            if (conn.hp <= 0) this.killPlayer(conn, now);
+          };
         }
         // Enemy projectiles also damage buildings (drones erode the
         // base during horde). AABB-vs-segment via expanded box test.
@@ -2150,14 +2582,73 @@ export class Scene {
         }
       }
 
+      // Wall collision (polygon mode). Tests the swept segment
+      // against the WallIndex; earliest wall t shortens the step.
+      // Despawns with reason 'hit' when no target lies before
+      // the wall on the path. Vertical filter: a wall whose top
+      // is below the bullet's Z at the contact moment lets the
+      // round pass over — that's how you shoot over a riser /
+      // low cover.
+      if (POLY_COLLISION && this.sectorMap && this.wallIndex) {
+        const wallT = this.segmentNearestWallTZ(
+          fromX, fromY, fromZ,
+          newX, newY, newZ,
+        );
+        if (wallT !== null && wallT < earliestT) {
+          earliestT = wallT;
+          hitAction = null;
+        }
+      }
+
+      // Terrain / floor impact — the 3D flight line can dip below
+      // the floor (downward aim, noise hills). An endpoint sample
+      // is enough at 50ms steps; land at the crossing fraction so
+      // the impact sprite sits on the ground instead of under it.
+      const groundZ = this.floorAt(newX, newY);
+      if (newZ <= groundZ) {
+        const tGround =
+          stepZ < 0
+            ? Math.min(1, Math.max(0, (groundZ - fromZ) / stepZ))
+            : 1;
+        if (tGround < earliestT) {
+          earliestT = tGround;
+          hitAction = null;
+        }
+      }
+
       if (hitAction) {
         // Land the projectile at the contact point so the despawn
         // visual is at the actual hit location.
         p.x = fromX + stepX * earliestT;
         p.y = fromY + stepY * earliestT;
+        p.z = fromZ + stepZ * earliestT;
         hitAction();
         this.projectiles.delete(id);
-        this.broadcast({ type: 'projectile_despawned', id, reason: 'hit' });
+        this.broadcast({
+          type: 'projectile_despawned',
+          id,
+          reason: 'hit',
+          x: p.x,
+          y: p.y,
+          z: p.z,
+        });
+        hit = true;
+      } else if (earliestT < 1) {
+        // Wall hit, no target — land at the contact point and
+        // expire silently. Same `reason: 'hit'` so the client's
+        // sparks-on-impact handler fires.
+        p.x = fromX + stepX * earliestT;
+        p.y = fromY + stepY * earliestT;
+        p.z = fromZ + stepZ * earliestT;
+        this.projectiles.delete(id);
+        this.broadcast({
+          type: 'projectile_despawned',
+          id,
+          reason: 'hit',
+          x: p.x,
+          y: p.y,
+          z: p.z,
+        });
         hit = true;
       }
       if (hit) continue;
@@ -2165,6 +2656,7 @@ export class Scene {
       // No hit — commit the full step.
       p.x = newX;
       p.y = newY;
+      p.z = newZ;
     }
   }
 
@@ -2456,6 +2948,104 @@ export class Scene {
   // - "Safe" = no living enemy within `enemyClearRadiusPx`.
   // - The surface scene has no walkable bounds, so any tile is
   //   geometrically valid; this only matters for buildings + enemies.
+  // Bounded BFS on the 32px tile grid toward (toX, toY); returns a
+  // world-coord steering point for AI whose direct chase line is
+  // blocked, or null when no path exists (e.g. behind a locked
+  // door). The FSM throttles calls per-enemy (~450ms), so the node
+  // cap is the worst-case cost, not the steady-state one. The walk
+  // is floorZ-agnostic — same limitation as the rest of the AI grid
+  // (raised-sector pathing is tracked in ROADMAP Sprint G).
+  private static readonly AI_BFS_DIRS: ReadonlyArray<[number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+
+  nextAiWaypoint(
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+  ): { x: number; y: number } | null {
+    const grid = this.layout?.tileGrid;
+    const tiles = this.layoutTiles;
+    if (!grid || !tiles) return null;
+    const ts = this.layout?.tileSize ?? 32;
+
+    const buildingTiles = new Set<string>();
+    for (const b of this.buildings.values()) {
+      for (let dy = 0; dy < b.height; dy++) {
+        for (let dx = 0; dx < b.width; dx++) {
+          buildingTiles.add(`${b.tileX + dx},${b.tileY + dy}`);
+        }
+      }
+    }
+    const walkable = (tx: number, ty: number): boolean => {
+      if (buildingTiles.has(`${tx},${ty}`)) return false;
+      const id = tileIdAt(grid, tiles, (tx + 0.5) * ts, (ty + 0.5) * ts);
+      return isWalkableTileId(id);
+    };
+
+    const sx = Math.floor(fromX / ts);
+    const sy = Math.floor(fromY / ts);
+    const gx = Math.floor(toX / ts);
+    const gy = Math.floor(toY / ts);
+    if (sx === gx && sy === gy) return null;
+
+    const MAX_NODES = 600;
+    const startKey = `${sx},${sy}`;
+    const parent = new Map<string, string | null>([[startKey, null]]);
+    const queue: Array<[number, number]> = [[sx, sy]];
+    let best: [number, number] = [sx, sy];
+    let bestD = Math.abs(gx - sx) + Math.abs(gy - sy);
+    let found = false;
+    while (queue.length > 0 && parent.size < MAX_NODES) {
+      const [cx, cy] = queue.shift()!;
+      if (cx === gx && cy === gy) {
+        best = [cx, cy];
+        found = true;
+        break;
+      }
+      const d = Math.abs(gx - cx) + Math.abs(gy - cy);
+      if (d < bestD) {
+        bestD = d;
+        best = [cx, cy];
+      }
+      for (const [dx, dy] of Scene.AI_BFS_DIRS) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        const key = `${nx},${ny}`;
+        if (parent.has(key)) continue;
+        if (!walkable(nx, ny)) continue;
+        parent.set(key, `${cx},${cy}`);
+        queue.push([nx, ny]);
+      }
+    }
+    void found;
+    // Reconstruct start→best, then string-pull: take the furthest
+    // node along the path the enemy can reach in a straight line so
+    // steering hugs corners instead of zig-zagging tile centres.
+    const path: Array<[number, number]> = [];
+    let cur: string | null = `${best[0]},${best[1]}`;
+    while (cur) {
+      const [px, py] = cur.split(',').map(Number);
+      path.push([px, py]);
+      cur = parent.get(cur) ?? null;
+    }
+    path.reverse(); // start → best
+    if (path.length < 2) return null;
+    for (let i = path.length - 1; i >= 1; i--) {
+      const wx = (path[i][0] + 0.5) * ts;
+      const wy = (path[i][1] + 0.5) * ts;
+      if (this.segmentClear(fromX, fromY, wx, wy)) {
+        return { x: wx, y: wy };
+      }
+    }
+    const [fx, fy] = path[1];
+    return { x: (fx + 0.5) * ts, y: (fy + 0.5) * ts };
+  }
+
   findSafeSpawnNear(
     preferredX: number,
     preferredY: number,
@@ -2530,9 +3120,23 @@ export class Scene {
     this.killPlayer(conn, now);
   }
 
-  private killPlayer(conn: SceneConnection, now: number): void {
+  private killPlayer(
+    conn: SceneConnection,
+    now: number,
+    killerCharacterId: string | null = null,
+  ): void {
     conn.alive = false;
     conn.respawnAt = now + COMBAT.PLAYER_RESPAWN_MS;
+    conn.deaths += 1;
+    let killer: SceneConnection | null = null;
+    if (
+      killerCharacterId !== null &&
+      killerCharacterId !== conn.characterId &&
+      this.bindings.pvpEnabled()
+    ) {
+      killer = this.bindings.connection(killerCharacterId) ?? null;
+      if (killer) killer.kills += 1;
+    }
     this.broadcast({
       type: 'player_died',
       characterId: conn.characterId,
@@ -2540,7 +3144,21 @@ export class Scene {
     // Server-wide system chat line. Killer attribution would need
     // damage source plumbing through projectile/melee paths — leave
     // null for now and let the chat just say "X died".
-    this.bindings.onPlayerDied(conn.characterId, null);
+    this.bindings.onPlayerDied(
+      conn.characterId,
+      killer?.characterId ?? null,
+    );
+    // Surface kill in score broadcast so the client can update
+    // the scoreboard. Only meaningful in deathmatch; the binding
+    // gates whether the World cares.
+    if (killer) {
+      this.bindings.onDeathmatchKill?.(
+        killer.characterId,
+        conn.characterId,
+        killer.kills,
+        conn.deaths,
+      );
+    }
 
     // Drop the player's bag AND equipped suit gear to a corpse at the
     // death position. Per-server `dropItemsOnDeath` rule controls full-
@@ -2719,6 +3337,726 @@ export class Scene {
     return true;
   }
 
+  // Rebuild the local SectorMap + WallIndex from the current
+  // layout + buildings. Called at scene init and whenever
+  // buildings change. O(walkable tiles + buildings) — fast at
+  // current scene scales (~1ms for a 121×121 grid). Until the
+  // procgen rewrite emits sectors natively, this is the bridge
+  // that lets the server speak the v2 sector model.
+  private rebuildSectorMap(): void {
+    if (!this.layout) {
+      this.sectorMap = null;
+      this.wallIndex = null;
+      this.sectorByTile = null;
+      return;
+    }
+    // Authored scenes (level editor playtest, hand-authored
+    // scene overrides) pass their SectorMap intact through
+    // `layout.authoredSectorMap`. Use it as-is for polygon
+    // collision instead of round-tripping through the tile-
+    // grid → sectors rasteriser, which would quantise non-
+    // axis-aligned shapes. Player-placed buildings still need
+    // their cube walls appended; we deep-copy so we don't
+    // mutate the layout's shared map across rebuilds.
+    let map: typeof this.sectorMap;
+    if (this.layout.authoredSectorMap) {
+      const src = this.layout.authoredSectorMap;
+      map = {
+        sectors: src.sectors.map((s) => ({
+          ...s,
+          verts: s.verts.map((v) => ({ x: v.x, y: v.y })),
+        })),
+        walls: src.walls.map((w) => ({ ...w })),
+        lights: src.lights.map((l) => ({ ...l })),
+        bounds: { ...src.bounds },
+      };
+      const buildings = [...this.buildings.values()].map((b) => ({
+        id: b.id,
+        kind: b.kind,
+        tileX: b.tileX,
+        tileY: b.tileY,
+        width: b.width,
+        height: b.height,
+        hp: b.hp,
+        maxHp: b.maxHp,
+      }));
+      const tileSize = this.layout.tileSize ?? 32;
+      emitBuildingCubes(
+        buildings,
+        map.sectors,
+        map.walls,
+        tileSize,
+        WALL_HEIGHT_WORLD,
+        this.layout.biome ?? 'default',
+      );
+    } else {
+      map = buildSectorMap(this.layout, [...this.buildings.values()]);
+    }
+    this.sectorMap = map;
+    if (!map) {
+      this.wallIndex = null;
+      this.sectorByTile = null;
+      return;
+    }
+    // Split walls whose segments partially overlap walls of
+    // OTHER sectors (door inside a longer wall) so the
+    // overlapping portion is its own segment. Then auto-derive
+    // riser + lintel overrides on shared-edge walls. Both
+    // passes are idempotent for tile-derived maps that already
+    // emit overrides directly from the converter.
+    splitOverlappingWalls(map);
+    riserifyWalls(map);
+    const index = createWallIndex(Scene.WALL_INDEX_CELL);
+    for (let i = 0; i < map.walls.length; i++) {
+      const w = map.walls[i];
+      const sector = map.sectors[w.sectorId];
+      if (!sector) continue;
+      const ends = wallEndpoints(w, sector);
+      if (!ends) continue;
+      index.addWall(i, ends.a.x, ends.a.y, ends.b.x, ends.b.y);
+    }
+    this.wallIndex = index;
+    // Build the per-tile sector index when the layout has a grid.
+    // Walkable tile sectors map 1:1 to (lx, ly) cells in the order
+    // buildSectorMap emits them. Building-cube sectors come after
+    // the tile sectors and aren't recorded here (walkableSectorAt
+    // filters them anyway). Surface scenes skip this — they have
+    // one big sector and the polygon scan is cheap.
+    const grid = this.layout.tileGrid;
+    if (grid) {
+      const sbt = new Int32Array(grid.width * grid.height).fill(-1);
+      const tiles = this.layoutTiles;
+      if (tiles) {
+        let sectorId = 0;
+        for (let ly = 0; ly < grid.height; ly++) {
+          for (let lx = 0; lx < grid.width; lx++) {
+            if (isWalkableTileId(tiles[ly * grid.width + lx])) {
+              sbt[ly * grid.width + lx] = sectorId++;
+            }
+          }
+        }
+      }
+      this.sectorByTile = sbt;
+    } else {
+      this.sectorByTile = null;
+    }
+  }
+
+  // Combined building-mutation notifier. Rebuilds the local sector
+  // map so cube walls track placement / destruction, then fires
+  // the world-level binding so cross-scene state (UI, asset prewarm)
+  // stays in sync. Always call this instead of the binding directly.
+  private notifyBuildingsChanged(): void {
+    this.rebuildSectorMap();
+    this.bindings.onBuildingsChanged();
+  }
+
+  // Read-only accessors. Exposed for code paths that want to
+  // sample the polygon model (future projectile / LOS pass);
+  // current player-movement still uses tile + AABB collision.
+  getSectorMap(): SectorMap | null {
+    return this.sectorMap;
+  }
+  getWallIndex(): WallIndex | null {
+    return this.wallIndex;
+  }
+
+  // Push (x, y) out of any walls whose blocking-from-this-side
+  // distance is < PLAYER_RADIUS. Called after a step-down to
+  // resolve the radius-overlap left by walking over a riser:
+  // the wall is skip-overable from the high side (player
+  // crosses freely), but the moment they're on the lower side
+  // the same wall is a blocker — and they're already inside
+  // its radius. We iterate a few passes so multi-wall corners
+  // (player landing in an L-shaped riser) settle cleanly.
+  private depenetratePosition(
+    x: number,
+    y: number,
+    jumpZ: number,
+    crouching: boolean,
+  ): { x: number; y: number } {
+    if (!this.sectorMap || !this.wallIndex) return { x, y };
+    const sectors = this.sectorMap.sectors;
+    const radius = COMBAT.PLAYER_RADIUS;
+    const playerHeight = crouching
+      ? COMBAT.PLAYER_HEIGHT_CROUCH
+      : COMBAT.PLAYER_HEIGHT_STAND;
+    for (let pass = 0; pass < 3; pass++) {
+      let moved = false;
+      const fromFloor = this.floorAt(x, y);
+      const climbBudget = Math.max(COMBAT.STEP_UP_MAX, jumpZ);
+      const stepLimitTop = fromFloor + climbBudget;
+      const playerTop = fromFloor + playerHeight;
+      for (const wallIdx of this.wallIndex.cellsTouchingSegmentPadded(
+        x,
+        y,
+        x,
+        y,
+        radius,
+      )) {
+        const wall = this.sectorMap.walls[wallIdx];
+        if (!wall) continue;
+        // Authored portal walls don't block — same rule as
+        // circleSweepPassable so depenetration doesn't push the
+        // player out of a doorway they should be standing in.
+        if (
+          !wall.solid &&
+          wall.floorZOverride === undefined &&
+          wall.ceilingZOverride === undefined
+        ) {
+          continue;
+        }
+        const wallTop =
+          wall.ceilingZOverride !== undefined
+            ? wall.ceilingZOverride
+            : sectors[wall.sectorId]?.ceilingZ ?? 0;
+        const wallBot =
+          wall.floorZOverride !== undefined
+            ? wall.floorZOverride
+            : sectors[wall.sectorId]?.floorZ ?? 0;
+        // Head clearance — lintels above the player's top pass.
+        if (wallBot >= playerTop) continue;
+        // Step-overable from this side → not a blocker, skip.
+        if (wallTop <= stepLimitTop) continue;
+        const sector = sectors[wall.sectorId];
+        if (!sector) continue;
+        const ends = wallEndpoints(wall, sector);
+        if (!ends) continue;
+        const a = ends.a;
+        const b = ends.b;
+        const d = pointSegmentDistance(a.x, a.y, b.x, b.y, x, y);
+        if (d >= radius) continue;
+        // Push outward along the perpendicular from the segment.
+        // Compute the closest point, then the normal from there.
+        const abx = b.x - a.x;
+        const aby = b.y - a.y;
+        const abLen2 = abx * abx + aby * aby;
+        if (abLen2 === 0) continue;
+        let tParam = ((x - a.x) * abx + (y - a.y) * aby) / abLen2;
+        if (tParam < 0) tParam = 0;
+        else if (tParam > 1) tParam = 1;
+        const cx = a.x + abx * tParam;
+        const cy = a.y + aby * tParam;
+        const nx = x - cx;
+        const ny = y - cy;
+        const nLen = Math.hypot(nx, ny);
+        if (nLen < 0.0001) continue;
+        const push = radius - d + 0.02;
+        x += (nx / nLen) * push;
+        y += (ny / nLen) * push;
+        moved = true;
+      }
+      // Vertical clearance can also pull the player onto a
+      // walkable spot — bail early when settled.
+      if (!moved) break;
+      void crouching; // wall depenetration is XY-only; vertical
+                      // clearance handled in circleSweepPassable.
+    }
+    return { x, y };
+  }
+
+  // Walkable sector containing (x, y). "Walkable" excludes
+  // building-cap sectors (they're at ceiling height, not floor)
+  // and any sector with a buildingKind. Returns null when the
+  // point is outside playable space (void, inside a cube footprint
+  // is also "walkable" 2D-wise but blocked by the cube walls; the
+  // walls handle that).
+  //
+  // Fast path: tile-derived scenes use the per-tile sector index,
+  // O(1) lookup. Tile-less scenes (surface) fall back to a polygon
+  // scan, cheap at 1-N sectors.
+  // Walkable sector containing (x, y) whose floorZ is at or
+  // below `cap`. Picks the HIGHEST qualifying floor — so a
+  // step-height platform sitting on the base floor returns
+  // the platform, while a tall overhead platform (above cap)
+  // returns the base. Pass cap = Infinity for the "where am
+  // I currently standing" query; pass `fromFloor + STEP_UP_MAX`
+  // for the "where could I step to" query.
+  private walkableSectorAt(
+    x: number,
+    y: number,
+    cap: number = Infinity,
+  ): import('@dumrunner/shared').Sector | null {
+    if (!this.sectorMap) return null;
+    // Fast path only valid for the tile-grid-derived sector
+    // map. Authored scenes replace it; the per-tile index no
+    // longer aligns, so fall through to the polygon scan.
+    const useFastPath =
+      !this.layout?.authoredSectorMap && !!this.sectorByTile;
+    const grid = this.layout?.tileGrid;
+    if (useFastPath && grid && this.sectorByTile) {
+      const lx = Math.floor(x / grid.tileSize) - grid.originTileX;
+      const ly = Math.floor(y / grid.tileSize) - grid.originTileY;
+      if (lx < 0 || ly < 0 || lx >= grid.width || ly >= grid.height) return null;
+      const sId = this.sectorByTile[ly * grid.width + lx];
+      if (sId < 0) return null;
+      const s = this.sectorMap.sectors[sId] ?? null;
+      if (s && s.floorZ > cap) return null;
+      return s;
+    }
+    // Open-air sentinel sector (`ceilingZ <= floorZ`) is the
+    // surface scene's "no ceiling" marker. Its flat floorZ (0)
+    // is NOT the real ground at the destination — the actual
+    // ground is the terrain heightmap. Comparing the sentinel's
+    // raw floorZ to `cap` (which is fromFloor + climbBudget)
+    // rejects the sector whenever the player has stepped below
+    // z=0 on the terrain. Resolve the sentinel's effective floor
+    // via the terrain instead so cap comparison reflects the
+    // ACTUAL ground at (x,y), not the placeholder z=0.
+    const terrain = this.layout?.terrain;
+    let best: import('@dumrunner/shared').Sector | null = null;
+    let bestFloor = -Infinity;
+    for (const s of this.sectorMap.sectors) {
+      if (s.buildingKind !== undefined) continue;
+      const effFloor =
+        s.ceilingZ <= s.floorZ && terrain
+          ? terrainHeightAt(terrain, x, y)
+          : s.floorZ;
+      if (effFloor > cap) continue;
+      if (!pointInPolygon(s.verts, x, y)) continue;
+      if (effFloor > bestFloor) {
+        best = s;
+        bestFloor = effFloor;
+      }
+    }
+    return best;
+  }
+
+  // Find the first wall the swept circle would intersect during
+  // the move, along with the wall's tangent unit vector. Used by
+  // simulatePlayerMovement to slide ALONG the wall when the
+  // diagonal move blocks — without this the X/Y fallback gives
+  // tile-corner sliding feel even on a 30° wall. Returns null
+  // when no wall blocks (move is clear). Honours the same step-
+  // up / portal / non-solid filters as `circleSweepPassable`.
+  private findBlockingWall(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    radius: number,
+    fromFloor: number,
+    jumpZ: number = 0,
+  ): { tx: number; ty: number } | null {
+    if (!this.sectorMap || !this.wallIndex) return null;
+    const climbBudget = Math.max(COMBAT.STEP_UP_MAX, jumpZ);
+    const stepLimitTop = fromFloor + climbBudget;
+    // Use standing height for the head-clearance test — slightly
+    // conservative when crouched but avoids needing a per-call
+    // crouching flag here. (Worst case: a crouching player can't
+    // squeeze under a soffit that's between crouch and stand
+    // heights; rare.)
+    const playerTop = fromFloor + COMBAT.PLAYER_HEIGHT_STAND;
+    const sectors = this.sectorMap.sectors;
+    let bestDsq = Infinity;
+    let bestTangent: { tx: number; ty: number } | null = null;
+    for (const wallIdx of this.wallIndex.cellsTouchingSegmentPadded(
+      x0,
+      y0,
+      x1,
+      y1,
+      radius,
+    )) {
+      const wall = this.sectorMap.walls[wallIdx];
+      if (!wall) continue;
+      if (
+        !wall.solid &&
+        wall.floorZOverride === undefined &&
+        wall.ceilingZOverride === undefined
+      ) {
+        continue;
+      }
+      const wallTop =
+        wall.ceilingZOverride !== undefined
+          ? wall.ceilingZOverride
+          : sectors[wall.sectorId]?.ceilingZ ?? 0;
+      const wallBot =
+        wall.floorZOverride !== undefined
+          ? wall.floorZOverride
+          : sectors[wall.sectorId]?.floorZ ?? 0;
+      if (wallBot >= playerTop) continue; // head clearance
+      if (wallTop <= stepLimitTop) continue;
+      const sector = sectors[wall.sectorId];
+      if (!sector) continue;
+      const ends = wallEndpoints(wall, sector);
+      if (!ends) continue;
+      const a = ends.a;
+      const b = ends.b;
+      const d = pointSegmentDistance(a.x, a.y, b.x, b.y, x1, y1);
+      if (d >= radius) continue;
+      const dsq = d * d;
+      if (dsq < bestDsq) {
+        bestDsq = dsq;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (len === 0) continue;
+        bestTangent = { tx: dx / len, ty: dy / len };
+      }
+    }
+    return bestTangent;
+  }
+
+  // Polygon circle-passability: returns true iff a circle of
+  // `radius` sweeping from (x0,y0) to (x1,y1) doesn't intersect
+  // any blocking wall AND p1 lies inside a walkable sector. Walls
+  // whose effective top is ≤ stepUpThreshold above `fromFloor`
+  // are ignored — they're step-up risers the player can climb.
+  // Non-solid walls (riser perimeters) are also ignored; the
+  // sector-membership + step-up gates at the caller handle them.
+  private circleSweepPassable(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    radius: number,
+    fromFloor: number,
+    jumpZ: number = 0,
+    crouching: boolean = false,
+  ): boolean {
+    if (!this.sectorMap || !this.wallIndex) return true;
+    // Enable verbose movement diagnostics by setting the env var
+    // MOVE_DEBUG=1 on the server. Prints WHY a move was rejected
+    // — `floorAt`, `ceilingAt`, dest sector, and which wall (if
+    // any) blocked. Use this when the editor / playtest disagree
+    // about whether the player can enter a pit / platform / etc.
+    const debug = process.env.MOVE_DEBUG === '1';
+    const climbBudget = Math.max(COMBAT.STEP_UP_MAX, jumpZ);
+    const floorCap = fromFloor + climbBudget;
+    const dest = this.walkableSectorAt(x1, y1, floorCap);
+    if (debug) {
+      console.log(
+        `[MOVE] from=(${x0.toFixed(1)},${y0.toFixed(1)}) to=(${x1.toFixed(1)},${y1.toFixed(1)}) ` +
+          `r=${radius} fromFloor=${fromFloor} jumpZ=${jumpZ} crouch=${crouching} ` +
+          `climbBudget=${climbBudget} floorCap=${floorCap} dest=${dest ? `s${dest.id}(floorZ=${dest.floorZ})` : 'NONE'}`,
+      );
+    }
+    if (!dest) {
+      if (debug) console.log(`[MOVE] REJECT: no walkable sector at dest`);
+      return false;
+    }
+    // Step-up uses the TRUE floor at the destination (terrain +
+    // platforms + authored sectors), capped so we don't reach
+    // for an out-of-reach overhead. On hilly surfaces the sector
+    // floorZ is 0 while the real floor can dip below or rise
+    // above it.
+    const toFloor = this.floorAt(x1, y1, floorCap);
+    if (debug) {
+      console.log(
+        `[MOVE] toFloor=${toFloor} step=${toFloor - fromFloor} climbBudget=${climbBudget}`,
+      );
+    }
+    if (toFloor - fromFloor > climbBudget) {
+      if (debug)
+        console.log(
+          `[MOVE] REJECT: step ${toFloor - fromFloor} > budget ${climbBudget}`,
+        );
+      return false;
+    }
+    // Vertical clearance: the destination needs enough headroom
+    // for the player's current vertical extent (crouch = 14,
+    // stand = 24). Pass the destination floor to ceilingAt so
+    // an overhead platform CAPS the headroom at its underside,
+    // not at the room ceiling above it.
+    const playerHeight = crouching
+      ? COMBAT.PLAYER_HEIGHT_CROUCH
+      : COMBAT.PLAYER_HEIGHT_STAND;
+    const ceiling = this.ceilingAt(x1, y1, toFloor);
+    if (debug) {
+      console.log(
+        `[MOVE] ceiling=${ceiling} headroom=${ceiling - toFloor} need=${playerHeight}`,
+      );
+    }
+    if (ceiling - toFloor < playerHeight) {
+      if (debug)
+        console.log(
+          `[MOVE] REJECT: headroom ${ceiling - toFloor} < ${playerHeight}`,
+        );
+      return false;
+    }
+    const stepLimitTop = fromFloor + climbBudget;
+    const playerTop = fromFloor + playerHeight;
+    const sectors = this.sectorMap.sectors;
+    // Pad the query by radius so a wall the circle grazes without
+    // its midpoint entering the cell still gets considered.
+    for (const wallIdx of this.wallIndex.cellsTouchingSegmentPadded(
+      x0,
+      y0,
+      x1,
+      y1,
+      radius,
+    )) {
+      const wall = this.sectorMap.walls[wallIdx];
+      if (!wall) continue;
+      // Authored portal walls — author flagged `solid: false`
+      // with no vertical override (an open seam between two
+      // walkable sectors). Movement passes through. Riser walls
+      // are also `solid: false` but DO carry overrides; they
+      // fall through to the height check below.
+      if (
+        !wall.solid &&
+        wall.floorZOverride === undefined &&
+        wall.ceilingZOverride === undefined
+      ) {
+        continue;
+      }
+      const wallTop =
+        wall.ceilingZOverride !== undefined
+          ? wall.ceilingZOverride
+          : sectors[wall.sectorId]?.ceilingZ ?? 0;
+      const wallBot =
+        wall.floorZOverride !== undefined
+          ? wall.floorZOverride
+          : sectors[wall.sectorId]?.floorZ ?? 0;
+      // Head clearance: the wall's bottom is above the player's
+      // top. Lintels / soffits at the top of doorways pass this
+      // check — player walks under them without colliding.
+      if (wallBot >= playerTop) continue;
+      // Step-overable: a riser whose top is within the player's
+      // step-up reach. They naturally walk up; collision skips.
+      // Solid full-height walls (always > stepLimitTop) and
+      // un-climbable risers (top > stepLimitTop) both fall through
+      // to the swept-circle check and block.
+      if (wallTop <= stepLimitTop) continue;
+      const sector = sectors[wall.sectorId];
+      if (!sector) continue;
+      const ends = wallEndpoints(wall, sector);
+      if (!ends) continue;
+      const a = ends.a;
+      const b = ends.b;
+      if (
+        !sweptCircleClearsSegment(x0, y0, x1, y1, radius, a.x, a.y, b.x, b.y)
+      ) {
+        if (debug) {
+          console.log(
+            `[MOVE] REJECT: wall ${wallIdx} sector=s${wall.sectorId} ` +
+              `seg=(${a.x.toFixed(1)},${a.y.toFixed(1)})→(${b.x.toFixed(1)},${b.y.toFixed(1)}) ` +
+              `top=${wallTop} bot=${wallBot} solid=${wall.solid} ` +
+              `playerTop=${playerTop} stepLimitTop=${stepLimitTop}`,
+          );
+        }
+        return false;
+      }
+    }
+    if (debug) console.log(`[MOVE] PASS`);
+    return true;
+  }
+
+  // Spawn-flavoured floor lookup. Returns the LOWEST walkable
+  // sector's floorZ at (x, y) — so a player whose authored spawn
+  // point happens to fall inside an overlapping high platform
+  // still lands on the ground level instead of on top of the
+  // platform. Falls back to terrain / 0 when no sector matches.
+  spawnFloorAt(x: number, y: number): number {
+    if (!this.sectorMap) {
+      const terrain = this.layout?.terrain;
+      return terrain ? terrainHeightAt(terrain, x, y) : 0;
+    }
+    let lowest: number | null = null;
+    for (const s of this.sectorMap.sectors) {
+      if (s.buildingKind !== undefined) continue;
+      // Skip open-air sentinel sectors (surface bounds) so spawn
+      // resolves to terrain height when only the open sector
+      // contains the point.
+      if (s.ceilingZ <= s.floorZ) continue;
+      if (!pointInPolygon(s.verts, x, y)) continue;
+      if (lowest === null || s.floorZ < lowest) lowest = s.floorZ;
+    }
+    if (lowest === null) {
+      const terrain = this.layout?.terrain;
+      return terrain ? terrainHeightAt(terrain, x, y) : 0;
+    }
+    return lowest;
+  }
+
+  // Ceiling above a world point WITH a "from floor" context.
+  // Used by jump head-bonk + vertical-clearance collision when
+  // sectors stack vertically (a high platform overhead while
+  // the player walks underneath at ground level). Picks the
+  // lowest sector floor strictly above `fromFloor` at this XY,
+  // else the containing sector's own ceilingZ. Open-air sectors
+  // (ceilingZ < floorZ sentinel) return Infinity when no sector
+  // overhead exists.
+  ceilingAt(x: number, y: number, fromFloor: number = 0): number {
+    if (!this.sectorMap) return Infinity;
+    function polygonArea(s: import('@dumrunner/shared').Sector): number {
+      let a = 0;
+      for (let i = 0; i < s.verts.length; i++) {
+        const p = s.verts[i];
+        const q = s.verts[(i + 1) % s.verts.length];
+        a += p.x * q.y - q.x * p.y;
+      }
+      return Math.abs(a) * 0.5;
+    }
+    // Step 1: find the SMALLEST containing sector at or below
+    // the player's floor — that's the immediately-containing
+    // sector and its ceiling is the baseline headroom.
+    //
+    // The floor-vs-fromFloor disqualifier compares the sector's
+    // EFFECTIVE floor at (x, y) — baseline floorZ plus per-sector
+    // noise displacement — not its raw floorZ. Without this,
+    // floor noise that dips below the baseline would knock the
+    // sector OUT of the containing-sector scan (its baseline 0
+    // > the player's noise-displaced fromFloor of -0.04), the
+    // overhead pass would then see the very same sector as an
+    // overhead (smaller-area, floorZ > fromFloor), and ceiling
+    // would collapse to 0 — head-clearance fails everywhere a
+    // noise trough lands. Reproduced in MOVE_DEBUG output:
+    // `ceiling=0 headroom=0.036 REJECT` at points right after
+    // a noise trough.
+    let containingArea = Infinity;
+    let containingFloor = -Infinity;
+    let containingCeiling = Infinity;
+    for (const s of this.sectorMap.sectors) {
+      if (s.buildingKind !== undefined) continue;
+      if (!pointInPolygon(s.verts, x, y)) continue;
+      const sFloor =
+        s.floorZ +
+        (s.floorNoise
+          ? sectorNoiseOffsetAt(s.floorNoise, s.verts, s.holes, x, y)
+          : 0);
+      if (sFloor > fromFloor + 0.5) continue;
+      if (s.ceilingZ <= s.floorZ) continue;
+      const area = polygonArea(s);
+      if (area < containingArea) {
+        containingArea = area;
+        containingFloor = sFloor;
+        containingCeiling = s.ceilingZ;
+      }
+    }
+    // Ceiling noise is RENDERER-ONLY — server collision uses the
+    // flat ceilingZ. This way crank-it-up amplitudes can't
+    // accidentally seal a room from movement (combined floor+
+    // ceiling narrowing dropping headroom below playerHeight).
+    // The visual cave-ceiling effect still renders; the player
+    // just clips through any low overhang silhouette. If a real
+    // collision-affecting low-ceiling primitive is wanted, the
+    // user can carve a vent sub-sector with an explicit
+    // ceilingZ instead — that hits the head-clearance check
+    // because it's authored as a hard geometric primitive.
+    // Step 2: a true "overhead" is a sub-sector INSIDE the
+    // containing sector that has its floor strictly above the
+    // player's. The outer parent room (whose floor is also
+    // technically above the player when the player is in a
+    // sunken sub-sector) is NOT an overhead — it's the parent,
+    // and physically the player is below an opening, not under
+    // a slab. Detect overhead = smaller-than-containing-sector
+    // with floor > fromFloor.
+    let lowestOverhead = Infinity;
+    for (const s of this.sectorMap.sectors) {
+      if (s.buildingKind !== undefined) continue;
+      if (!pointInPolygon(s.verts, x, y)) continue;
+      // Open-air sentinel (`ceilingZ <= floorZ`) is not a slab —
+      // it's an explicit "no ceiling here" marker (surface scene,
+      // convertOpenLayout). Without this skip, when an open-air
+      // sector is the ONLY sector at the point the containing scan
+      // misses it (correctly) AND the overhead scan picks it up
+      // (incorrectly) — its `floorZ:0 > containingFloor:-Infinity`,
+      // area < Infinity, so it reads as an overhead and collapses
+      // the ceiling to 0. Headroom 0 rejects every move on the
+      // surface.
+      if (s.ceilingZ <= s.floorZ) continue;
+      // Overhead = sub-sector strictly above the CONTAINING
+      // sector's floor (not the player's noise-displaced one).
+      // Same reason as above — without this, the player's own
+      // sector reads as an overhead when a noise trough drops
+      // their feet a fraction below the baseline.
+      if (s.floorZ <= containingFloor + 0.5) continue;
+      const area = polygonArea(s);
+      if (area >= containingArea) continue; // parent or peer, skip
+      if (s.floorZ < lowestOverhead) lowestOverhead = s.floorZ;
+    }
+    return Math.min(containingCeiling, lowestOverhead);
+  }
+
+  // Floor height under a world point. Three sources combined
+  // through a ceiling-aware max: the player's "current floor"
+  // wins over a higher sector at the same XY only when reaching
+  // it would exceed the floor cap. Used both for step-up gating
+  // (cap = fromFloor + STEP_UP_MAX so you don't snap onto a
+  // taller platform) and for "where am I standing now" queries
+  // (cap = +Infinity).
+  //
+  // Sources, in order:
+  //   1. Noise terrain (signed; baseline). Always applies.
+  //   2. Tile-rect platforms (legacy procgen primitive).
+  //   3. Authored sector floors. Skipped when sector.floorZ
+  //      exceeds the cap — that's what lets you walk UNDER a
+  //      high platform without snapping up onto it.
+  floorAt(x: number, y: number, cap: number = Infinity): number {
+    let z = 0;
+    const terrain = this.layout?.terrain;
+    if (terrain) z = terrainHeightAt(terrain, x, y);
+    const platforms = this.layout?.platforms;
+    if (platforms && platforms.length > 0) {
+      const tileSize = this.layout?.tileSize ?? 32;
+      if (tileSize > 0) {
+        for (const p of platforms) {
+          const x0 = p.tileX * tileSize;
+          const y0 = p.tileY * tileSize;
+          const x1 = x0 + p.w * tileSize;
+          const y1 = y0 + p.h * tileSize;
+          if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+          if (p.floorZ > cap) continue;
+          if (p.floorZ > z) z = p.floorZ;
+        }
+      }
+    }
+    if (this.sectorMap) {
+      // Pick the SMALLEST containing sector's floor (by polygon
+      // area) — that's the immediate sub-sector the point lies
+      // in. Carved pits / vents inside an outer room win because
+      // they're smaller, so the player drops into the pit instead
+      // of standing on the parent room's floor. Sectors whose
+      // floor is above `cap` (= currentFloor + STEP_UP_MAX) are
+      // skipped — out-of-reach platforms can't be stepped onto;
+      // a deeper containing sector (e.g. outer room) wins.
+      let bestArea = Infinity;
+      let bestFloor: number | null = null;
+      let bestSector: typeof this.sectorMap.sectors[number] | null = null;
+      for (const s of this.sectorMap.sectors) {
+        if (s.buildingKind !== undefined) continue;
+        // Open-air sentinel sectors (ceilingZ<=floorZ) are bounds
+        // markers, not authored floors. Skip them so terrain wins
+        // on the surface — otherwise the sector's flat floorZ:0
+        // overrides terrain height and the player walks through
+        // hills + projectiles spawn at z=0 instead of the shooter's
+        // actual elevation.
+        if (s.ceilingZ <= s.floorZ) continue;
+        if (s.floorZ > cap) continue;
+        if (!pointInPolygon(s.verts, x, y)) continue;
+        let a = 0;
+        for (let i = 0; i < s.verts.length; i++) {
+          const p = s.verts[i];
+          const q = s.verts[(i + 1) % s.verts.length];
+          a += p.x * q.y - q.x * p.y;
+        }
+        const area = Math.abs(a) * 0.5;
+        if (area < bestArea) {
+          bestArea = area;
+          bestFloor = s.floorZ;
+          bestSector = s;
+        }
+      }
+      if (bestFloor !== null) {
+        z = bestFloor;
+        // Per-sector noise displacement, falling off to 0 at the
+        // polygon perimeter so portals match the neighbour's flat
+        // floor.
+        if (bestSector?.floorNoise) {
+          z += sectorNoiseOffsetAt(
+            bestSector.floorNoise,
+            bestSector.verts,
+            bestSector.holes,
+            x,
+            y,
+          );
+        }
+      }
+    }
+    return z;
+  }
+
   // Bounding-circle passability: 16 perimeter samples must all pass.
   // Rebuilt locally rather than reusing circleFits — that helper checks
   // walkables only and doesn't know about buildings.
@@ -2740,6 +4078,9 @@ export class Scene {
     x2: number,
     y2: number
   ): boolean {
+    if (POLY_COLLISION && this.sectorMap && this.wallIndex) {
+      return this.segmentClearPolygon(x1, y1, x2, y2);
+    }
     if (this.layout?.tileGrid && this.layoutTiles) {
       const grid = this.layout.tileGrid;
       const dx = x2 - x1;
@@ -2777,6 +4118,132 @@ export class Scene {
       if (this.isPointInAnyBuilding(x1 + dx * t, y1 + dy * t)) return false;
     }
     return true;
+  }
+
+  // Polygon LOS / projectile path. True iff the segment doesn't
+  // intersect any solid wall whose vertical span overlaps the
+  // sight-line's plane. We ignore Z for now — projectiles travel
+  // in the (x, y) plane at a fixed eye-relative height; v2.1 adds
+  // a vertical filter (so e.g. a 12-wu riser doesn't block a
+  // shoulder-height shot). Cube walls span the full room height
+  // and block reliably already.
+  //
+  // Risers below the LOS threshold are step-overable for movement
+  // but for sight / projectiles they DO block — you can't see /
+  // shoot through a 2-wu lip just because you could walk over it.
+  // First-cut rule: every wall blocks except risers shorter than
+  // 4 wu, which we treat as "feet-only" geometry (no door / wall
+  // lower than this in the current content).
+  private segmentClearPolygon(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+  ): boolean {
+    return this.segmentNearestWallT(x1, y1, x2, y2) === null;
+  }
+
+  // First wall-segment intersection along (x1,y1,z1) →
+  // (x2,y2,z2), as a parameter t ∈ [0, 1]. Filters walls whose
+  // vertical span doesn't overlap the bullet's Z at the
+  // intersection — so a bullet flying over a low riser passes
+  // freely. Used by the projectile loop for terrain-aware hits.
+  private segmentNearestWallTZ(
+    x1: number, y1: number, z1: number,
+    x2: number, y2: number, z2: number,
+  ): number | null {
+    if (!this.sectorMap || !this.wallIndex) return null;
+    const sectors = this.sectorMap.sectors;
+    let best: number | null = null;
+    for (const wallIdx of this.wallIndex.cellsTouchingSegment(x1, y1, x2, y2)) {
+      const wall = this.sectorMap.walls[wallIdx];
+      if (!wall) continue;
+      // Authored portal walls — open seam, no collision for
+      // movement, projectiles, OR sight.
+      if (
+        !wall.solid &&
+        wall.floorZOverride === undefined &&
+        wall.ceilingZOverride === undefined
+      ) {
+        continue;
+      }
+      const wallTop =
+        wall.ceilingZOverride !== undefined
+          ? wall.ceilingZOverride
+          : sectors[wall.sectorId]?.ceilingZ ?? 0;
+      const wallBot =
+        wall.floorZOverride !== undefined
+          ? wall.floorZOverride
+          : sectors[wall.sectorId]?.floorZ ?? 0;
+      if (wallTop - wallBot < 4) continue;
+      const sector = sectors[wall.sectorId];
+      if (!sector) continue;
+      const ends = wallEndpoints(wall, sector);
+      if (!ends) continue;
+      const a = ends.a;
+      const b = ends.b;
+      const t = segmentSegmentIntersect(
+        x1, y1, x2, y2,
+        a.x, a.y, b.x, b.y,
+      );
+      if (t === null) continue;
+      const hitZ = z1 + (z2 - z1) * t;
+      if (hitZ < wallBot || hitZ > wallTop) continue;
+      if (best === null || t < best) best = t;
+    }
+    return best;
+  }
+
+  // First wall-segment intersection along (x1,y1) → (x2,y2), as
+  // a parameter t ∈ [0, 1]. Returns null when the segment passes
+  // freely. Used by LOS (boolean wrapper via segmentClearPolygon)
+  // and by the projectile loop (consumes t to land the despawn
+  // at the contact point). Low risers (< 4 wu) are ignored — the
+  // first-cut sight rule treats them as feet-level geometry.
+  private segmentNearestWallT(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+  ): number | null {
+    if (!this.sectorMap || !this.wallIndex) return null;
+    const sectors = this.sectorMap.sectors;
+    let best: number | null = null;
+    for (const wallIdx of this.wallIndex.cellsTouchingSegment(x1, y1, x2, y2)) {
+      const wall = this.sectorMap.walls[wallIdx];
+      if (!wall) continue;
+      // Authored portal walls — open seam, no collision for
+      // movement, projectiles, OR sight.
+      if (
+        !wall.solid &&
+        wall.floorZOverride === undefined &&
+        wall.ceilingZOverride === undefined
+      ) {
+        continue;
+      }
+      const wallTop =
+        wall.ceilingZOverride !== undefined
+          ? wall.ceilingZOverride
+          : sectors[wall.sectorId]?.ceilingZ ?? 0;
+      const wallBot =
+        wall.floorZOverride !== undefined
+          ? wall.floorZOverride
+          : sectors[wall.sectorId]?.floorZ ?? 0;
+      if (wallTop - wallBot < 4) continue;
+      const sector = sectors[wall.sectorId];
+      if (!sector) continue;
+      const ends = wallEndpoints(wall, sector);
+      if (!ends) continue;
+      const a = ends.a;
+      const b = ends.b;
+      const t = segmentSegmentIntersect(
+        x1, y1, x2, y2,
+        a.x, a.y, b.x, b.y,
+      );
+      if (t === null) continue;
+      if (best === null || t < best) best = t;
+    }
+    return best;
   }
 
   private isPointInAnyBuilding(x: number, y: number): boolean {
@@ -2828,7 +4295,7 @@ export class Scene {
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
-    this.bindings.onBuildingsChanged();
+    this.notifyBuildingsChanged();
     return building;
   }
 
@@ -2880,7 +4347,7 @@ export class Scene {
         building: toBuildingState(building),
       });
     }
-    this.bindings.onBuildingsChanged();
+    this.notifyBuildingsChanged();
     // Procgen places the extract_pad ~1.5 tiles from the entrance
     // centre — in narrow (3-tile) entrance rooms that collapses
     // onto the spawn cell, so a fresh descend would teleport the
@@ -2968,7 +4435,7 @@ export class Scene {
       });
       ensureBuildingAsset(spec.kind);
     }
-    this.bindings.onBuildingsChanged();
+    this.notifyBuildingsChanged();
   }
 
   // Open (remove) a door building AND every adjacent door connected to
@@ -3080,6 +4547,9 @@ export class Scene {
     const b = this.buildings.get(buildingId);
     if (!b || b.kind !== 'wall_door') return false;
     b.open = !b.open;
+    // Open/close changes whether the door's cube walls block —
+    // SectorMap rebuild keeps polygon collision in sync.
+    this.rebuildSectorMap();
     this.broadcast({ type: 'building_placed', building: toBuildingState(b) });
     return true;
   }
@@ -3275,22 +4745,35 @@ export class Scene {
     ttlMs: number;
     radius: number;
     color: number;
+    // Optional world-Z origin. When unset, defaults to standing
+    // eye height above terrain floor — fine for AI / turret fire
+    // which doesn't have a meaningful crouch / jump state.
+    originZ?: number;
+    // Vertical velocity at spawn (wu/s). Comes from the camera
+    // pitch for player fire; defaults to 0 (flat) for AI / turrets.
+    vzInit?: number;
     imbues?: ProjectileRuntime['imbues'];
     weaponId?: string;
   }): void {
     const id = `p${this.nextProjectileId++}`;
+    const originZ =
+      args.originZ ??
+      this.floorAt(args.fromX, args.fromY) + COMBAT.EYE_HEIGHT_STAND;
     const proj: ProjectileRuntime = {
       id,
       ownerCharacterId: args.ownerId,
       ownerKind: args.ownerKind,
       x: args.fromX,
       y: args.fromY,
+      z: originZ,
       vx: args.dirX * args.speed,
       vy: args.dirY * args.speed,
+      vz: args.vzInit ?? 0,
       color: args.color,
       expiresAt: Date.now() + args.ttlMs,
       damage: args.damage,
       radius: args.radius,
+      originZ,
       imbues: args.imbues,
       weaponId: args.weaponId,
     };
@@ -3348,6 +4831,19 @@ export interface SceneBindings {
   applyPlayerEffect(
     characterId: string,
     effect: import('@dumrunner/shared').PlayerEffect
+  ): void;
+  // True when the world allows player-vs-player damage. Live and
+  // sandbox return false; deathmatch returns true. Gates the
+  // PvP collision loop in projectile + melee processing.
+  pvpEnabled(): boolean;
+  // Optional: notified on every PvP kill so the World can update
+  // round score, check win condition, broadcast scoreboard. Only
+  // present on deathmatch worlds — live / sandbox don't wire it.
+  onDeathmatchKill?(
+    killerCharacterId: string,
+    victimCharacterId: string,
+    killerKills: number,
+    victimDeaths: number,
   ): void;
 }
 
@@ -3507,6 +5003,15 @@ function toProjectileState(p: ProjectileRuntime): ProjectileState {
     ownerKind: p.ownerKind,
     x: p.x,
     y: p.y,
+    // Vertical origin + velocity. Without these, the FPS client
+    // falls back to its own camera eyeZ for z (so bullets appear
+    // at the LOCAL player's eye level, not the shooter's) and
+    // vz=0 (so bullets travel parallel to the ground even when
+    // aimed up or down). Including them makes pitch-aware aim
+    // work and pit / platform shooters fire from where they
+    // actually are.
+    z: p.z,
+    vz: p.vz,
     vx: p.vx,
     vy: p.vy,
     color: p.color,

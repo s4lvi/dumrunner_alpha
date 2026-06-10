@@ -145,7 +145,15 @@ export type CorpseState = {
 // via collision; the client uses the same data to render the floor.
 export type Rect = { x: number; y: number; w: number; h: number };
 
-export type InteractableKind = 'stairs_down' | 'extract_pad';
+export type InteractableKind = 'stairs_down' | 'extract_pad' | 'dm_spawn';
+
+// Server world mode. `live` is the canonical game (surface base,
+// dungeon, perihelion, no PvP). `sandbox` is a single-client
+// editor playtest session (no surface, no persistence, no horde).
+// `deathmatch` is a PvP arena bound to a single authored scene
+// — no surface, no dungeon, no perihelion, but PvP damage is on
+// and players respawn at `dm_spawn` interactables.
+export type WorldMode = 'live' | 'sandbox' | 'deathmatch';
 
 export type Interactable = {
   id: string;
@@ -317,6 +325,24 @@ export type SceneAnchor = {
   overrideId?: string;
 };
 
+// A doorway portal punched between two adjacent regions by the
+// procgen assembler. The opening lies on the shared-edge line at
+// `coord` (x for vertical edges, y for horizontal), spanning
+// [lo, hi] in world units along the other axis. `a` / `b` are
+// region indices (parallel to SceneLayout.rooms); the corridor
+// flags let consumers pick which side of the boundary a door
+// building should occupy.
+export type DoorwaySpec = {
+  axis: 'vertical' | 'horizontal';
+  coord: number;
+  lo: number;
+  hi: number;
+  a: number;
+  b: number;
+  aIsCorridor: boolean;
+  bIsCorridor: boolean;
+};
+
 export type SceneLayout = {
   worldBounds: Rect;
   // Walkables = rooms ∪ corridors. Player position must lie inside ≥ 1.
@@ -326,6 +352,13 @@ export type SceneLayout = {
   rooms: Rect[];
   // Where new arrivals spawn. Used for transition target positioning.
   spawn: { x: number; y: number };
+  // Explicit player Z when dropping the player into this scene.
+  // When undefined, the server uses `spawnFloorAt(spawn.x, spawn.y)`
+  // (lowest walkable sector containing the spawn point). Authors
+  // set this when they want to pin the player to a specific
+  // sector floor (e.g. a platform, or "always start on the room
+  // floor even when standing inside a pit's polygon").
+  spawnZ?: number;
   // Stairs / extract pads as named entities the client can render and the
   // server can detect proximity against.
   interactables: Interactable[];
@@ -367,7 +400,53 @@ export type SceneLayout = {
   // "if I remove this room, is entrance still connected to stairs?"
   // Optional — surface scenes have no rooms, walker biomes might
   // not produce a discrete graph.
+  // (DoorwaySpec for the `doorways` field below is declared right
+  // before SceneLayout.)
   roomGraph?: number[][];
+  // Punched doorway portals between adjacent regions, recorded by
+  // the assembler so downstream logic (locked-room door placement)
+  // can put door buildings exactly where the openings are instead
+  // of re-deriving shared edges. World units; the portal lies on
+  // the shared-edge line `coord`, spanning [lo, hi] along the
+  // other axis. Optional — rect-only fallback layouts don't set it.
+  doorways?: DoorwaySpec[];
+  // Axis-aligned raised platforms. Each rect specifies a tile-
+  // aligned footprint and a `floorZ` height above the base room
+  // floor (which is always 0). Multiple platforms at different
+  // heights compose stairs — one tile per riser. Server uses
+  // these for step-up collision; v2 renderer emits sectors with
+  // the raised floor and auto-renders the side walls as risers.
+  // v1 (raycaster) ignores the field — it renders flat anyway.
+  // Optional — absent ⇒ no raised geometry, same as today.
+  platforms?: PlatformRect[];
+  // Optional procedural terrain heightmap. When set, the scene's
+  // floor undulates per `terrainHeightAt(terrain, x, y)`. Server
+  // simulates against it (player rises / falls with the ground,
+  // sprites anchor to it). v1 raycaster ignores; v2 tessellates
+  // the floor mesh and displaces vertices.
+  // See @dumrunner/shared/terrain for the noise impl + tuning.
+  terrain?: import('./terrain').TerrainConfig;
+  // Hand-authored sector geometry. When present, server polygon
+  // collision + v2 renderer both consume this DIRECTLY instead
+  // of rebuilding a SectorMap from `tileGrid`. Authored scenes
+  // (from the level editor) ship this so non-axis-aligned
+  // polygons survive end-to-end. The tile grid still rides
+  // along for AI passability + the legacy v1 renderer; it's a
+  // rasterised approximation of the authored shapes.
+  authoredSectorMap?: import('./sector').SectorMap;
+};
+
+// Raised floor footprint. Tile coords are absolute (same frame
+// as `Rect` and `Interactable.x/y`'s tile equivalent), not local
+// to a containing room. floorZ is in world units (wall = 32);
+// typical step is 8–12. Overlapping rects resolve to the
+// highest floorZ via `floorAt(x, y)` lookup.
+export type PlatformRect = {
+  tileX: number;
+  tileY: number;
+  w: number;
+  h: number;
+  floorZ: number;
 };
 
 export type Player = {
@@ -376,6 +455,13 @@ export type Player = {
   displayName: string;
   x: number;
   y: number;
+  // Vertical-movement state — Phase 7 of the v2 polygon /
+  // collision plan. `jumpZ` is height above the current floor
+  // (0 = grounded); `crouching` halves the eye / hitbox height.
+  // Optional so welcome / state messages from pre-Phase-7
+  // servers still deserialize.
+  jumpZ?: number;
+  crouching?: boolean;
   hp: number;
   maxHp: number;
   stamina: number;
@@ -436,6 +522,12 @@ export type ProjectileState = {
   ownerKind: ProjectileOwnerKind;
   x: number;
   y: number;
+  // World-Z position + vertical velocity. Optional so pre-
+  // Phase-7 clients can still deserialise; absent → treat as
+  // 0 (flat shot at floor level). Server populates both for
+  // every projectile.
+  z?: number;
+  vz?: number;
   vx: number;
   vy: number;
   // Optional client-render hint (RGB int). Hardcoded white if omitted.
@@ -472,12 +564,22 @@ export const InputMsgSchema = z.object({
   moveX: finiteNumber,
   moveY: finiteNumber,
   sprint: z.boolean(),
+  // Phase 7 vertical inputs. `jump` is edge-triggered (true on
+  // press, the server consumes it once). `crouch` is held. Both
+  // optional — older clients omitting them treat as released.
+  jump: z.boolean().optional(),
+  crouch: z.boolean().optional(),
 });
 
 export const FireMsgSchema = z.object({
   type: z.literal('fire'),
   dirX: finiteNumber,
   dirY: finiteNumber,
+  // Pitch-aware vertical aim. Optional so older clients still
+  // fire (Phase 7 added this); server defaults to 0 (level) when
+  // absent. Sent as the un-normalised Z component of the
+  // camera's forward vector — server normalises the full vec3.
+  dirZ: finiteNumber.optional(),
 });
 
 // Closed set of BuildingKinds that players are allowed to place
@@ -863,6 +965,18 @@ export const SandboxRegenFloorMsgSchema = z.object({
   worldSeed: z.number().int(),
 });
 
+// Replace the sandbox scene with a hand-authored SectorScene
+// from the level editor. The server rasterises the scene onto
+// a tile grid (sceneRasterize.rasterizeSectorSceneToLayout)
+// and rebuilds the sandbox arena around it. Payload validation
+// is intentionally loose — the editor is a trusted authoring
+// surface, and full SectorScene Zod schemas would be heavy.
+// Server clamps geometry size + tile count defensively.
+export const SandboxLoadAuthoredSceneMsgSchema = z.object({
+  type: z.literal('sandbox_load_authored_scene'),
+  scene: z.unknown(),
+});
+
 // Build an isolated single-room scene from a room template. The
 // scene's layout is sized to the template's footprint, the
 // template's tiles are stamped directly into the tile grid, and
@@ -944,6 +1058,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   SandboxSetLoadoutMsgSchema,
   SandboxRegenFloorMsgSchema,
   SandboxStampRoomMsgSchema,
+  SandboxLoadAuthoredSceneMsgSchema,
 ]);
 
 
@@ -1066,6 +1181,29 @@ export type ServerMessage =
           animationId?: string;
         }
       >;
+      // World mode the player just joined. Drives mode-specific HUD
+      // (deathmatch shows round timer + scoreboard, hides cycle clock
+      // and inventory) and mode-specific behavior (TAB binds to
+      // scoreboard in DM, inventory in live). Optional so wire-compat
+      // with older servers stays intact; client falls back to 'live'.
+      mode?: WorldMode;
+      // Current deathmatch round snapshot. Sent in welcome so a
+      // joining player gets the timer + scoreboard without waiting
+      // for the next round transition. null in non-deathmatch worlds.
+      deathmatchRound?: {
+        startedAt: number;
+        killsToWin: number;
+        durationMs: number;
+        // When set, the round is in intermission — render the
+        // scoreboard overlay until `endsAt`. null = active round.
+        intermissionEndsAt: number | null;
+        scores: Array<{
+          characterId: string;
+          displayName: string;
+          kills: number;
+          deaths: number;
+        }>;
+      } | null;
     }
   | {
       // Sent when the player transitions between scenes (stairs, extract pad,
@@ -1087,7 +1225,16 @@ export type ServerMessage =
     }
   | { type: 'player_joined'; player: Player }
   | { type: 'player_left'; characterId: string }
-  | { type: 'player_moved'; characterId: string; x: number; y: number }
+  | {
+      type: 'player_moved';
+      characterId: string;
+      x: number;
+      y: number;
+      // Phase 7 vertical state. Optional so renderers from
+      // pre-Phase-7 builds tolerate the message; absent ⇒ 0 / false.
+      jumpZ?: number;
+      crouching?: boolean;
+    }
   | { type: 'player_damaged'; characterId: string; hp: number; maxHp: number; shield: number; maxShield: number }
   | { type: 'player_stamina'; stamina: number; maxStamina: number }
   | { type: 'player_died'; characterId: string }
@@ -1097,7 +1244,18 @@ export type ServerMessage =
   | { type: 'enemy_damaged'; id: string; hp: number; maxHp: number }
   | { type: 'enemy_killed'; id: string }
   | { type: 'projectile_spawned'; projectile: ProjectileState }
-  | { type: 'projectile_despawned'; id: string; reason: 'hit' | 'expired' }
+  | {
+      type: 'projectile_despawned';
+      id: string;
+      reason: 'hit' | 'expired';
+      // Impact position for 'hit' despawns — the contact point
+      // the server resolved against the target / wall. Optional
+      // so 'expired' (TTL timeout) can omit it. Client renders
+      // an impact decal here when present.
+      x?: number;
+      y?: number;
+      z?: number;
+    }
   | { type: 'loot_spawned'; loot: LootState }
   | { type: 'loot_despawned'; id: string; reason: 'picked_up' | 'expired' }
   | { type: 'corpse_spawned'; corpse: CorpseState }
@@ -1243,8 +1401,51 @@ export type ServerMessage =
       characterId: string;
       effects: PlayerEffect[];
     }
+  // ---------- Deathmatch round events ----------
+  // Per-kill chat lines ride on the existing `chat` system messages
+  // (server posts "A killed B" via `notifyPlayerDied` → `systemChat`),
+  // so there's no separate `dm_kill` wire event.
+  //
+  // Live scoreboard update. Sent after every kill that doesn't
+  // end the round, and once at the start of each round. Sorted
+  // server-side by (kills desc, deaths asc) so the client renders
+  // in order without resorting.
+  | {
+      type: 'dm_scores';
+      scores: Array<{
+        characterId: string;
+        displayName: string;
+        kills: number;
+        deaths: number;
+      }>;
+    }
+  // Round ended. The intermission timer runs until
+  // `intermissionEndsAt`. Client shows the scoreboard during the
+  // window; server transitions to a fresh round when it elapses.
+  // `reason: 'cap'` = someone hit the kill target; `'timeout'` =
+  // wall-clock ran out.
+  | {
+      type: 'dm_round_end';
+      reason: 'cap' | 'timeout';
+      winnerCharacterId: string | null;
+      intermissionEndsAt: number;
+      scores: Array<{
+        characterId: string;
+        displayName: string;
+        kills: number;
+        deaths: number;
+      }>;
+    }
+  // New round starting. Scores have been zeroed; the wall-clock
+  // and kill target the client should display ride on this event.
+  | {
+      type: 'dm_round_start';
+      startedAt: number;
+      killsToWin: number;
+      durationMs: number;
+    }
   | { type: 'error'; message: string };
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 43;
+export const PROTOCOL_VERSION = 45;

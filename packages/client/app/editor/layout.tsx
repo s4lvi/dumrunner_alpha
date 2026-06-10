@@ -14,7 +14,9 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { ActivityBar } from './_components/ActivityBar';
+import { CommandPalette } from './_components/CommandPalette';
 import { DomainNav } from './_components/DomainNav';
+import { ReadOnlyBanner } from './_components/ReadOnlyBanner';
 
 export default function EditorLayout({
   children,
@@ -30,10 +32,12 @@ export default function EditorLayout({
         >
           editor
         </Link>
-        <span className="text-[10px] text-zinc-600 ml-auto">
-          /editor — content authoring
+        <span className="ml-auto text-[10px] text-zinc-600 font-mono">
+          ⌘K
         </span>
       </header>
+      <ReadOnlyBanner />
+      <CommandPalette />
       <div className="flex-1 min-h-0 flex">
         <ActivityBar />
         <div className="flex-1 min-w-0 min-h-0 flex flex-col">

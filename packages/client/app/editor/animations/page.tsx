@@ -17,14 +17,17 @@ import {
   Sprite,
   Texture,
 } from 'pixi.js';
+import type { z } from 'zod';
 import type { AnimationCategory, AnimationDef } from '@dumrunner/shared';
 import {
   ANIMATION_CATEGORIES,
   AnimationController,
+  AnimationDefSchema,
   STATES_BY_CATEGORY,
 } from '@dumrunner/shared';
 import {
   Button,
+  ConfirmButton,
   CheckboxField,
   EnumField,
   FieldRow,
@@ -75,9 +78,12 @@ function AnimationEditorBody() {
     createNew,
     error,
     saving,
+    validationError,
+    canSave,
   } = useEntityEditor<AnimationDef>('animations', {
     makeBlank,
     newIdPrefix: 'anim',
+    schema: AnimationDefSchema as unknown as z.ZodType<AnimationDef>,
   });
 
   const sorted = useMemo(() => {
@@ -119,7 +125,7 @@ function AnimationEditorBody() {
     return errs;
   }, [draft]);
 
-  const blockSave = localErrors.length > 0 || saving;
+  const blockSave = localErrors.length > 0 || !canSave;
 
   function updateState(
     stateName: string,
@@ -203,9 +209,9 @@ function AnimationEditorBody() {
                   <Button onClick={save} disabled={blockSave}>
                     {saving ? 'saving…' : 'save'}
                   </Button>
-                  <Button onClick={remove} variant="danger">
+                  <ConfirmButton onConfirm={remove} variant="danger">
                     delete
-                  </Button>
+                  </ConfirmButton>
                 </div>
               </div>
 
@@ -214,8 +220,9 @@ function AnimationEditorBody() {
                   {error}
                 </div>
               )}
-              {localErrors.length > 0 && (
+              {(localErrors.length > 0 || validationError) && (
                 <div className="mb-3 px-3 py-2 rounded bg-amber-950/40 border border-amber-900/80 text-amber-200 text-xs space-y-1">
+                  {validationError && <div>• {validationError}</div>}
                   {localErrors.map((e, i) => (
                     <div key={i}>• {e}</div>
                   ))}

@@ -25,7 +25,11 @@ import {
   Texture,
   type BLEND_MODES,
 } from 'pixi.js';
-import type { BuildingState } from '@dumrunner/shared';
+import {
+  terrainHeightAt,
+  type BuildingState,
+  type TerrainConfig,
+} from '@dumrunner/shared';
 import {
   createTexturedSectorCameraUniforms,
   createTexturedSectorShader,
@@ -63,6 +67,7 @@ export type TexturedBuildingLayer = {
     buildings: BuildingState[],
     tileSize: number,
     ceilingZ: number,
+    terrain?: TerrainConfig | null,
   ) => void;
   // Per-frame: re-poll the texture-override cache and bind
   // whichever textures resolved since last frame. Hides the
@@ -120,7 +125,7 @@ export function createTexturedBuildingLayer(
     container,
     cameraMatrix: cameraUniforms.uViewProj,
     flushCamera: () => cameraUniforms.flush(),
-    rebuild(buildings, tileSize, ceilingZ): void {
+    rebuild(buildings, tileSize, ceilingZ, terrain): void {
       // Bucket buildings by kind so each batch's Geometry holds
       // every cube of that kind. Kinds with zero buildings
       // (e.g. all walls demolished) get their batch removed so
@@ -136,7 +141,7 @@ export function createTexturedBuildingLayer(
       }
       for (const [kind, list] of byKind) {
         const batch = ensureBatch(kind);
-        const next = buildBuildingGeometry(list, tileSize, ceilingZ);
+        const next = buildBuildingGeometry(list, tileSize, ceilingZ, terrain);
         const old = batch.mesh.geometry;
         batch.mesh.geometry = next;
         try {
@@ -197,15 +202,33 @@ export function createTexturedBuildingLayer(
 // Emit per-building cube geometry. One cap quad + 4 wall quads
 // per building, packed into a single Geometry with shared
 // vertex format (aPosition + aUV).
+// Sun direction must match sectorGeometry.brightnessForNormal —
+// the building cube's textures should shade consistently with
+// the room walls / floors / ceilings around them.
+const SUN_X = 0.4;
+const SUN_Y = 0.3;
+const SUN_Z = 0.866;
+function shade(nx: number, ny: number, nz: number): number {
+  const d = Math.abs(nx * SUN_X + ny * SUN_Y + nz * SUN_Z);
+  return 0.55 + 0.45 * Math.max(0, d);
+}
+
 function buildBuildingGeometry(
   buildings: BuildingState[],
   tileSize: number,
   ceilingZ: number,
+  terrain: TerrainConfig | null | undefined,
 ): Geometry {
   const positions: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
+  const brightness: number[] = [];
   let vCursor = 0;
+  const capBrightnessValue = shade(0, 0, 1);
+  const northBright = shade(0, -1, 0);
+  const eastBright = shade(1, 0, 0);
+  const southBright = shade(0, 1, 0);
+  const westBright = shade(-1, 0, 0);
   for (const b of buildings) {
     const x0 = b.tileX * tileSize;
     const y0 = b.tileY * tileSize;
@@ -221,7 +244,21 @@ function buildBuildingGeometry(
     const xR = x1 + FACE_NUDGE;
     const yN = y0 - FACE_NUDGE;
     const yS = y1 + FACE_NUDGE;
-    const capZ = ceilingZ + FACE_NUDGE;
+    // Anchor the cube to terrain on hilly open scenes. Sampling
+    // the 4 corners and using the LOWEST grounds the cube on
+    // slopes (the high side just gets buried) — without this
+    // every textured building floats at z=0 on the overworld.
+    // Authored maps don't ship terrain, so this collapses to 0.
+    let baseZ = 0;
+    if (terrain) {
+      const z00 = terrainHeightAt(terrain, x0, y0);
+      const z10 = terrainHeightAt(terrain, x1, y0);
+      const z11 = terrainHeightAt(terrain, x1, y1);
+      const z01 = terrainHeightAt(terrain, x0, y1);
+      baseZ = Math.min(z00, z10, z11, z01);
+    }
+    const topZ = baseZ + ceilingZ;
+    const capZ = topZ + FACE_NUDGE;
     const widthTiles = b.width;
     const depthTiles = b.height;
     const wallTopV = ceilingZ / TEXTURE_TILE_PX;
@@ -240,6 +277,12 @@ function buildBuildingGeometry(
       widthTiles, depthTiles,
       0, depthTiles,
     );
+    brightness.push(
+      capBrightnessValue,
+      capBrightnessValue,
+      capBrightnessValue,
+      capBrightnessValue,
+    );
     vCursor += 4;
     indices.push(
       capBase + 0, capBase + 1, capBase + 2,
@@ -248,30 +291,30 @@ function buildBuildingGeometry(
     // ---- 4 wall quads, endpoints at shared diagonal corners ----
     // North face: NW → NE
     pushWall(
-      positions, uvs, indices, vCursor,
+      positions, uvs, indices, brightness, northBright, vCursor,
       xL, yN, xR, yN,
-      ceilingZ, widthTiles, wallTopV,
+      baseZ, topZ, widthTiles, wallTopV,
     );
     vCursor += 4;
     // East face: NE → SE
     pushWall(
-      positions, uvs, indices, vCursor,
+      positions, uvs, indices, brightness, eastBright, vCursor,
       xR, yN, xR, yS,
-      ceilingZ, depthTiles, wallTopV,
+      baseZ, topZ, depthTiles, wallTopV,
     );
     vCursor += 4;
     // South face: SE → SW
     pushWall(
-      positions, uvs, indices, vCursor,
+      positions, uvs, indices, brightness, southBright, vCursor,
       xR, yS, xL, yS,
-      ceilingZ, widthTiles, wallTopV,
+      baseZ, topZ, widthTiles, wallTopV,
     );
     vCursor += 4;
     // West face: SW → NW
     pushWall(
-      positions, uvs, indices, vCursor,
+      positions, uvs, indices, brightness, westBright, vCursor,
       xL, yS, xL, yN,
-      ceilingZ, depthTiles, wallTopV,
+      baseZ, topZ, depthTiles, wallTopV,
     );
     vCursor += 4;
   }
@@ -291,6 +334,13 @@ function buildBuildingGeometry(
         }),
         format: 'float32x2',
       },
+      aBrightness: {
+        buffer: new Buffer({
+          data: new Float32Array(brightness),
+          usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+        }),
+        format: 'float32',
+      },
     },
     indexBuffer: new Buffer({
       data: new Uint32Array(indices),
@@ -303,20 +353,23 @@ function pushWall(
   positions: number[],
   uvs: number[],
   indices: number[],
+  brightness: number[],
+  faceBright: number,
   baseV: number,
   ax: number,
   ay: number,
   bx: number,
   by: number,
-  ceilingZ: number,
+  bottomZ: number,
+  topZ: number,
   uTopRange: number,
   vTopRange: number,
 ): void {
   positions.push(
-    ax, ay, 0,
-    bx, by, 0,
-    bx, by, ceilingZ,
-    ax, ay, ceilingZ,
+    ax, ay, bottomZ,
+    bx, by, bottomZ,
+    bx, by, topZ,
+    ax, ay, topZ,
   );
   uvs.push(
     0, 0,
@@ -324,6 +377,7 @@ function pushWall(
     uTopRange, vTopRange,
     0, vTopRange,
   );
+  brightness.push(faceBright, faceBright, faceBright, faceBright);
   indices.push(
     baseV + 0, baseV + 1, baseV + 2,
     baseV + 0, baseV + 2, baseV + 3,

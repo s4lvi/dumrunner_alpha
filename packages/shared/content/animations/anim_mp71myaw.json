@@ -1,0 +1,12 @@
+{
+  "id": "anim_mp71myaw",
+  "name": "pistol_bullet",
+  "category": "projectile",
+  "states": {
+    "idle": {
+      "frames": 1,
+      "fps": 6,
+      "loop": true
+    }
+  }
+}

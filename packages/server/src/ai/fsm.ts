@@ -98,6 +98,16 @@ export type AiEnvironment = {
     toX: number,
     toY: number
   ) => boolean;
+  // Tile-grid pathing fallback for when the direct chase line is
+  // blocked. Returns a world-coord steering point toward the target
+  // (or null when no path exists). Calls are throttled FSM-side via
+  // EnemyRuntime.repathAt, so the impl can afford a bounded BFS.
+  nextWaypoint?: (
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number
+  ) => { x: number; y: number } | null;
 };
 
 export function tickEnemy(
@@ -158,15 +168,39 @@ export function tickEnemy(
   // While stunned, the enemy holds position and doesn't fire. Stun is
   // applied externally by Scene.damageEnemy.
   const stunned = now < enemy.stunUntil;
+  // A stun taken mid-windup cancels the committed swing. Without
+  // this the enemy freezes through the stun and the queued hit
+  // lands the instant it expires — reads as a frozen-then-sudden
+  // hit with no re-telegraph. Half the cooldown as the penalty so
+  // stun-locking still has a cost ceiling for the player.
+  if (stunned) {
+    for (let i = 0; i < enemy.attackSwingAt.length; i++) {
+      if (enemy.attackSwingAt[i] <= 0) continue;
+      enemy.attackSwingAt[i] = 0;
+      const atk = enemy.template.attacks[i];
+      const cooldownMs =
+        atk && atk.kind === 'melee' ? (atk.cooldownMs ?? 1200) : 1200;
+      enemy.attackReadyAt[i] = Math.max(
+        enemy.attackReadyAt[i] ?? 0,
+        now + cooldownMs / 2,
+      );
+    }
+  }
 
   // ---------- movement ----------
   const prevX = enemy.x;
   const prevY = enemy.y;
 
-  if (!stunned && target && enemy.fsm === 'engaging') {
+  // Melee enemies that have already committed to a swing stop
+  // moving until the swing resolves — gives the player a clear
+  // "I'm about to be hit" telegraph instead of sprinting into
+  // contact damage. Order matters: attack resolution runs after
+  // this so the swing can still land at the end of this tick.
+  const windingUp = isWindingUpMelee(enemy);
+  if (!stunned && target && enemy.fsm === 'engaging' && !windingUp) {
     applyMovement(enemy, target, dt, now, env);
   } else if (!stunned && target && enemy.fsm === 'fleeing') {
-    applyFlee(enemy, target, dt, env);
+    applyFlee(enemy, target, dt, now, env);
   } else if (!stunned && !target && enemy.template.moveSpeed > 0) {
     // Idle wander — the FSM has no aggro target so the enemy drifts
     // around its spawn point, pausing at each waypoint, picking a new
@@ -328,14 +362,71 @@ function applyMovement(
         break;
       }
     }
-    if (stop > 0 && dist <= stop) return;
+    if (stop > 0 && dist <= stop) {
+      enemy.waypointX = null;
+      enemy.waypointY = null;
+      return;
+    }
+    // Active waypoint from a previous blocked tick: steer toward it
+    // until reached or the repath window lapses, then re-evaluate
+    // the direct line.
+    if (enemy.waypointX !== null && enemy.waypointY !== null) {
+      const wdx = enemy.waypointX - enemy.x;
+      const wdy = enemy.waypointY - enemy.y;
+      const wdist = Math.hypot(wdx, wdy);
+      if (wdist < WAYPOINT_REACH || now >= enemy.repathAt) {
+        enemy.waypointX = null;
+        enemy.waypointY = null;
+      } else {
+        moveWithCollision(
+          enemy,
+          enemy.x + (wdx / wdist) * speed,
+          enemy.y + (wdy / wdist) * speed,
+          env,
+        );
+        return;
+      }
+    }
+    const beforeX = enemy.x;
+    const beforeY = enemy.y;
     moveWithCollision(enemy, enemy.x + ux * speed, enemy.y + uy * speed, env);
+    // Direct line blocked (no progress even with axis-slides) —
+    // path around the obstacle on the tile grid. Throttled so a
+    // wall-pinned enemy doesn't BFS every tick.
+    if (
+      enemy.x === beforeX &&
+      enemy.y === beforeY &&
+      env.nextWaypoint &&
+      now >= enemy.repathAt
+    ) {
+      enemy.repathAt = now + REPATH_INTERVAL_MS;
+      const wp = env.nextWaypoint(enemy.x, enemy.y, target.x, target.y);
+      if (wp) {
+        enemy.waypointX = wp.x;
+        enemy.waypointY = wp.y;
+      }
+    }
     return;
   }
 
   if (m.kind === 'kite') {
     if (dist < m.minRange) {
+      const beforeX = enemy.x;
+      const beforeY = enemy.y;
       moveWithCollision(enemy, enemy.x - ux * speed, enemy.y - uy * speed, env);
+      if (enemy.x === beforeX && enemy.y === beforeY) {
+        // Cornered — back-away (and both axis slides) blocked.
+        // Strafe along the wall instead of freezing in place so the
+        // drone keeps fighting and eventually slips the corner.
+        const sx = -uy * enemy.strafeDirection;
+        const sy = ux * enemy.strafeDirection;
+        moveWithCollision(
+          enemy,
+          enemy.x + sx * speed,
+          enemy.y + sy * speed,
+          env,
+        );
+      }
     } else if (dist > m.maxRange) {
       moveWithCollision(enemy, enemy.x + ux * speed, enemy.y + uy * speed, env);
     } else {
@@ -363,6 +454,14 @@ function applyMovement(
   }
 }
 
+// Waypoint-steering tuning. REPATH_INTERVAL throttles per-enemy BFS
+// requests AND bounds a stale waypoint's lifetime; REACH is the
+// arrive radius before re-checking the direct line.
+const REPATH_INTERVAL_MS = 450;
+const WAYPOINT_REACH = 10;
+// How far past the enemy a blocked flee aims its retreat point.
+const FLEE_RETREAT_DIST = 160;
+
 // Wander tuning. Radius from spawn the enemy can roam, distance threshold
 // at which a waypoint counts as reached, idle pause range, and the speed
 // scale applied to the template's normal moveSpeed during wander.
@@ -380,6 +479,23 @@ const AGGRO_MEMORY_MS = 1500;
 // hold it for this long before re-rolling.
 const STRAFE_WINDOW_MIN_MS = 700;
 const STRAFE_WINDOW_MAX_MS = 1600;
+
+// Melee defaults when the template doesn't pin them. Cooldown is
+// the gap between hits the player feels (was 0 — every server
+// tick at ~50ms). Windup is the telegraph window during which
+// the enemy stands still committing to the swing.
+const MELEE_DEFAULT_COOLDOWN_MS = 1200;
+const MELEE_DEFAULT_WINDUP_MS = 350;
+
+// True iff any melee attack is currently in its windup state.
+// Movement halts during windup so the enemy reads as "I'm about
+// to swing" rather than "I'm sprinting into you."
+function isWindingUpMelee(enemy: EnemyRuntime): boolean {
+  for (let i = 0; i < enemy.attackSwingAt.length; i++) {
+    if (enemy.attackSwingAt[i] > 0) return true;
+  }
+  return false;
+}
 
 function applyWander(
   enemy: EnemyRuntime,
@@ -420,6 +536,7 @@ function applyFlee(
   enemy: EnemyRuntime,
   target: AiTarget,
   dt: number,
+  now: number,
   env: AiEnvironment
 ): void {
   const dx = target.x - enemy.x;
@@ -427,18 +544,57 @@ function applyFlee(
   const dist = Math.hypot(dx, dy);
   if (dist < 0.001) return;
   const speed = enemy.template.moveSpeed * currentEnemySpeedMult(enemy) * dt;
+  // Active retreat waypoint from a previous blocked tick.
+  if (enemy.waypointX !== null && enemy.waypointY !== null) {
+    const wdx = enemy.waypointX - enemy.x;
+    const wdy = enemy.waypointY - enemy.y;
+    const wdist = Math.hypot(wdx, wdy);
+    if (wdist < WAYPOINT_REACH || now >= enemy.repathAt) {
+      enemy.waypointX = null;
+      enemy.waypointY = null;
+    } else {
+      moveWithCollision(
+        enemy,
+        enemy.x + (wdx / wdist) * speed,
+        enemy.y + (wdy / wdist) * speed,
+        env,
+      );
+      return;
+    }
+  }
+  const beforeX = enemy.x;
+  const beforeY = enemy.y;
   moveWithCollision(
     enemy,
     enemy.x - (dx / dist) * speed,
     enemy.y - (dy / dist) * speed,
     env
   );
+  // Retreat line blocked — path toward a fallback point behind the
+  // enemy instead of grinding into the wall. The BFS returns its
+  // closest-approach node when the exact point is unreachable, so
+  // a cornered enemy still backs into the best available pocket.
+  if (
+    enemy.x === beforeX &&
+    enemy.y === beforeY &&
+    env.nextWaypoint &&
+    now >= enemy.repathAt
+  ) {
+    enemy.repathAt = now + REPATH_INTERVAL_MS;
+    const retreatX = enemy.x - (dx / dist) * FLEE_RETREAT_DIST;
+    const retreatY = enemy.y - (dy / dist) * FLEE_RETREAT_DIST;
+    const wp = env.nextWaypoint(enemy.x, enemy.y, retreatX, retreatY);
+    if (wp) {
+      enemy.waypointX = wp.x;
+      enemy.waypointY = wp.y;
+    }
+  }
 }
 
 function runAttacks(
   enemy: EnemyRuntime,
   target: AiTarget,
-  dt: number,
+  _dt: number,
   now: number,
   outcome: AiOutcome
 ): void {
@@ -449,15 +605,36 @@ function runAttacks(
   for (let i = 0; i < enemy.template.attacks.length; i++) {
     const atk = enemy.template.attacks[i];
     if (atk.kind === 'melee') {
-      if (dist <= atk.range && target.kind === 'player') {
-        // Player melee — emit so scene applies HP damage. Building
-        // melee already happens via Scene.tickEnemyBuildingAttacks
-        // (any enemy in melee range of a wall/turret/etc. chews
-        // through it regardless of declared target).
-        outcome.meleeDamage.push({
-          targetCharacterId: target.characterId,
-          amount: atk.damagePerSec * dt,
-        });
+      if (target.kind !== 'player') continue;
+      // Building-only melee still ticks through
+      // Scene.tickEnemyBuildingAttacks (continuous chew). The FSM
+      // owns PLAYER melee only — and player melee runs in
+      // discrete swings: ready → in-range → windup → resolve.
+      const cooldownMs = atk.cooldownMs ?? MELEE_DEFAULT_COOLDOWN_MS;
+      const windupMs = atk.windupMs ?? MELEE_DEFAULT_WINDUP_MS;
+      if (enemy.attackSwingAt[i] > 0) {
+        // Swing in flight. Resolve when the windup elapses; the
+        // hit only lands if the player is still inside `range`.
+        // Whiffing out of melee range during windup is the
+        // intended dodge mechanic.
+        if (now >= enemy.attackSwingAt[i]) {
+          if (dist <= atk.range) {
+            const damagePerHit =
+              atk.damagePerSec * (cooldownMs / 1000);
+            outcome.meleeDamage.push({
+              targetCharacterId: target.characterId,
+              amount: damagePerHit,
+            });
+          }
+          enemy.attackSwingAt[i] = 0;
+          enemy.attackReadyAt[i] = now + cooldownMs;
+        }
+        continue;
+      }
+      // Not winding up — start a swing when in range + cooldown
+      // expired.
+      if (dist <= atk.range && now >= enemy.attackReadyAt[i]) {
+        enemy.attackSwingAt[i] = now + windupMs;
       }
     } else if (atk.kind === 'projectile') {
       if (dist > atk.range) continue;
@@ -520,6 +697,7 @@ export function instantiateEnemy(
     fsm: 'idle',
     targetCharacterId: null,
     attackReadyAt: template.attacks.map(() => 0),
+    attackSwingAt: template.attacks.map(() => 0),
     stunUntil: 0,
     lastBroadcastX: x,
     lastBroadcastY: y,
@@ -533,6 +711,9 @@ export function instantiateEnemy(
     lastKnownTargetExpiresAt: 0,
     strafeDirection: 1,
     strafeUntil: 0,
+    waypointX: null,
+    waypointY: null,
+    repathAt: 0,
     activeEffects: [],
   };
 }

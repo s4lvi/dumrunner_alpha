@@ -23,4 +23,13 @@ export const env = {
   // Optional bearer token for the asset_gen service. Required only if
   // the asset_gen instance has ASSET_GEN_SERVICE_TOKEN set.
   assetGenServiceToken: process.env.ASSET_GEN_SERVICE_TOKEN ?? null,
+  // Deathmatch single-process dev toggle. When DM_MODE=1, every
+  // World the registry boots runs in deathmatch mode bound to the
+  // scene id in DM_ARENA (a saved scene from the CSG editor). No
+  // surface, no procgen, no perihelion; PvP damage on; respawn at
+  // dm_spawn interactables. Per-server DB-driven mode selection is
+  // a follow-up that needs Supabase migration (new columns:
+  // `mode TEXT`, `arena_scene_id TEXT NULL` on the servers table).
+  deathmatchMode: process.env.DM_MODE === '1',
+  deathmatchArena: process.env.DM_ARENA ?? null,
 };
