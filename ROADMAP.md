@@ -175,11 +175,10 @@ anticipate them.
 Numbers-driven adjustments; each is a tuning pass, not a system.
 Full analysis in the review (session notes); key targets:
 
-- **Horde scales with depth, not cycle index.** Wave size is
-  `3 + cycle/2` while power capacity scales with depth — threat
-  and capability are on different axes. Couple wave size +
-  composition to `deepestFloorReached` (mirrors the power
-  coupling) so defense matters in session one.
+- ~~Horde scales with depth, not cycle index.~~ **Shipped
+  2026-06-10** — threat = `max(deepestFloorReached, cycle)`, so
+  pressure mirrors earned power capacity and never regresses on
+  veteran worlds.
 - **Combat TTK pass toward "deliberate."** Rifle/shotgun/sniper
   one-shot most of the roster; trash dies <1s. Raise trash HP or
   trim burst so engagements land in the 1.5–4s band the GDD
