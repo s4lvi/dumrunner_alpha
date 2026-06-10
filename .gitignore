@@ -30,3 +30,6 @@ npm-debug.log*
 
 # Supabase
 .supabase/
+
+# Claude Code local settings
+.claude/settings.local.json

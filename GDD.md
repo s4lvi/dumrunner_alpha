@@ -4,6 +4,14 @@
 
 DÛM RUNNER is a browser-based multiplayer tactical extraction shooter with roguelike dungeon-diving and persistent base-building. Runners scavenge alien ruins on a hostile planet, reverse-engineer the technology, and ship artifacts back to Earth in exchange for manufacturing tech. Every three in-game days the planet reaches perihelion, monsters frenzy, and the surface base must survive a horde assault.
 
+**Design pillars.** DÛM RUNNER is a mash-up of three lineages wearing a retro Doom-style veneer:
+
+- **7 Days to Die** — a persistent surface base that must survive a periodic horde, where the base's infrastructure *is* your accumulated progress.
+- **Borderlands** — loot-first itemization: the chase is the drop. Excitement comes out of enemies, not out of menus.
+- **Classic roguelikes** — procedurally generated dungeon floors, depth-banded difficulty, dives shaped like runs. The roguelike contribution is the procgen descent itself, not trap/identification minigames.
+
+The renderer is the veneer: a Doom-lineage 2.5D sector engine. [The Economy Law](#the-economy-law) is the contract that lets the first two pillars coexist instead of competing.
+
 ## Setting
 
 Post-apocalyptic cyberpunk future. The colony sits on the surface of a hostile alien world strewn with the ruins of an ancient advanced civilization. Earth funds the expedition in exchange for recovered alien tech.
@@ -17,16 +25,49 @@ Post-apocalyptic cyberpunk future. The colony sits on the surface of a hostile a
 5. **Defend** — every third in-game day at perihelion, the surface is attacked by a horde that prioritises destroying the Power Link and player defences. Survive together.
 6. **Reset & repeat** — perihelion regenerates the dungeon, restores the Power Link, and resets the depth-power chain; players return to fresh shallow floors and push the frontier again.
 
+## The Economy Law
+
+One rule governs the whole item economy:
+
+> **The dungeon produces all inputs. The base converts inputs into capability. Nothing at the base creates inputs.**
+
+- **Components** — weapon pieces, suit parts, attachments, building cores, materials — enter the world exclusively as dungeon drops: enemies, containers, scatter piles, champions.
+- **The base assembles.** Workstations combine components into products — weapons, suits, turrets, stations, consumables. No station ever manufactures a component; the Forge runs the only reverse path (salvaging components back into materials) plus affix rerolling.
+- **Three keys, one lock.** Using a component takes all three progression axes, and each axis is fed by a different activity:
+
+| Axis | Source | Activity it pulls |
+|------|--------|-------------------|
+| **Components** | dungeon drops only | dive, kill, extract |
+| **Schematics** (blueprints) | Artifact Uplink — permanent | artifact economy, depth push |
+| **Capability** (benches) | assembled at base; tiered, destructible | base building + horde defense |
+
+A god-roll Mk3 barrel found on floor 2 is exciting immediately — but it needs a Mk3 weapon bench to slot, and the bench tier-up needs components that only drop in band 2+. The drop pulls you deeper; the depth feeds the bench; the bench unlocks the drop. Benches are accumulated capability built from loot, and the horde targets them — defending the base is defending your ability to use what you found.
+
+**Schematics are permanent.** Blueprints gate *product* assemblies — buildings, turrets, consumable kits, exotic combinations — never basic weapon piece-assembly. Slotting pieces into a frame is always free; knowing how to assemble a rifle turret is knowledge you buy once with artifacts and keep forever.
+
+**Drop philosophy.** Every kill drops something. Components are the common drop class; rarity is expressed through tier and affix count, not through drought. Band champions are component jackpots.
+
 ## Perspective & Controls
 
-The game ships with two interchangeable render modes; players toggle freely with **V**.
+The game is a **2.5D first-person shooter** rendered through the
+Pixi v8 sector engine (`packages/client/lib/game/fps.v2/`).
+Wolfenstein/Doom-style camera over polygon sector geometry — not a
+raycaster: walls are real quads in world space, floors and
+ceilings are triangulated polygons with per-fragment fog and
+lighting. WASD is yaw-relative (forward / strafe), pointer-lock
+mouse-look (yaw + pitch), click to fire. Build mode uses a floor-
+reticle ray pick to target the tile under the camera.
 
-- **Isometric** *(default)* — Pixi-rendered iso projection. WASD movement, mouse aim, click to fire. Tactical clarity for build mode and combat readability; entities render as billboarded sprites that depth-sort with terrain.
-- **2.5D first-person** *(toggle with V)* — Wolfenstein/Doom-style raycaster on the same Pixi canvas. WASD becomes yaw-relative (forward / strafe), pointer-lock mouse-look (yaw + pseudo-pitch via horizon shift), click to fire. Feels like a boomer-shooter; build mode uses a floor-reticle ray pick to target the tile under the camera. The renderer is a drop-in replacement that reads the same `SceneState` — server is unchanged.
+The React HUD chrome (status bars, hotbar, controls hint,
+crosshair) and the texture-override / asset pipeline are owned by
+the same renderer. Target platform is desktop browser first; touch
++ mobile come later via Capacitor.
 
-Both modes share the same React HUD chrome (status bars, hotbar, controls hint, crosshair) and the same texture-override / asset pipeline — sprites uploaded once render in both views. Target platform is desktop browser first; touch + mobile come later via Capacitor.
-
-> **Top-down (Pixi) renderer is deprecated.** Earlier builds shipped a third overhead 2D view alongside iso + FPS. Maintaining three render paths against the same scene state was costing more than the third perspective added — and iso + FPS share an asset pipeline (billboard sprites) that the overhead view didn't. The `pixi.ts` runner stays in the codebase for now (no UI path reaches it; the V-cycle skips it) so we can revive or salvage code if needed, but no further work goes into it. Future renderer work concentrates on iso + FPS.
+> **Renderer history.** Earlier alpha builds shipped an isometric
+> Pixi view (`pixi.ts`), a tile-grid raycaster FPS (`fps.ts`), and
+> an overhead `topdown.ts`, toggled with **V**. All three were
+> deleted with the v2 engine push. There is one renderer now; the
+> **V** key is no longer bound.
 
 ## Combat
 
@@ -49,13 +90,13 @@ Tactical extraction-shooter feel. Slower and more deliberate than arcade twin-st
 - `magazineSize` + `reloadMs`. Reserve ammo lives in inventory; only consumed during reload, not per shot. **R** triggers a reload; fire is locked while reloading.
 - `ammoKind` per family (`pistol_basic`, `smg_basic`, `shotgun_shells`, `rifle_rounds`).
 
-Mods + piece-affix attachments scale these stats per weapon instance via `computeWeaponEffect` (damage / fire-interval / spread / projectile-speed multipliers stack from every attached piece + mod). The full part-driven assembly described in [Items & Procedural Generation](#items--procedural-generation) is the long-term direction; today's mods + affixes are the alpha foundation of that system.
+Mods + piece-affix attachments scale these stats per weapon instance via `computeWeaponEffect` (damage / fire-interval / spread / projectile-speed multipliers stack from every attached piece + mod). The full part-driven assembly described in [Items & Procedural Generation](#items--procedural-generation) is the economy's spine under [The Economy Law](#the-economy-law); today's shipped mods + affixes are its foundation, and the components-first migration is tracked in `ROADMAP.md`.
 
 ## Multiplayer
 
 - **Server size:** 5–10 players per server.
 - **Server types:** public or private, created by registered users.
-- **Authentication & account data:** Supabase. Discord OAuth + Discord Activity flows are planned (see `docs/discord-integration.md`); v1 ships email/password.
+- **Authentication & account data:** Supabase. Email/password plus Discord OAuth; the Discord Activity (embedded-app) flow is shipped (see `docs/discord-integration.md` for setup notes).
 - **Dungeon model:** **shared co-op dungeon with async entry/exit.** All players on a server occupy the same dungeon instance, but can dive, retreat to base, and rejoin parties asynchronously.
 - **Rejoining a party in progress:** you spawn at the surface base. Pressing E on the Power Link teleports you to the cycle's deepest reached floor (the "frontier"), so a rejoiner lands at the same depth as the rest of the party — no walk-down. Intra-dungeon stairs still work normally for floor-by-floor descent within a session. The earlier "must walk down floor by floor" rule was superseded by the frontier-fast-travel design once the Power Link became the dungeon portal — see [Power System](#power-system).
 - **In-game chat:** top-left panel, always visible. Press **Enter** to focus, type, **Enter** to send, **Esc** to cancel. Server-wide channel — every connected player sees every message. Server emits italic system lines on player joins, leaves, and deaths. Player chat is rate-limited (~1.6 msg/sec) and capped at 280 chars.
@@ -79,7 +120,16 @@ Mods + piece-affix attachments scale these stats per weapon instance via `comput
 ### Procedural Generation
 
 - Each floor's layout is **deterministic from `(worldSeed, cycle, floorIndex)`** — every player on the same server sees the exact same map for floor N during cycle K. Re-rolling only happens at perihelion (cycle increment).
-- Rooms + corridors are tile-aligned axis-aligned rectangles built on a 32-pixel grid, so wall raycasting works with exact DDA (no fractional-step wobble).
+- Floors are emitted by the v2 procgen pipeline in
+  `packages/shared/src/procgen/`: a generator stage produces
+  region rects, the assembler turns them into a polygon sector
+  map via the same linedef round-trip the editor uses, and the
+  result ships as `authoredSectorMap` on `SceneLayout`. The
+  geometry is polygon-shaped; the 32px tile grid still rides
+  along so spawn snap and the AI grid keep working.
+- Generators shipped: BSP + Tunneler, picked per-biome through
+  the `generation` block. Walker and Voronoi land behind the
+  same pipeline later (see ROADMAP).
 - Initial enemy spawns and scatter loot piles are seeded from the same world hash so co-op crews see the same starting fight.
 
 ### Hazards
@@ -117,9 +167,9 @@ The dungeon contains four biomes for the alpha. Each biome has its own environme
 
 Within any band, the last floor (the fifth) hosts a faction champion (themed to that band's biome) guarding the stairs down. Artifacts (the only Alien-tier source) become more common with depth and drop most reliably from faction champions.
 
-### Props (planned)
+### Props
 
-Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, terminals, trees, rocks, scrap heaps, alien growths, broken furniture. Server-authoritative, destructible by attacks, biome-themed. Scope: pure set-dressing first, then a thin layer of interactive specials (explosive barrels, lootable crates, EMP terminals). Lands as Roadmap **E3.2** once the biome scaffolding (E3.1) and editor suite (E3.0) are in place — prop spawn rules are biome-coupled and prop kinds are authored in the decorator editor, not by hand.
+Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, terminals, trees, rocks, scrap heaps, alien growths, broken furniture. Server-authoritative, destructible by attacks, biome-themed. **Shipped:** `PropDef` JSON authored in the props editor (`packages/shared/content/props/`), spawned by procgen from each biome's prop palette, rendered as billboards in `fps.v2`, with explosive-barrel AoE + chain reactions and lootable container variants live.
 
 **Design intent.**
 
@@ -128,7 +178,7 @@ Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, 
 - **No HP bar.** Floating bars over a room's worth of barrels would be visual noise. Damage is communicated by hit-flash + chip-off particles + "thunk" SFX. Players learn HP through play, not from a readout.
 - **Loot pull, not loot push.** Most props drop nothing or low-value scrap. A few kinds (cargo containers, terminals) have meaningful loot tables to reward map awareness without making prop-breaking the dominant resource loop.
 
-**Initial roster** (alpha plan; biome integration adds the natural ones).
+**Designed roster** (the live set is the JSON under `packages/shared/content/props/`; this table is the design target).
 
 | Kind | Solid? | HP | On break | Notes |
 |------|--------|----|----------|-------|
@@ -143,57 +193,7 @@ Non-NPC billboards that populate rooms — barrels, cargo containers, conduits, 
 | `pillar` | yes | ∞ | n/a | Indestructible cover. Architectural. |
 | `grass_tuft` | no | 5 | nothing | Walk-through, instantly destructible. Adds Sun-Bleached texture. |
 
-**Schema.**
-
-```ts
-type PropKind =
-  | 'barrel' | 'explosive_barrel'
-  | 'crate' | 'cargo_container'
-  | 'conduit' | 'terminal'
-  | 'tree' | 'rock' | 'pillar'
-  | 'grass_tuft';
-
-type PropState = {
-  id: string;
-  kind: PropKind;
-  x: number;
-  y: number;
-  hp: number;
-  maxHp: number;
-};
-
-type PropDef = {
-  maxHp: number;
-  solid: boolean;            // blocks movement + projectiles
-  onDestroy?: 'explode' | 'drop_loot';
-  explodeRadius?: number;
-  explodeDamage?: number;
-  lootTable?: LootRoll[];     // shared with corpse loot rolls
-};
-
-const PROP_REGISTRY: Record<PropKind, PropDef> = { /* ... */ };
-```
-
-Lives alongside `BUILDING_REGISTRY` in `packages/shared/src/props.ts`. PropState is read-only client-side (no equivalent of `build_request`) — props are placed by the dungeon generator, not by players.
-
-**Wire protocol additions.**
-
-- `props: PropState[]` on `welcome` + `scene_changed` payloads.
-- `prop_damaged { id, hp }` server → client, on every damage tick.
-- `prop_destroyed { id }` server → client, on HP ≤ 0. Loot drops + `explosive_barrel` AoE damage are server-side, broadcast via the existing `loot_spawned` / `player_damaged` / `enemy_damaged` messages.
-
-**Combat integration.**
-
-- Server: extend the projectile-tick collision pass to include props alongside enemies + buildings. Server-side hp tracking; on hit, decrement, broadcast `prop_damaged` (throttled to ~10 Hz like enemy hp).
-- Melee: same — extend swingMelee target list.
-- Solid props block movement and projectiles via existing `circleFits` / segment-collision helpers (treated like a 1-tile wall for that check). Non-solid (`grass_tuft`) skips both.
-- `explosive_barrel.onDestroy = 'explode'`: AoE damage to players + enemies + adjacent props (chain explosions are fun and read clearly).
-
-**Renderer integration.**
-
-- All three views render props as billboard sprites — same path as enemies, same texture-override pipeline (see `lib/textureOverrides.ts`). New `prop` category in `/editor`'s side panel surfaces every PropKind for upload.
-- **No HP bar** — explicitly skip the `hpBar` Graphics that `EnemySprite` carries. Hit-flash overlay (white tint, 90 ms decay) reuses the enemy hit-flash code path so damage feels readable without the bar.
-- Iso depth-sorts props with everything else via `worldX + worldY` z-index. FPS uses the same per-column sprite path as enemies. Top-down fits a static `Sprite` per prop into `lootLayer` (or a new `propsLayer`) — they don't move, so no per-frame transform updates.
+Props are placed by the dungeon generator, not by players — `PropState` is read-only client-side (no equivalent of `build_request`). Solid props block movement and projectiles; explosive barrels deal AoE to players + enemies + adjacent props (chain explosions read clearly). Damage feedback is hit-flash only — no HP bars. Schema, wire messages, and renderer integration live in code (`packages/shared/src/content/types.ts`, `protocol.ts`, `packages/server/src/props.ts`, `fps.v2`).
 
 **Spawning (biome-coupled).**
 
@@ -201,12 +201,6 @@ Lives alongside `BUILDING_REGISTRY` in `packages/shared/src/props.ts`. PropState
 - Generator pass after rooms+corridors: walk every walkable tile, roll against the room's biome palette at a per-biome density (Sun-Bleached high — debris everywhere; Frozen sparse — empty halls). Reject placement if the tile is a doorway / spawn pad / interactable footprint.
 - **Naturalness gating.** `naturalOnly: true` props (trees, rocks, grass) only spawn in surface / outdoor-feeling rooms; industrial props (terminals, conduits) only in alien / vault rooms. Catacombs sits in between — both palettes, leaning industrial.
 - Same world-seed determinism as enemies + scatter loot — every player on the cycle sees the same prop layout for floor N.
-
-**Editor support.**
-
-- New `prop` category in the `/editor` side panel (parallel to `enemy` and `building`). Each PropKind from PROP_REGISTRY gets a row.
-- Renderer hooks consult `getOverride('prop', kind)` to swap procedural billboard for textured sprite — same flow as enemies.
-- Stored alongside enemies + buildings under `public/textures/prop/<kind>.png`.
 
 ## Death & Loot
 
@@ -346,15 +340,15 @@ Two parallel paths, both folded into the same stat accumulator:
 
 Tier multiplier curve: Mk1 ×1, Mk2 ×2.2, Mk3 ×4, Mk4 ×7, Alien ×12.
 
-**2. Crafted attachments via `ATTACHMENT_DEFS` (per-instance rolls, Sprint C).** Three attachment kinds: `weapon_mod`, `weapon_affix`, `suit_affix`. Crafted attachments are *unique instances* (`AttachmentInstance` with rolled stats inside per-class `ATTACHMENT_STAT_RANGES`) — two Compensators in the bag are not interchangeable. The class registry defines what *can* roll; each crafted instance picks a roll, scaled by tier. Same shape across all three kinds; only the slot a finished instance bolts into differs.
+**2. Attachment instances via `ATTACHMENT_DEFS` (per-instance rolls).** Three attachment kinds: `weapon_mod`, `weapon_affix`, `suit_affix`. Attachments are *unique instances* (`AttachmentInstance` with rolled stats inside per-class `ATTACHMENT_STAT_RANGES`) — two Compensators in the bag are not interchangeable. The class registry defines what *can* roll; each instance picks a roll, scaled by tier. Same shape across all three kinds; only the slot a finished instance bolts into differs. Per [The Economy Law](#the-economy-law) attachments are **drop-only components** — they enter the world from kills, containers, and champions, never from a bench. (The shipped implementation still crafts them at stations; the migration is tracked in `ROADMAP.md`.)
 
 - **Weapon mods** sit in a free mod-slot list on the weapon. Slot count tier-gated (T1 = 0, T4 = 3).
 - **Weapon piece affixes** are piece-bound: at most one per `frame / grip / magazine / barrel` slot. Slot count tier-gated (T1 = frame only, T4 = all four).
-- **Suit-part affixes** are *piece-bound to a specific equipped suit part*. They bolt onto a particular plating / utility-mod / etc. via `CarriedPart.appliedAttachments`, mirroring how weapon mods bolt onto a `WeaponItem`. The two shipped suit affix classes (`aff_shield_25` "Hardened Plating", `aff_speed_5` "Servomotor Tune") have no UI surface for the alpha — they're modeled but unused. The proper home is a dedicated **Suit Assembly Bench** mirroring the Weapon Bench (Sprint D.3 — see Roadmap).
+- **Suit-part affixes** are *piece-bound to a specific equipped suit part*. They bolt onto a particular plating / utility-mod / etc. via `CarriedPart.appliedAttachments`, mirroring how weapon mods bolt onto a `WeaponItem`. Attached and detached at the dedicated **Suit Assembly Bench**, which mirrors the Weapon Bench (per-part slot caps tier-gated via `SUIT_ATTACHMENT_SLOTS`, atomic `assemble_suit_part` transaction, suit-side tier-mismatch curve).
 
 **Stat composition.** `computeWeaponEffect(weapon)` walks every piece affix instance + mod instance and returns one resolved multiplier set (damage / fire-interval / spread / projectile-speed). Server's fire path applies them; client's tooltip + Weapon Bench stats panel show the resulting "effective" stats so the player sees real numbers, not the bare baseline. Suit affix effects fold into `computeSuitStats` alongside the primary slot stat and rolled affixes — `appliedAttachments` is read via `attachmentInstanceSuitEffect` for per-instance rolls.
 
-Adding a new attachment class is one entry in `ATTACHMENT_DEFS` + (optional) `ATTACHMENT_STAT_RANGES` row + a recipe + a blueprint catalog row.
+Adding a new attachment class is one entry in `ATTACHMENT_DEFS` + (optional) `ATTACHMENT_STAT_RANGES` row + a loot-table weight.
 
 ### Item Naming
 
@@ -382,51 +376,51 @@ Three different naming rules for three different categories — the words "Junk"
 - Higher tiers wear a cyberpunk prefix from a deterministic 28-entry pool keyed on `part.id` (Razorback, Synth, Pulse, Chrome, Quantum, Ion, Vector, Subwave, Crypto, Nullshade, Photon, Rad-Hardened, Servo, Glasswire, Voltaic, Static, Tachyon, Magnetar, Recursive, Splinter, Daemon, Threnodic, Greywire, Carbonyte, Phaseborn, Driftcore, Ferrosynth, Plasmaforged).
 - Same `part.id` always reads as the same name across sessions / clients — names are descriptive, not random per session.
 
-**3. Blueprints + crafted attachments — bare nouns, no flavor.**
+**3. Schematics + attachment instances — bare nouns, no flavor.**
 
-The shop lists "Pistol", "Shotgun", "Reinforced Frame", "Foregrip" — no `Vorpal Reinforced Frame of Storms` wrapper. Crafted attachments are fungible stackable items, not unique drops; flavoring them would mislead. The crafted *weapon's* name comes from the weapon namer above and includes whatever's attached.
+The shop lists "Pistol", "Shotgun", "Reinforced Frame", "Foregrip" — no `Vorpal Reinforced Frame of Storms` wrapper. Dropped attachment instances read as their class noun + tier ("Mk2 Compensator"); their flavor budget is spent in the *weapon* namer above, where each attached instance contributes its adjective. One item, one place to be flavorful.
 
 ### Components & Materials
 
-Crafting consumes typed component stacks scavenged from the world. Each enemy template carries a probabilistic loot table; dungeon rooms also seed scatter piles weighted by floor depth. Components stack in inventory and merge automatically on pickup.
+Assembly consumes typed material stacks as binder alongside dropped components; materials are also what the Forge salvages unwanted components back into. Each enemy template carries a probabilistic loot table; dungeon rooms also seed scatter piles weighted by floor depth. Materials stack in inventory and merge automatically on pickup.
 
 | Material | Tier | Source | Use |
 |----------|------|--------|-----|
 | **Scrap** | 1 | Every enemy, every floor | Universal ingredient — walls, basic stations, ammo, every weapon recipe |
 | **Wire** | 1 | Drones, dungeon scatter | Electronics tier recipes, every weapon recipe |
-| **Alloy Plate** | 2 | Brutes / armored mid+ floors *or* Forge (12 scrap + 4 wire) | Heavy-tier defenses, turrets, weapon mods, Forge feedstock |
-| **Refined Alloy** | 3 | Forge only (4 alloy + 2 circuit) | Weapon Bench Mk3 upgrade, high-tier weapon attachments |
-| **Precision Alloy** | 4 | Forge only (4 refined alloy + 1 crystal + 1 artifact) | Weapon Bench Mk4 upgrade, top-tier weapon attachments |
+| **Alloy Plate** | 2 | Brutes / armored mid+ floors; salvaging Mk2 components | Heavy-tier defenses, turrets, Mk2 assembly binder |
+| **Refined Alloy** | 3 | Band 2+ drops; salvaging Mk3 components | Weapon Bench Mk3 upgrade, Mk3 assembly binder |
+| **Precision Alloy** | 4 | Band 3+ drops; salvaging Mk4 components | Weapon Bench Mk4 upgrade, Mk4 assembly binder |
 | **Circuit Board** | 2 | Drones, mid+ floors | Electronics bench, turret core, AP/overclock mods, alloy refining |
 | **Biotic Tissue** | 2 | Chasers (rare), deep floors | Medkits, stims, overcharge kits |
 | **Resonant Crystal** | 3 | Brutes (rare), deep floors | Artifact uplink, AP-core mod, precision-alloy synthesis |
 | **Artifact** | 3 | Kill-drop only (chaser 4% / drone 5% / brute 12% / armored 9% / swarmer none / others rare) | Currency at the Artifact Uplink (blueprints, keys); precision-alloy synthesis |
 | **Key** | 2 | Kill-drop (~2-6%) + buyable at Uplink (1 artifact each) | Opens locked dungeon doors |
 
-The registry (`MATERIALS` in shared) is one entry per material; adding a new component is one line plus loot-table tuning.
+The registry (`MATERIALS` in shared) is one entry per material; adding a new material is one line plus loot-table tuning.
 
 ### Crafting & Assembly
 
-Crafting in the alpha is **station-driven, blueprint-gated, and (planned) time-and-power-bound**.
+Assembly is **station-driven, schematic-gated, and time-and-power-bound**. Per [The Economy Law](#the-economy-law), stations never produce components — they assemble products from dropped components plus material binder; the Forge runs the only reverse path (salvage) plus affix rerolling.
 
-**Workstations.** Each crafting station is a placeable building on the surface. Recipes declare which station they require; the player has to be physically near it to craft. Multiple players can share a station.
+**Workstations.** Each station is a placeable building on the surface. Recipes declare which station they require; the player has to be physically near it to assemble. Multiple players can share a station.
 
 | Station | Tier | Crafted at | Recipes |
 |---------|------|------------|---------|
-| **Workbench** | Basic | Hand-craft (no station) | Forge, Electronics Bench, Weapon Bench, Precision Machining Mill, Artifact Uplink, all base weapons, all ammo types, medkits |
-| **Forge** | Mid | Workbench | **Alloy production** — converts scrap-tier feedstock into the higher-tier alloys (Refined Alloy, Precision Alloy) consumed by Weapon Bench tier-upgrade items and high-tier attachment recipes. Also a craftable path to base Alloy Plate so a player without late-floor kills isn't gated on lucky drops. |
-| **Electronics Bench** | Mid | Workbench | Auto-Turret + per-family turret variants; consumable-tier kits (large medkit, stim, overcharge); suit affix attachments. |
-| **Weapon Bench** | Mid | Workbench | **Weapon assembly only** — crafts mods + weapon-piece affixes; assembles them onto base weapons via the assembly modal. **No tier-up here** — that lives at the Precision Machining Mill. |
-| **Precision Machining Mill** | Mid | Workbench | **Vendor-shaped** (no recipes) — modal lists every non-melee weapon in the player's inventory and tier-ups it (T1 → T4) for a tier-scaled material cost. |
-| **Artifact Uplink** | Mid | Workbench (requires 1 crystal) | **Vendor only** (no crafting): blueprint shop + keys shop. Tabbed UI. |
+| **Workbench** | Basic | Hand-assembled (no station) | Assembles the other stations, base weapons (from a dropped frame + pieces), ammo, medkits, bench-upgrade items |
+| **Forge** | Mid | Workbench | **Salvage & reroll** — breaks unwanted components into materials; rerolls a component's affixes for a material + artifact cost. The sink that gives every bad drop a floor value and every good-base-bad-roll drop a second life. |
+| **Electronics Bench** | Mid | Workbench | Assembles Auto-Turret + per-family turret variants (built weapon + components) and consumable kits (large medkit, stim, overcharge). |
+| **Weapon Bench** | Mid | Workbench | **Weapon assembly only** — slots dropped pieces, mods, and affixes onto frames via the assembly modal. **No tier-up here** — that lives at the Precision Machining Mill. |
+| **Precision Machining Mill** | Mid | Workbench | **Vendor-shaped** (no recipes) — modal lists every non-melee weapon in the player's inventory and tier-ups it (T1 → T4) for a tier-scaled cost in dropped materials. |
+| **Artifact Uplink** | Mid | Workbench (requires 1 crystal) | **Vendor only** (no assembly): schematic shop + keys shop. Tabbed UI. |
 
-**Hand-crafted basics.** Walls and the first Workbench are craftable from inventory anywhere — bootstrap so a fresh character can always build out a base.
+**Hand-crafted basics.** Walls and the first Workbench are assemblable from inventory anywhere — the bootstrap exception to the economy law (material-only products) so a fresh character can always build out a base.
 
-**Blueprints.** Every recipe carries an optional `blueprintId`. Recipes without one are always known. Recipes with one are gated — the player must learn the blueprint before the recipe even appears in their crafting UI.
-- **Per-cycle blueprints** wipe at perihelion. The player has to re-acquire each cycle.
-- **Persistent (legendary-tier) blueprints** stay on the character across cycles; even so, **the player still has to re-craft the materials every server cycle** because the dungeon resets.
+**Blueprints (schematics).** Every recipe carries an optional `blueprintId`. Recipes without one are always known. Recipes with one are gated — the player must learn the schematic before the recipe appears in their assembly UI. Schematics gate **products** — buildings, turrets, consumable kits, exotic assemblies — never basic weapon piece-assembly.
 
-**Acquisition source.** Blueprints come from the **Artifact Uplink trade store** — players spend artifacts (the kill-drop currency) to learn them. Each catalog entry has a cost, tier, and description. Buying transfers the blueprint into the player's known set, which propagates to the server. (See Artifact Uplink section below.)
+**Schematics are permanent** — learned once, kept across perihelion cycles and server restarts. The dungeon reset still forces re-sourcing components every cycle: knowledge persists, materials don't.
+
+**Acquisition source.** Schematics come from the **Artifact Uplink trade store** — players spend artifacts (the kill-drop currency) to learn them. Each catalog entry has a cost, tier, and description. Buying transfers the schematic into the player's known set, which propagates to the server. (See Artifact Uplink section below.)
 
 **Crafting UI.** Two surfaces:
 - **Inventory's "Field Craft" tab** lists hand-craftable basics only.
@@ -475,14 +469,14 @@ This atomicity matters because the staged-changes model invites the player to pl
 
 **Tier-mismatch.** Any tier of attachment can be slotted onto any tier of weapon. When tiers don't match, a small penalty folds into the resolved stats: each attachment's deviation from neutral (1.0 for multipliers, 0 for additive) is scaled by `1 - 0.05 × |attachmentTier − weaponTier|`, capped at 0.80. So a Mk3 attachment on a T1 weapon delivers 90% of its bonus; an Alien attachment on a T1 weapon delivers 80%. Same direction either way — a Mk1 attachment on a T4 weapon is also penalised because the precision chassis expects matching parts. Math lives in `computeWeaponEffect`; the cap means a strong roll always beats an empty slot.
 
-**Bench-tier upgrade items.** A fresh Weapon Bench is Mk1 and can only assemble Mk1 weapons. Higher tiers are unlocked by crafting a `bench_upgrade_mkN` item at the Forge (consuming the matching alloy stratum: Mk2 from base alloy, Mk3 from Refined Alloy, Mk4 from Precision Alloy) and applying it to the bench via right-click → Apply on the upgrade item. Each step is single-tier — a Mk1 bench needs the Mk2 upgrade first; you can't skip from Mk1 to Mk3. Per-building tier persists in the world snapshot. The Forge's alloy loop is now load-bearing rather than vestigial.
+**Bench-tier upgrade items.** A fresh Weapon Bench is Mk1 and can only assemble Mk1 components. Higher tiers are unlocked by assembling a `bench_upgrade_mkN` item at the Workbench from the matching band-gated drops (Mk2 from base Alloy Plate, Mk3 from Refined Alloy, Mk4 from Precision Alloy — all dungeon-sourced per the economy law) and applying it to the bench via right-click → Apply on the upgrade item. Each step is single-tier — a Mk1 bench needs the Mk2 upgrade first; you can't skip from Mk1 to Mk3. Per-building tier persists in the world snapshot. The bench ladder is the base-side mirror of dungeon depth.
 
 **Per-tier weapon base-stat scaling.** The weapon's tier is a real chassis upgrade, not just an attachment-slot count bump. `effectiveWeaponStats` applies a per-tier multiplier on top of the family base stats: each tier-up adds +15% damage, –5% fire interval, +2 magazine, +2% accuracy, +5% projectile speed, and –5% spread. So a T4 weapon hits 45% harder, fires 15% faster, and is noticeably tighter than the T1 of the same family — even before attachments. Tier-mismatch math (above) still applies to attachments on top of this base scaling.
 
 ### Artifacts & The Earth Trade Tree
 
 Artifacts are the long-form progression currency. They drop from kills (heavily weighted toward elites and faction champions) and have **three possible fates** at the Artifact Uplink. The player chooses one per artifact, creating real spend tension:
-1. **Trade for blueprint** — spend N artifacts to learn a recipe permanently for the cycle (or persistently for legendary tier). This is the alpha's primary uplink interaction.
+1. **Trade for schematic** — spend N artifacts to permanently learn an assembly schematic. This is the alpha's primary uplink interaction.
 2. **Ship to Earth** *(post-alpha)* — sacrifices the artifact for a **server-wide** tech-tree unlock that opens a new craftable template for every player on the server.
 3. **Burn as crafting ingredient** *(post-alpha)* — consume as a high-tier component in a specific recipe, e.g. Alien-tier suit assemblies.
 
@@ -536,7 +530,7 @@ Computed assembly stats = sum/composition of base stats + affixes from all slots
 
 - **Grid-snapped tile placement** on the 32-pixel surface grid.
 - Build mode is driven by the equipped hotbar slot — selecting a placeable item enters build mode automatically; deselecting exits. No separate toggle key.
-- In top-down view, the build ghost shows under the cursor; in first-person, a translucent **3D ghost cube** is raycast at the tile under the camera reticle.
+- A translucent **3D ghost cube** is raycast at the tile under the camera reticle (green = in range, red = out).
 - Base persists across deaths and perihelion cycles. The Power Link auto-rebuilds at cycle reset; everything else stays as the player left it.
 - Build mode is **surface-only** — not accessible inside the dungeon.
 
@@ -552,10 +546,10 @@ Single-source-of-truth registry: `BUILDING_REGISTRY` in `@dumrunner/shared/build
 | **Auto-Turret** *(SMG)* | 120 | 480-px range, 130ms cadence, low damage. Crafted from a built SMG + materials. |
 | **Auto-Turret** *(Shotgun)* | 140 | 320-px range, 6-pellet burst. Crafted from a built Shotgun + materials. |
 | **Auto-Turret** *(Rifle)* | 120 | 720-px range, single-shot high damage, 1.1s cadence. Crafted from a built Rifle + materials. |
-| **Workbench** | 150 | Crafting station — base weapons, ammo, medkit, gates Forge / Electronics Bench / Weapon Bench / Uplink. |
-| **Forge** | 220 | Crafting station — heavy/alloy recipes (planned content). |
-| **Electronics Bench** | 130 | Crafting station — turret variants, suit affixes. |
-| **Weapon Bench** | 160 | Crafting station — weapon mods + weapon affixes; attach/detach UI; tier-up. |
+| **Workbench** | 150 | Assembly station — base weapons from dropped pieces, ammo, medkits; gates the other stations. |
+| **Forge** | 220 | Salvage & reroll station — breaks components into materials; rerolls component affixes. |
+| **Electronics Bench** | 130 | Assembly station — turret variants, consumable kits. |
+| **Weapon Bench** | 160 | Assembly station — attach/detach dropped pieces, mods, affixes. |
 | **Artifact Uplink** | 200 | Vendor only (no recipes): blueprint shop + key shop. |
 | **Power Link** | 800 | Central structure that doubles as the dungeon entrance and the base's power source. Auto-spawned on world boot; rebuilt at perihelion if destroyed. See [Power System](#power-system). |
 
@@ -571,9 +565,9 @@ This means coming back up to bank loot or repair the base is cheap (the portal i
 
 **Destruction = dungeon reset.** When the Power Link is destroyed, the deepest-reached counter resets to 1 and **every dungeon scene is dropped + reseeded**. The next time anyone enters the Link, they land in a fresh floor 1 with a brand-new procgen layout. This is intentionally heavy: losing the Link mid-cycle costs the crew their entire dungeon push. Defending the Link during a horde matters because its destruction is *not* a per-perihelion reset — it can happen mid-cycle and the crew has to climb the dungeon all over again. (Cycle-end perihelion still resets the dungeon as before; this is the "intentional" reset path.)
 
-**Powered buildings.** Auto-turrets and (later) crafting stations require power to function:
+**Powered buildings.** Auto-turrets and running assembly jobs require power to function:
 - While the Power Link is alive, all powered buildings work normally.
-- When the Power Link is destroyed, **all turrets stop firing** and (post-async-crafting) all running craft jobs pause.
+- When the Power Link is destroyed, **all turrets stop firing** and all running craft jobs pause.
 - The Link auto-rebuilds at full HP when perihelion ends, so the cycle reset always restores defences.
 
 **Capacity scales with depth.** Capacity = `POWER_BASE_CAPACITY (2) + POWER_PER_DEPTH (1) × deepestFloorReached`. Each new floor pushed on the current cycle adds 1 to surface power capacity. Buildings declare a `powerDraw`: each turret = 1, each in-progress craft job = 1. Turrets get powered first in iteration order until capacity exhausts; over-capacity displays as overdraw on the HUD. Pushing deeper directly fuels a stronger surface base — dive loop and build loop wired together.
@@ -596,8 +590,9 @@ This means coming back up to bank loot or repair the base is cheap (the portal i
 - When the horde **ends**, the cycle counter increments. Cycle reset:
   1. All dungeon scenes are dropped; procgen reseeds them next descent.
   2. Surface corpses + dropped loot are wiped (the "recover before perihelion or lose it" pressure).
-  3. Per-cycle blueprints wipe; persistent blueprints stay.
-  4. The Power Link is rebuilt at full HP.
+  3. The Power Link is rebuilt at full HP.
+
+Schematics are **not** wiped — knowledge is permanent; only the world resets. (An early uplink implementation wiped blueprints per-cycle; that was an implementation artifact, never design — removal tracked in `ROADMAP.md`.)
 
 ### Hostile AI During Perihelion
 
@@ -715,10 +710,10 @@ The editor suite lives at `/editor` in the client app. Each tool is its own sub-
 - Base weapons (`WEAPON_STATS`, per-tier scaling, tier-mismatch curve).
 - Buildings (`BUILDING_REGISTRY`, station-tier upgrades).
 - Enemies (`ENEMY_VISUALS`, server-side templates, AI parameters).
-- Props (`PROP_REGISTRY` once it exists).
+- Props (`PropDef` JSON — shipped).
 - Biomes (palette, generation params, asset palettes).
 - Crafting recipes + station / tier requirements.
-- Blueprint tree (when E1 lands — DAG nodes + edges as content data).
+- Blueprint tree (DAG nodes + edges as content data — shipped).
 - Drop tables — corpse loot, scatter-loot, prop-break loot, enemy drops.
 - Affix / RNG tables — procedural attachment stat ranges, affix pools, weights.
 - Combat globals (`COMBAT` constants — player speed, regen rates, etc).
@@ -732,27 +727,28 @@ The editor suite lives at `/editor` in the client app. Each tool is its own sub-
 | Editor | Scope | Status |
 |--------|-------|--------|
 | **Texture** | PNG/WEBP per `(category, id)`. | shipped |
-| **Biome** | `BiomeDef` — palette, generation params, asset palettes, hazard intensity. Preview = generated demo dungeon. | E3.0 |
-| **Enemy** | `EnemyDef` — stats, AI template + params, visual, loot. Preview = AI sandbox vs dummy player. | E3.0 |
-| **Decorator** (props) | `PropDef` — HP, solid flag, on-destroy behavior, loot. Preview = row of the selected prop kinds. | E3.0 |
-| **Weapon** | `WeaponDef` — base stats per kind, per-tier scaling table, tier-mismatch curve. Preview = side-by-side DPS / TTK panel against a dummy. | shipped (PR 2) |
-| **Building** | `BuildingDef` — HP, footprint, station + workstation flags, upgrade chains. Preview = placed cube with stats panel. | post-E3 |
-| **Recipe** | `RecipeDef` — inputs, outputs, station, tier requirement, time cost. UI is an item-input/output composer. | aligns with E1 |
-| **Blueprint Tree** | DAG nodes + edges + station unlock prerequisites. Pannable tree visualisation; nodes coloured by state. | shipped (E1 PR 1) |
-| **Loot Tables** | Drop pools per source (corpse / prop-break / scatter / champion). Weighted entry list with rarity tiers and tier scaling. | post-E3 |
-| **Affix / RNG** | Procedural attachment classes — stat ranges, weight tables, affix pools per class. Preview = roll-N-times sampler so distributions are visible. | post-E3 |
-| **Combat Tuning** | The `COMBAT` constants table — player speed, sprint multiplier, stamina rates, shield regen, perihelion windows. Single-form editor; saves to one JSON. | post-E3 |
+| **Biome** | `BiomeDef` — palette, generation params, rosters, hazard intensity. Preview = top-down procgen map. | shipped |
+| **Enemy** | `EnemyDef` — stats, AI template + params, visual, loot. Preview = AI sandbox. | shipped |
+| **Props** | `PropDef` — HP, solid flag, on-destroy behavior, loot. | shipped |
+| **Weapon** | `WeaponDef` — base stats per family. | shipped |
+| **Attachments** | `AttachmentDef` — mods, weapon affixes, suit affixes. | shipped |
+| **Building** | `BuildingDef` — visuals, turret family links. | shipped |
+| **Recipe** | `RecipeDef` — inputs, outputs, station, tier requirement, time cost. | shipped |
+| **Blueprint Tree** | DAG nodes + edges + prerequisites; pannable tree, cycle detection. | shipped |
+| **Rooms** | `RoomTemplate` — tile pattern + anchors for procgen stamping. | shipped |
+| **Scenes (CSG)** | Linedef-native scene authoring with undo/redo + live playtest. | shipped |
+| **Animations** | `AnimationDef` — per-state frame sequences + fps. | shipped |
+| **Health** | Cross-area broken-reference / asset-health view. | shipped |
+| **Loot Tables** | Drop pools per source (corpse / prop-break / scatter / champion). Weighted entry list with rarity tiers. | open |
+| **Affix / RNG** | Stat ranges + weight tables per attachment class. Preview = roll-N-times sampler so distributions are visible. | open |
+| **Combat Tuning** | The `COMBAT` constants table — player speed, sprint multiplier, stamina rates, shield regen, perihelion windows. Single-form editor; saves to one JSON. | open |
 
-The "post-E3" tag means **no dependency on E3** — these can land in any order once their authoring is annoying enough to justify. They share the same API + schema infrastructure E3.0 builds, so each later editor is mostly a form + preview pane against an existing JSON shape.
+The open editors share the same API + schema infrastructure the suite already runs on, so each is mostly a form + preview pane against an existing JSON shape — they land whenever their authoring is annoying enough to justify.
 
 ### Architecture
 
-- **Sub-routes** under `/editor`:
-  - `/editor/textures` — what shipped (formerly just `/editor`).
-  - `/editor/biomes` — planned.
-  - `/editor/enemies` — planned.
-  - `/editor/decorators` — planned (props).
-  - Future: `/editor/weapons`, `/editor/recipes`, `/editor/blueprint-tree`, `/editor/loot`, `/editor/affixes`, `/editor/combat`.
+- **Layout.** Activity rail (domain glyphs) + domain pill strip + entity list / form / preview panes, with a global Cmd-K command palette. Shared infrastructure: `useEntityEditor` hook (load / select / draft / save / delete, dirty-state guards, Cmd-S, inline Zod validation), `SandboxPreview` (embedded fps-v2 canvas against an ephemeral sandbox world), `/api/editor/refs` cross-reference walker, `/editor/health` asset-health page.
+- **Live sub-routes** under `/editor`: `textures`, `biomes`, `enemies`, `props`, `weapons`, `attachments`, `buildings`, `recipes`, `blueprints`, `rooms`, `scenes` / `scenes-csg`, `animations`, `health`, `sandbox-test`.
 - **Persistence model.** Two on-disk shapes:
   - **Asset files** (PNG/WEBP) live under `packages/client/public/textures/<category>/<id>.<ext>`. Served as static URLs.
   - **Content data** (biomes, enemies, props, weapons, recipes, drop tables, …) lives under `packages/shared/content/<area>/`. Two file layouts depending on the area:
@@ -760,883 +756,18 @@ The "post-E3" tag means **no dependency on E3** — these can land in any order 
     - **Single-file table** for cross-cutting tables (combat globals, affix pools, blueprint-tree edges): `<area>/index.json`. Atomic commits; smaller files.
   - Both shapes are loaded at server boot. No DB.
 - **Edit flow.** `POST /api/editor/content/<area>` writes the JSON; `GET` lists. The route Zod-validates against the area's schema before touching disk so a malformed save can never make it into the repo.
-- **Hot-reload story.** Texture changes are picked up live (the renderer subscribes to `textureOverrides` notifications). Content changes apply on the next dungeon regen (cycle perihelion) — restarting the dev server is fine for the iteration loop. A "regenerate now" dev button on each editor's preview pane forces a regen without waiting for a real perihelion.
+- **Hot-reload story.** Texture changes are picked up live (the renderer subscribes to `textureOverrides` notifications). Content saves hot-reload the running server per area via `contentWatch.ts` (250ms debounce) — no restart; connected clients pick up registry changes on the next welcome. Editor sandboxes can force a floor regen without waiting for a real perihelion.
 - **Schema validation.** Each content area exports a TypeScript shape (`BiomeDef`, `EnemyDef`, `PropDef`, …) from shared, plus a co-located Zod schema. The editor forms are derived from those shapes; the API route runs Zod validation before writing. Bad edits never hit disk.
-- **Demo scene** (already shipped for textures). Each editor mounts the iso renderer with a hand-built scene tailored to that domain — biome editor renders a generated dungeon, enemy editor spawns one of the selected enemy in front of the camera, weapon editor puts a dummy in front of the player so you can fire and read stats, etc.
+- **Demo scene** (already shipped for textures). Each editor mounts the v2 sandbox preview with a hand-built scene tailored to that domain — biome editor renders a generated dungeon, enemy editor spawns one of the selected enemy in front of the camera, weapon editor puts a dummy in front of the player so you can fire and read stats, etc.
 
-### Texture Editor (shipped)
+### Texture Editor
 
-Already live at `/editor`. Side panel lists every `EnemyKind` and `BuildingKind` (via shared registries), each row shows current texture preview + Upload/Replace + Clear, demo scene mounts iso/top-down/FPS with V-cycling and WASD walking via local physics. Files write to `public/textures/<category>/<id>.<ext>` via the `/api/editor/textures` route. Renderers subscribe to override notifications and live-refresh on save.
+Live at `/editor/textures`. Side panel lists every texture category (enemies, props, buildings, weapon view-models, biome surfaces), each row shows current texture preview + Upload/Replace + Clear. Files write to `public/textures/<category>/<id>.<ext>` via the `/api/editor/textures` route. The renderer subscribes to override notifications and live-refreshes on save.
 
-When the suite expands, `/editor` becomes a top-nav landing page; the existing texture UI moves to `/editor/textures` unchanged. Build a `prop` category alongside `enemy` and `building` so prop sprites land in the same flow.
+## Implementation Status
 
-### Biome Editor (planned)
-
-`/editor/biomes`. Author and tune the 4-biome lore set (Sun-Bleached / Catacombs / Frozen / Alien Core) plus any future biomes.
-
-**Schema (`BiomeDef` in `packages/shared/content/biomes/<id>.json`):**
-
-```ts
-type BiomeDef = {
-  id: string;
-  label: string;
-  dominantHazard: 'heat' | 'radiation' | 'cold' | 'toxic';
-  // Floor / wall / accent colours used as palette fallbacks
-  // when per-tile sprites haven't been authored.
-  palette: { floor: string; wall: string; accent: string };
-  generation: {
-    roomCountMin: number;
-    roomCountMax: number;
-    roomSizeMin: number;       // tiles per dim
-    roomSizeMax: number;
-    corridorWidth: number;     // tiles
-    branching: number;         // 0..1 — corridor branching probability
-    propDensity: number;       // props per walkable tile
-    enemyDensity: number;      // enemies per walkable tile (×depth multiplier server-side)
-    lootDensity: number;       // scatter loot piles per room
-    hazardIntensity: number;   // 0..1 — multiplier on the dominant hazard tick
-  };
-  enemyRoster: { id: string; weight: number }[];      // pulls EnemyDef ids
-  propPalette: {
-    id: string;
-    weight: number;
-    naturalOnly?: boolean;
-    allowDoorway?: boolean;
-  }[];                                                 // pulls PropDef ids
-  lootBias: { materialId: string; multiplier: number }[]; // tilts scatter loot rolls
-  tileTextures?: {
-    floor?: string;            // texture-override id, e.g. 'biome::sun_bleached::floor'
-    wall?: string;
-  };
-};
-```
-
-**UI:**
-
-- Left sidebar: list of biome ids (CRUD — duplicate, rename, delete).
-- Centre: form bound to the selected biome's `BiomeDef`, grouped by section (palette / generation / enemyRoster / propPalette / lootBias). Asset pickers (enemy id, prop id, material id) are dropdowns populated from the registries — typing creates a new entry; weight is a slider.
-- Right preview pane: iso-rendered demo dungeon generated from the current params. Buttons:
-  - **Generate** — runs procgen with `(seed, biomeId)` and renders.
-  - **Re-roll** — bumps the seed.
-  - **Stats** — room count, walkable tile count, avg corridor length, prop count, enemy count rendered live.
-
-**Save** writes the JSON file. Server reads `packages/shared/content/biomes/*.json` at boot; the next perihelion uses the new params. Preview's "Generate" runs purely client-side (no server round-trip) so iteration is instant.
-
-### Enemy Editor (planned)
-
-`/editor/enemies`. Author and tune enemy classes — stats, AI behavior, visual.
-
-**Schema (`EnemyDef` in `packages/shared/content/enemies/<id>.json`):**
-
-```ts
-type EnemyDef = {
-  id: string;
-  label: string;
-  faction: 'catacombs' | 'sun_bleached' | 'frozen' | 'alien_core' | 'neutral';
-  biomeAffinity: string[];          // biome ids this enemy can spawn in
-  stats: {
-    hp: number;
-    contactDamage: number;
-    moveSpeed: number;              // px/sec
-    aggroRadius: number;            // px
-    deaggroRadius: number;          // px
-    bodyRadius: number;             // collision radius
-  };
-  ai: AiSpec;                       // see below
-  visual: {
-    shape: 'circle' | 'square' | 'triangle';
-    color: string;                  // hex
-    size: number;                   // existing EnemyVisual size
-    // textureId optional — looked up via getOverride('enemy', id)
-    // automatically; this field is just for documentation.
-  };
-  loot: {
-    materialDrops?: { materialId: string; min: number; max: number; chance: number }[];
-    partDropChance?: number;        // 0..1
-    blueprintDropChance?: number;   // 0..1
-  };
-};
-
-// Behavior templates. Each has its own typed parameter shape.
-type AiSpec =
-  | { kind: 'chaser_melee'; attackInterval: number; meleeRange: number }
-  | {
-      kind: 'ranged_pulser';
-      attackInterval: number;
-      preferredRange: { min: number; max: number };
-      projectile: ProjectileSpec;
-    }
-  | { kind: 'swarmer'; aggression: number; chaseStickiness: number }
-  | { kind: 'brute'; chargeWindupMs: number; chargeDamage: number; chargeRange: number }
-  | {
-      kind: 'sniper';
-      attackInterval: number;
-      sightlineRequired: true;
-      retreatBelowHpRatio: number;
-      projectile: ProjectileSpec;
-    };
-
-type ProjectileSpec = {
-  speed: number;
-  damage: number;
-  ttlMs: number;
-  radius: number;
-  color: string;
-};
-```
-
-**UI:**
-
-- Left sidebar: list of `EnemyDef` ids with shape/color thumbnail + biome chips.
-- Centre: form for the selected enemy:
-  - **Identity** section (id, label, faction, biomeAffinity multi-select).
-  - **Stats** section (HP, damage, speed, aggro/deaggro radii, body radius — all numeric inputs with sane min/max).
-  - **AI** section: behavior template dropdown swaps the parameter form (chaser_melee shows `attackInterval` + `meleeRange`; ranged_pulser shows `attackInterval` + `preferredRange` + nested `ProjectileSpec` form; etc).
-  - **Visual** section: shape / color / size + a "Upload sprite" button that hands off to the texture editor's `enemy/<id>` slot.
-  - **Loot** section: material drops table, part-drop chance, blueprint-drop chance.
-- Right preview pane: iso scene with one of the selected enemy in front of the camera, plus a stationary "dummy player" 200px away. Buttons:
-  - **Spawn one** — adds the enemy to the demo scene; you can shoot it to verify HP / death FX.
-  - **AI sandbox** — toggles a "let AI run" mode where the enemy chases / attacks the dummy player so you can see the behavior.
-  - **Reset**.
-
-Server's spawn picker reads `packages/shared/content/enemies/*.json` at boot; biome roster references resolve against this list. Existing hand-coded enemy templates (in `server/src/ai/templates.ts`) migrate into JSON files as a one-time port.
-
-### Decorator Editor (planned)
-
-`/editor/decorators`. Same shape as the Enemy Editor, but for `PropDef` (see [Dungeon → Props](#props-planned) for the design).
-
-**Schema (`PropDef` in `packages/shared/content/props/<id>.json`):**
-
-```ts
-type PropDef = {
-  id: string;
-  label: string;
-  biomeAffinity: string[];
-  hp: number;
-  solid: boolean;                   // blocks movement + projectiles
-  onDestroy: 'nothing' | 'drop_loot' | 'explode';
-  explode?: { radius: number; damage: number };
-  loot?: { materialId: string; min: number; max: number; chance: number }[];
-  visual: { textureId?: string; tint?: string };
-};
-```
-
-**UI:**
-
-- Same three-pane layout as Enemy Editor (sidebar / form / preview).
-- Form sections: **Identity** (id, label, biomeAffinity), **Behavior** (HP, solid, onDestroy with conditional explode params), **Loot table**, **Visual** (texture upload).
-- Preview: iso scene with a row of the selected prop kind. Shoot to verify HP / break FX / loot drops / explosion radius.
-
-### Roadmap dependency
-
-These tools are the **prerequisite** for the dungeon overhaul, not an afterthought. Without them, every new biome / enemy / prop is a multi-file edit + restart cycle, and the four-biome lore commitment becomes a labour wall. They ship as **E3.0** before any of the system work in E3.1+. See [Roadmap → E3.0](#sprint-e--ux-overhauls) for the implementation slice.
-
-## Alpha Scope & Implementation Status
-
-The hardest risk to get out of the way was realtime sync over websockets between authenticated players in created servers. That work shipped first; gameplay systems layered on top of proven netcode.
-
-### Shipped
-
-**Infrastructure**
-- Account & auth (Supabase): register, login, email confirmation flow with `/auth/callback`, account profile, settings page.
-- Lobby: server browser with filters, server-creation form (name, visibility, password, max slots, world seed, world tuning), join-by-id, owner-only delete.
-- Game-server registry: server records in Supabase, on-demand process spin-up via Fly.io, idle shutdown + state flush, per-server character provisioning. Active-occupancy via `last_seen_at` heartbeat (30s) — capacity check counts seats live in last 60s, not historic character rows.
-- Wire protocol: Zod schemas in `@dumrunner/shared` validate every inbound message; PROTOCOL_VERSION negotiation on auth handshake; HMAC-SHA256-signed JoinTokens.
-- Deployment: client + lobby on Vercel, game server on Fly with `min_machines_running = 1` so the WS proxy doesn't drop sessions during quiet menu time. Tracked via `JOIN_TOKEN_SECRET` shared across both. 25s server-side WebSocket ping/pong heartbeat keeps Fly's edge proxy from idling connections; 60-min Supabase character heartbeat tracks active occupancy.
-- CI: GitHub Actions runs `typecheck:{shared,server,client,asset_gen}` on every push + PR. Auto-deploys the game server to Fly on pushes that touch `packages/server`, `packages/shared`, `packages/asset_gen`, the workspace manifests, or `fly.toml` — gated on the same typechecks. Manual `workflow_dispatch` available for re-deploys without a fresh commit.
-
-**Core gameplay**
-- Server-authoritative movement with client prediction + soft reconciliation. Stamina + sprint, shield system, per-template enemy stuns. Snap-on-jump + always-lerp client smoothing fixes invisible-attacker / rubber-band desync class.
-- Dungeon descent with procedural floor layouts, deterministic from `(worldSeed, cycle, floorIndex)`. Per-floor extract pad → surface. Locked-rooms procgen (key-gated doors, indestructible) with guaranteed-clear entrance→stairs path. LoS thickness fix prevents visibility leaking through diagonal-corner gaps.
-- Top-down (Pixi) renderer + 2.5D first-person renderer (raycaster with grid DDA + sprite billboards). Toggle with **V**. Fog visibility cache: per-tile LoS scan only re-runs on player tile / layout / buildings change.
-- 8 enemy templates (chaser_melee, shooter_drone, brute_chaser, swarmer, armored, flame_drone, chem_bloater, dummy_target) with mix-and-match movement / attack profiles, FSM, line-of-sight gating. Templates are now JSON-authored under `packages/shared/content/enemies/<id>.json` and loaded into `TEMPLATES` at boot via `initTemplates()`; the legacy `DEPTH_WEIGHTS` table is consulted only when a biome's `enemyRoster` is empty.
-- Slot-based inventory (base 36 slots, hotbar 9 + bag 27), grows with cargo grid tier (Mk1 +4 ⋯ Alien +48). Drag/drop, sort, suit equipment slots.
-- **Combat**: 7 ranged weapon families (pistol/SMG/shotgun/rifle/sniper/heavy/energy) + 4 melee (knife/sword/hammer/energy_blade). Per-weapon stats (damage / fire rate / projectile speed / pellet count / spread / accuracy / magazine / reload). Per-shot accuracy jitter (±~8.6° max half-cone scaled by `1 - accuracy`). Magazine + **R**-key reload. Mods + piece affixes scale stats via `computeWeaponEffect`. Status-effect imbue mods (burn / poison / slow) apply to enemies; enemy AoE cone attacks can apply the same to players. Borderlands-style adjective-stacking weapon names. Effective stats shown in inventory tooltip.
-- Naked respawn (corpse retains all loot at death position; corpse persists until perihelion or pickup). Per-server `dropItemsOnDeath` toggle.
-- Audio: per-event SFX (player-shoot per-family, enemy-shoot, hits, footsteps, pickups, UI click/hover, modal open, reload), music with crossfade per scene. Volume + mute persisted to localStorage. **M** toggles mute.
-
-**Items & crafting**
-- 8-material component schema (`scrap`, `wire`, `alloy`, `circuit`, `biotic`, `crystal`, `artifact`, `key`).
-- Per-template enemy loot tables + dungeon scatter loot in rooms. Drop rates rebalanced so artifacts/keys/crystals are the rare prize and tier-rolled gear drops at ~5% per kill (down from 80%).
-- Suit equipment with **real stat effects**: chassis +HP +build radius, plating +shield, life support +stamina +regen, utility_mod +move speed, cargo grid +inventory slots +small build radius.
-- Affix system shipped — two paths under one roof:
-  - **Rolled affixes** on dropped CarriedParts (5 kinds, tier-scaled, stack into the suit stats accumulator). Each has a flavored display name (Adrenal Surge, Pulsewall Aegis, etc.).
-  - **Crafted attachments** via `ATTACHMENT_DEFS`: weapon mods, weapon affixes, suit affixes. 8 weapon mods + 2 weapon affixes + 2 suit affixes shipping. Each carries a Borderlands-style adjective for weapon name composition.
-- 7 base weapon families (pistol/SMG/shotgun/rifle/sniper/heavy/energy) + 4 melee (knife/sword/hammer/energy_blade), all blueprint-gated. Player starts with `bp_pistol`. Tier-up (T1→T4) preserves attached pieces and mods.
-- Workstation buildings (workbench, forge, electronics_bench, **weapon_bench**, **precision_mill**) + Artifact Uplink + 4 turret variants (pistol-tier baseline + per-family with weapon-as-component recipes).
-- **Weapon Bench redesign (Sprint D.1).** Bench is now assembly-only: picker lists every non-melee weapon, labeled slot grid (4 piece tiles + N mod tiles), inline candidate chooser, live `WeaponStatsPanel` with green/red diff, atomic Assemble button. Tier-up moved to its own **Precision Machining Mill**.
-- **Atomic `assemble_weapon` server message.** Single transaction encoding the target piece + mod configuration (instance ids). Server clones inventory + weapon, walks the diff by `AttachmentInstance.id`, validates def/family/tier compatibility, and either commits the whole transaction or rejects it — no half-applied state.
-- Recipe schema with workstation + blueprintId + 5 input/output kinds. Per-station crafting modals (2-column UI, blueprint list left, requirements detail right). Async crafting with parallel slots + 8-slot output buffer + Take All. Inventory's "Field Craft" tab for hand-craftable basics.
-- **Craft queue** — up to 5 jobs per station (active + queued). Materials deduct at enqueue; queued rows render greyed; oldest queued promotes when an active completes. Power-aware: jobs sit in queue while the Link is over-capacity, slip in as headroom returns.
-- **Storage chests** — 16-slot bidirectional buckets, hand-craftable for 15 scrap + 4 alloy. Click-to-transfer modal (your inventory ↔ chest). Contents persist across cycles + game-server restarts via the world snapshot. Activity-bound rooms hide them in the public lobby just like the rest of the row.
-- **Recipe IO dispatch helpers** in shared (`hasRecipeInput`, `consumeRecipeInput`, `recipeOutputToSlot`, `addRecipeOutputToInventory`) — single-place dispatch over material/ammo/weapon/attachment/consumable variants.
-- **`BUILDING_REGISTRY`** in shared: single source of truth for HP, horde priority, parallel slots, isStation, isWorkstation, label.
-- Blueprint catalog + artifact trade store (vendor-only Uplink with Blueprints + Keys tabs). Per-cycle vs persistent blueprint sets (persistent slot reserved for legendary tier).
-- Procedurally-named CarriedPart drops (deterministic cyberpunk prefix + class + base noun + flavored affixes).
-- Character stats panel (base + suit modifiers) + per-part hover tooltip listing each rolled affix + per-weapon hover tooltip listing effective damage / fire rate / accuracy / mag / reload / attached mods / piece affixes.
-- Medkit consumable (craftable, heals 60 HP, **F**-key from hotbar or right-click → Use).
-
-**Horde mechanic**
-- Cycle clock + perihelion countdown HUD. 15 minutes per cycle in alpha (3 days × 5 min/day, configurable per-server).
-- Wave spawning at the surface perimeter during perihelion. Walls take damage from melee enemies.
-- **Hostile AI target-priority hierarchy** (Power Link 100 > turrets 50 > workstations 25 > wall 10 > player) — enemies during the horde prioritise the Power Link, walls become natural choke points.
-- **Power Link** is shipped as the central building (HP 800, auto-spawns on world boot, rebuilds at perihelion, doubles as dungeon portal).
-- **Power capacity scales with depth** (`base 2 + 1/floor reached this cycle`). Turrets and craft jobs each draw 1.
-- **Async crafting** shipped with `craftTimeMs`, parallel slots, output buffers.
-- 4 turret variants (pistol-baseline + per-family) with their own per-variant range / damage / cadence / pellet pattern.
-- Cycle reset wipes corpses, drops dungeon scenes (regen on next descent), wipes per-cycle blueprints, rebuilds Power Link, increments cycle counter.
-
-**Communication**
-- Top-left in-game chat panel. Server-wide channel. System messages on player join / leave / death.
-
-**Server lifecycle**
-- **Owner-only pause/resume.** In-game two-click PauseServerControl (no native `confirm()` so it works inside Discord's Activity sandbox). Pausing flushes state, broadcasts `server_paused`, closes every WS with code 4090, marks `servers.is_paused = true`, evicts the World from the in-process registry so the next join hydrates fresh. Game-server tick polls `is_paused` every 5s so a lobby-side pause without the owner connected still kicks everyone.
-- Pause-driven WS close redirects clients to `/servers?notice=server_paused` with an amber banner — no generic disconnect error.
-- Lobby browser shows `[paused]` badge on owner-owned rows; Join button labels itself "Resume" when paused; the join route auto-flips `is_paused = false` for owners. Non-owners see a disabled "Paused" button.
-- Server-creation form defaults the name to `<display_name>'s server` (both lobby `/servers/new` and Discord Activity setup form).
-
-**Discord integration**
-- "Continue with Discord" OAuth button on `/login` and `/register` (web). Server-side code exchange + synthetic-email upsert into `auth.users` and `public.accounts`, then standard Supabase session — so `/api/servers/[id]/join` and the rest of the auth-gated flow work unchanged for Discord identities.
-- Discord Activity entry point at `/discord`. Boots `@discord/embedded-app-sdk` (lazy import), authorises with `identify` scope, exchanges through `/api/auth/discord/exchange`, calls `sdk.commands.authenticate`, and binds the call's `instance_id` → a server row via `/api/discord/instance`. First caller in the call provisions the room (full server-config form: name, max slots, world seed, day length, days/perihelion, drop-on-death) + display name; subsequent callers see a read-only room summary and just confirm display name. Activity-bound rooms are hidden from the public lobby.
-- **Iframe survival kit:** Supabase session cookies forced to `SameSite=None; Secure; Partitioned` (CHIPS) so they survive Discord's third-party iframe context; `/` server-redirects to `/discord` when `frame_id` is present so URL Mappings can stay at `prefix=/`; game-server WebSocket routed through a second URL Mapping (`/game-ws` → fly host) so the cross-origin `wss://` upgrade isn't blocked by the Activity CSP.
-- `/terms` + `/privacy` pages cover Discord app-verification requirements; both linked from the landing page footer + below each auth form.
-
-**Asset generation pipeline (separate package)**
-- `@dumrunner/asset_gen`: HTTP service that generates sprite PNGs on demand via OpenAI's image API. Stable cache-key dedup. Live game posts `/v1/assets/generate` for entities it doesn't have yet; client fetches `/v1/assets/index` at boot to build a kind→texture map. Single-call animation sheet (one image-edit call → wide canvas → trim+slice into N frames) replaces the legacy per-frame N-call pipeline.
-
-### Roadmap
-
-The post-alpha plan grouped by sprint. Each sprint is internally
-ordered (top items unblock bottom items). Sprints run in order
-unless explicitly noted.
-
-**Naming convention.** One scheme top-to-bottom:
-
-- **Sprint X** — top-level work block (capital letter, e.g. Sprint
-  D, Sprint E, v2). Sub-passes use a dot suffix (Sprint D.1, D.2,
-  D.3 — the three system passes that landed between Sprint D core
-  and Sprint E).
-- **X.N** — items inside a sprint (E1, E2, E3, …, E8).
-- **X.N.M** — sub-slices inside an item (E3.0 through E3.4).
-- **X.N.M.K** — steps inside a sub-slice (E3.4.1 through E3.4.4).
-
-The word "phase" is now generic prose ("the next phase of work")
-and does **not** carry a numeric ID. Earlier drafts used
-`Phase 1` / `Phase 2` / `Phase 2.5` for the post-Sprint-D system
-passes and `E3.4 Phase 1–4` for the room-template steps; both
-were renamed to `Sprint D.1–D.3` and `E3.4.1–E3.4.4`
-respectively.
-
-#### ~~Sprint D.2~~ — Forge + bench tiers + tier-mismatch (shipped)
-
-All three pieces of the system pass landed:
-
-1. **Forge alloy production.** Three Forge recipes producing
-   `alloy` (12 scrap + 4 wire), `alloy_mk3` (4 alloy + 2 circuit),
-   and `alloy_mk4` (4 alloy_mk3 + 1 crystal + 1 artifact). The
-   Forge buildable recipe restored at the Workbench. Tiered
-   alloys feed bench-tier upgrades + (future) high-tier
-   attachment recipes.
-2. **Weapon Bench tier-upgrade items.** Per-building
-   `benchTier: 1|2|3|4` on `BuildingState`. New
-   `upgrade_workstation` server message + `handleUpgradeWorkstation`
-   handler. New `UpgradeKind` inventory slot variant + Forge
-   recipes (`forge_bench_upgrade_mk{2,3,4}`). The Weapon Bench
-   modal shows the bench tier in the header; weapons above the
-   bench tier are greyed out in the picker; Assemble disabled
-   with a cap-too-low hint. Right-click an upgrade item to
-   "Apply to Bench" — the renderer exposes the in-range bench
-   ids + tiers so the menu finds the matching-tier bench
-   automatically. PROTOCOL_VERSION 36 → 37.
-3. **Tier-mismatch math.** Lives in `computeWeaponEffect`. Each
-   attachment's deviation-from-neutral is scaled by
-   `1 - 0.05 × |attachmentTier − weaponTier|`, capped at 0.80.
-   Mk3 attachment on T1 weapon → 90% effectiveness; Alien on
-   T1 → 80%. Same direction either way. Suit-side mismatch
-   lands with Sprint D.3's Suit Assembly Bench.
-
-#### ~~Sprint D.3~~ — Suit Assembly Bench (shipped)
-
-Mirror of the Weapon Bench redesign (Sprint D.1) for suit parts.
-Closes the orphaned `aff_shield_25` / `aff_speed_5` blueprints —
-they craft into instances that the Suit Assembly Bench can now
-attach to equipped suit parts.
-
-- New building kind `suit_bench` (HP 160, station, not workstation).
-  Hand-craftable at the Workbench (25 scrap + 8 alloy + 4 wire).
-- Per-part attachment slot cap: `SUIT_ATTACHMENT_SLOTS[PartTier]`
-  → Mk1=1, Mk2=2, Mk3=3, Mk4=4, Alien=4.
-- New atomic server message `assemble_suit_part { suitSlot,
-  attachments: instanceId[] }` + `handleAssembleSuitPart`. Same
-  diff-and-commit pattern as `assemble_weapon` — clone equipment +
-  inventory, walk diff by `AttachmentInstance.id`, validate def
-  kind / `slotKind` matches the target slot, recompute suit stats
-  via `recomputePlayerStats` on commit (so HP/shield/stamina/speed
-  caps update + broadcasts go out).
-- New `SuitAssemblyPanel` mirror of `WeaponAssemblyPanel`: picker
-  over equipped suit parts (with tier badge), labeled slot grid
-  sized by part tier, inline chooser of compatible instances from
-  inventory + the part's currently-attached pool, live
-  `SuitStatsPanel` showing current → staged diff.
-- Suit-side tier-mismatch via `suitTierMismatchScale` (mirror of
-  weapon-side curve, both directions, capped at 0.80) — the
-  `appliedAttachments` fold in `computeSuitStats` scales each
-  attachment's effect by `(attachment.tier vs part.tier)`.
-- `bp_aff_shield_25` / `bp_aff_speed_5` restored in
-  `BLUEPRINT_CATALOG`. PROTOCOL_VERSION 37 → 38.
-
-#### Sprint E — UX overhauls
-
-E1 / E2 are independent; each ships on its own timeline. **E3 is
-the biggest single piece on the board** and is now sliced into
-five steps (E3.0 → E3.4) that ship sequentially — each one
-playable, each one unblocking the next. The slicing puts
-**editor tooling first** so we don't author the four-biome lore
-commitment by hand-editing TypeScript.
-
-**E1. Blueprint progression tree.** Replace the flat
-`BLUEPRINT_CATALOG` listing with a DAG: unlocking the Workbench
-exposes Tier-1 nodes; crafting a "Forge Uplink" upgrade exposes
-Tier-2 nodes under the Forge; etc. Recipes gain a `stationTier`
-requirement. UI: pannable tree visualisation, Path-of-Exile-
-style passive-tree feel, nodes coloured by state (locked /
-unlockable / unlocked). Workstation-tier upgrades from Sprint D.2
-plug into this naturally.
-
-**Status.** The data layer and DAG were already shipped before
-E1 was formally named (see Blueprint System review in commits).
-E1's PR 1 (2026-05-11) **completed the migration of
-`BLUEPRINT_CATALOG` to JSON content** under
-`packages/shared/content/blueprints/<id>.json` and shipped an
-authoring UI at `/editor/blueprints`: sidebar list, form
-(identity / economy / unlocks / prerequisites), inline cycle
-detection, dependents panel, draft-aware DAG preview pane. The
-generic `/api/editor/content/blueprints` API runs cross-area
-validation (recipeId exists in RECIPES, prereqs resolve, DAG
-acyclic) before writing to disk. Server boot loads via
-`initBlueprints()`; the existing content watcher hot-reloads on
-save without a restart. Connected clients pick up authored
-changes on next welcome.
-
-Still open under E1: workstation-tier upgrade items for non-
-Weapon-Bench stations (so high `stationTier` recipes at the
-Forge / Electronics / etc. become reachable), and the persistent-
-blueprints write path (legendary tier surviving perihelion). Plan
-doc at `docs/blueprint-editor-plan.md`.
-
-**E2. Mobile controls.** Detected via `matchMedia('(hover: none)
-and (pointer: coarse)')` at mount. `MobileControls` overlay:
-virtual stick bottom-left (feeds the existing `input` ws
-message), virtual fire button bottom-right, button row for
-reload / use / interact, hamburger for inventory. FPS view
-needs a touch-look gesture (right-half drag for aim + auto-fire
-on tap) — trickier; can ship with top-down only at first.
-
-**~~E3.0~~. Editor suite (shipped).** Prerequisite for everything else in E3.
-Full design under [Content Pipeline & Editor Suite](#content-pipeline--editor-suite). Slice:
-
-- Top-nav landing at `/editor`. Existing texture editor moves
-  under `/editor/textures` unchanged.
-- **Schemas first.** `BiomeDef`, `EnemyDef`, `PropDef` in
-  `packages/shared/content/types.ts`, with Zod validators.
-  Migrate the existing hand-coded `ENEMY_VISUALS` + planned
-  `PROP_REGISTRY` data into JSON files under
-  `packages/shared/content/<area>/`.
-- **API routes.** `POST /api/editor/content/<area>` (write JSON,
-  Zod-validated), `GET /api/editor/content/<area>` (list).
-  Mirrors the texture API pattern.
-- `/editor/biomes`. Sidebar list + form (palette, generation
-  params, asset palettes) + preview pane that runs procgen
-  client-side and renders in the iso renderer.
-- `/editor/enemies`. Sidebar list + form (identity, stats, AI
-  template + per-template params, visual, loot) + preview pane
-  with Spawn / AI-sandbox buttons.
-- `/editor/decorators`. Same shape as enemies but for `PropDef`.
-- **Server boot reads JSON content** for biomes / enemies /
-  props (alongside the existing TypeScript-source registries
-  during the migration). New "regenerate dungeon now" dev
-  control on each editor's preview reaches into the running
-  game session via a dev-only WS message — no real perihelion
-  needed for iteration.
-
-**~~E3.1~~. Biome scaffolding + per-band assignment + enemy rosters (shipped).**
-Foundation. Lands once the editor suite from E3.0 can author the data.
-
-`packages/server/src/biomes.ts` carries `pickBandBiome()` (deterministic
-per `(worldSeed, cycle, bandIndex)` with optional `world.json`
-overrides). Procgen reads `BiomeDef.enemyRoster` per floor and the
-FPS renderer reads `layout.biome` for floor / ceiling / skybox
-overrides. Surface UI for the upcoming-band layout has **not**
-shipped yet — the dungeon picks bands deterministically but
-players currently learn the layout by diving.
-
-- `Biome` enum + `BiomeDef` JSON content (4 biomes: Sun-Bleached
-  / Catacombs / Frozen / Alien Core), authored in the biome
-  editor.
-- Per-band assignment at perihelion (each band rolls a biome
-  independently per the GDD's biome rotation rule). `layout.biome`
-  field on `SceneLayout`. Surface UI shows the cycle's biome
-  layout for known bands.
-- Existing enemies migrate to `EnemyDef` JSON with `biomeAffinity`
-  set; spawn picker pulls from `BiomeDef.enemyRoster` weighted
-  list.
-- **No procgen change** — existing rectangular rooms keep
-  working but now know what biome they are, with per-biome
-  floor / wall colour palettes from `BiomeDef.palette`.
-
-**~~E3.2~~. Props system (shipped).** Self-contained, slots into biome
-palettes from E3.1. Full design under
-[Dungeon → Props](#props-planned).
-
-`packages/server/src/props.ts` + `generateInitialProps` in
-`procgen.ts` spawn props from `BiomeDef.propPalette`;
-`prop_damaged` / `prop_changed` broadcasts in `scene.ts` carry
-HP + container state. Container variants (lootable crates,
-cargo containers) are wired. Renderer billboard support landed
-in FPS; iso/topdown integration is partial — track in the
-[Cleanup & Bug List](#cleanup--bug-list) if it bites.
-
-- Server-side prop entities with HP + destruction handling.
-  `PROP_REGISTRY` migrates to `PropDef` JSON; biome palettes
-  reference prop ids.
-- Three-renderer billboard pass (no HP bar, hit-flash on
-  damage). Editor's `prop` category mirrors `enemy` / `building`
-  so art iteration uses the same texture upload flow.
-- Spawning hooks into the existing rectangular procgen via
-  `BiomeDef.propPalette`; biome-flavoured scenery (trees, rocks,
-  conduits, terminals) plus the explosive-barrel and
-  lootable-cargo specials.
-
-**~~E3.3~~. Hazard system (shipped).** Independent of WFC. Lands on existing
-rectangular rooms with the biome data from E3.1.
-
-Shared `packages/shared/src/hazards.ts` exports the pure DPS
-math; `Scene.tickHazards` accumulates a 1Hz tick driven by
-biome's dominant hazard, depth-scaled DPS, and the player's
-life-support specialty resist (folded through `computeSuitStats`
-on hydrate / equipment change). Comment at the tick site
-("snap instead of carry remainder so a long pause doesn't fire
-a burst of catch-up ticks") earns its keep.
-
-- Resist fields on life-support `CarriedPart` (heat / cold /
-  radiation / toxic).
-- Per-floor hazard spec derived from `BiomeDef.dominantHazard` +
-  `hazardIntensity` + depth scaling.
-- Server tick applies environmental damage scaled by the
-  resist gap. Folds the "depth gating via life-support tier"
-  loop the GDD describes.
-
-**E3.4. Room templates + multi-texture biomes.** The dungeon
-overhaul. Authoring-first, not algorithmic — modeled on what
-shipping roguelikes (Spelunky, Dead Cells, Hades, Diablo,
-Returnal) actually do, not on the academic WFC track that the
-original E3.4 framing took. Full implementation plan at
-`docs/e3.4-implementation-plan.md`.
-
-- **E3.4.1 (shipped).** Per-cell `TileGrid` on `SceneLayout`,
-  base64-encoded over the wire. `TileDef` + `BiomeDef.tileSet`
-  schemas. FPS + iso renderers do per-cell tile lookup, paint
-  dungeon walls from `('biome_wall', biomeId)` overrides. Biome
-  editor exposes wall texture upload alongside floor / ceiling /
-  skybox.
-- **E3.4.2. Multi-texture biomes (schema in).** `TileDef.textureIds`
-  is an array on the schema (`packages/shared/src/content/types.ts`);
-  per-cell stable hash picks one variant. Authoring path for N
-  wall / floor textures per biome works through the biome editor.
-  Renderer-side variant pick is partial — confirm in
-  `packages/client/lib/game/fps.ts` / `iso.ts` before declaring
-  shipped.
-- **E3.4.3. Room template engine (scaffolded — partial).** Each biome
-  owns a pool of hand-authored room templates (JSON: tile grid +
-  anchors for enemy / prop / loot / extract / stairs / door spawn
-  points). `packages/server/src/rooms.ts` + `corridors.ts` load
-  `RoomTemplate` / `CorridorTemplate` from
-  `packages/shared/content/{rooms,corridors}/<id>.json`; procgen
-  calls `stampRoomTemplates()` from `procgen.ts`. Existing rect
-  generator stays as a fallback for biomes with empty pools, so
-  each biome migrates independently. Status: 4 room templates
-  authored (one biome-specific `frozen_pillared`, three editor-
-  output ids); no corridor templates yet; per-biome role
-  coverage (boss / vault / extreme) not started.
-- **E3.4.4. Room editor.** Browser-based template authoring —
-  paint the tile grid, drop anchors, save to JSON via the same
-  content-API pattern as biomes / enemies / props.
-
-WFC was rejected. Survey of shipped roguelikes turned up
-essentially zero AAA / well-funded indie titles using textbook
-WFC for level generation; the dominant pattern is hand-authored
-rooms + procedural placement. Templates trade adjacency-table
-authoring for room-layout authoring, and the room layouts double
-as combat scenes with intentional sightlines + cover.
-
-**E4. Buildable variety.** Today's buildable set is walls +
-turrets + workstations + Power Link + chests. Expand:
-
-- **Doors** as a player-placed buildable. Single-cell door entity
-  with open/close state, hostile-AI pathing aware. Hand-craftable
-  at the Workbench. Cheaper than a wall and lets players gate
-  rooms during the horde without sealing themselves in.
-- **Wall tiers.** Today's wall is a single HP / cost. Add tiered
-  walls (Mk2 / Mk3) via Forge upgrade items, mirroring the
-  bench-tier system. Tiered walls have proportionally more HP
-  and slightly higher horde priority.
-- **Decoration buildables.** Light fixtures, banners, signs,
-  rugs — purely cosmetic, hand-craftable cheap, give players a
-  way to personalise their base. Not horde-prioritised.
-
-**E5. Container & lootable props.** Add openable containers as a
-prop subclass — barrels (already explosive), crates, lockers,
-terminals — that hold a loot table and require an interaction
-(E to open) rather than auto-pickup. Crates roll the same scatter
-loot table the rooms use today; lockers in dungeons can hold
-guaranteed-tier gear; terminals can drop blueprints. Containers
-don't damage on melee (they're interacted with, not destroyed)
-unlike today's destructible barrels.
-
-**E6. Enemy corpse persistence.** When an enemy dies, leave a
-visible corpse billboard at the death position. Persists for the
-floor's lifetime (until perihelion / re-descent). Pure visual —
-no loot, no collision, no LOS block — but reads as combat
-history. Player corpses already work this way.
-
-**E7. Hand-authored "tier" rooms.** Layered on top of the room
-template engine (E3.4.3). Each biome ships hand-crafted
-"tier" templates that only roll on deeper floors — increasingly
-complex layouts, denser hostile placements, and harder hazard
-zones. The procgen role-pool already supports `boss` / `vault` /
-`extreme`; this is the content track that fills them. Future:
-AI-generated room layouts feeding the same template format,
-authored at runtime per-cycle so players don't memorise.
-
-**E8. Editor sprite catalogue + procedural weapon visuals.**
-
-- Add per-class texture rows in the editor for player / weapon /
-  consumable / building sprites. Missing today; only enemies and
-  props have a TextureRow path.
-- **Base + overlay sprite composition for weapons + carried
-  parts.** Each weapon's visual = a base sprite (frame) + N
-  overlay sprites (barrel / grip / magazine / stock) keyed by
-  the attached `AttachmentInstance` ids. Same trick for procedural
-  carried-part drops — base armour sprite + overlays for affix
-  type. Lets the asset_gen pipeline generate components rather
-  than `O(weapons × mod combos)` complete sprites. The composition
-  logic lives client-side; the catalogue lives in the texture
-  editor.
-
-#### Deferred past alpha
-
-These are reserved-place-in-the-design items, not actively
-scheduled. Listed so the next agent doesn't re-discover them.
-
-- **Full weapon part-assembly drops.** The part ontology in
-  [Items & Procedural Generation](#items--procedural-generation)
-  describes `Frame / Barrel / Grip / Magazine` as *dropped
-  parts*, not just attachment slots. Today's loop is mod / affix
-  attachments + tier-up; the part-driven assembly is the long-
-  term direction once procedural attachments + suit assembly
-  land.
-- **Faction champions / boss enemies** + the
-  artifact-as-Alien-tier-part path.
-- **Earth tech-tree unlocks.** Currently the Artifact Uplink
-  only trades blueprints. The "Ship to Earth" + "Burn as
-  ingredient" fates land later.
-- **Cargo grid (Tetris-style) inventory model.** Today's slot
-  inventory grows linearly with cargo tier; the actual W×H grid
-  lands later.
-- **Wall repair.** Right-click "Repair" consuming a fraction of
-  the recipe cost. Quality-of-life; not blocking.
-- **Loot drop TTL polish.** Current 90s expiry is short for
-  tactical pacing. Consider 180s or scaling by floor depth.
-- **Manual loot pickup** (E to grab) replacing auto-walk-into-it.
-  Better fit for the deliberate tactical-extraction tone.
-- **Heavy-class bullet variants.** The Heavy Slug Cannon currently
-  fires a generic round (just chunkier radius / orange tint). Add
-  per-projectile visual variants (slug, HE, incendiary tracer) +
-  optionally per-variant on-impact behaviour (small AoE, knockback,
-  proximity burst). Either tied to ammo subtypes (`heavy_slugs_he`,
-  `heavy_slugs_incendiary`) or a weapon-mod that swaps the
-  projectile shape. Lands when heavy weapons get more than the
-  single-shape sample.
-- **Demolish confirm** for high-value buildings (workstations,
-  Power Link).
-- **"Abandon corpse"** option for stuck players (sprints A2 v2
-  deferred polish).
-- **Melee customization.** Pieces / mods / tier-up apply to
-  ranged only today. If melee is meant to be "a real combat
-  verb," eventually it needs its own piece system or shared
-  mod compatibility.
-- **Pixel-art textures** — comprehensive coverage of all
-  entities + animations is its own roadmap (the asset_gen
-  pipeline + runtime is shipped; the catalog is incremental).
-- **Mobile (Capacitor) + desktop (Electron) wrappers.**
-
-#### Pending external work
-
-- ~~**Discord Developer Portal config + first end-to-end test.**~~
-  *Done.* Web OAuth + Activity SDK + instance-bound rooms shipped
-  and validated end-to-end. See `docs/discord-integration.md` for
-  the historical setup notes.
-- **Add prewarm labels** for D3 enemies (`flame_drone`,
-  `chem_bloater`) and `precision_mill` in
-  `assetGenClient.ENEMY_LABELS`. Falls back to auto-generated
-  labels today — works, but produces less-specific prompts.
-
-#### v2 — engine refresh
-
-Reserved for a clean break after the current alpha closes. The
-tile-grid engine carries us through the alpha scope, but a few
-visual + design goals can't land cheaply on top of it. v2 plans
-a deliberate replacement (likely Three.js / WebGPU or a
-sector-based renderer in the same vein as Doom / Build engines)
-so the items below can ship together rather than each fighting
-the tile substrate.
-
-- **Vector / sector-based geometry.** Non-orthogonal walls,
-  arbitrary room shapes, polygon-based collision. Tile grids
-  guarantee right angles; some setpiece rooms (cathedrals,
-  alien geometry, naturally-curved caves) need angles.
-- **Multi-height floors + ceilings.** Pits, raised platforms,
-  stairs as actual height transitions, low ceilings, varying
-  ceiling heights for atmosphere. Tile-z-offset hacks could fake
-  *fixed* deltas on top of the current engine, but real
-  per-sector heights need a sector model to be readable + cheap.
-- **Lighting.** Coloured point lights, directional ambient, LOS
-  shadowing. Today's renderers have a flat ambient with fog-fade.
-  Easier to retrofit on a 3D engine than add to the raycaster.
-- **Iso renderer no longer in scope** — dropped during the alpha
-  close. v2 ships first-person + topdown only.
-
-### Architectural notes for the next agent
-
-- **Sprints A through D.3 all shipped.** The previous
-  `docs/sprints.md` plan is now mostly cleared. The Roadmap
-  above supersedes it.
-- **Sprint C (procedural attachments) is the keystone:** every
-  dropped / crafted attachment is a unique `AttachmentInstance`
-  with rolled stats inside a class. Per-class roll ranges live
-  in `ATTACHMENT_STAT_RANGES` in `shared/inventory.ts`. Bare
-  `defId` references to attachments are gone — all consumers
-  pass the instance.
-- **Migration runs on character hydrate**
-  (`server/src/index.ts:migrateLegacyAttachmentSlots`) for
-  legacy `defId/count` slots and bare-id weapon pieces / mods.
-  If you change attachment shapes again, update the migration.
-  Pre-Sprint-D.2 cleanup included a fix for an over-expansion bug
-  there.
-- **`PROTOCOL_VERSION` is 43** (bumped repeatedly through
-  Sprint D.2 → D.3 → E3 wire shape changes; current value lives in
-  `packages/shared/src/protocol.ts`). Bump on any wire-shape
-  change.
-- **`BUILDING_REGISTRY`** is the single source of truth for HP,
-  horde priority, parallel slots, station / workstation flags,
-  and label. Every per-kind lookup goes through it.
-- **`WeaponAssemblyPanel` + atomic `assemble_weapon`** are the
-  template for the Sprint D.3 Suit Assembly Bench. Mirror the
-  pattern; the diff-and-commit logic generalises cleanly.
-- **Playtest mode** (`is_playtest` boolean on servers, migration
-  `0010_servers_playtest.sql`) — every join rebuilds inventory
-  + equipment from `buildPlaytest{Inventory,Equipment}()`.
-  Treat it as a sandbox; persistence within a single session
-  only.
-- **Auto-deploy:** GitHub Actions `fly-deploy.yml` runs on
-  pushes that touch `packages/server`, `packages/shared`,
-  `packages/asset_gen`, workspace manifests, or `fly.toml`.
-  Vercel handles client deploys automatically.
-
-## Codebase Review Notes (2026-05-06)
-
-Findings from a deep pass on auth, persistence, RLS, and protocol
-boundaries. Each item was verified against the actual code at the
-cited path. Ordered by severity.
-
-### Security / correctness
-
-1. **Unvalidated cast of persisted character JSON (low-risk —
-   RLS-protected).** `packages/server/src/index.ts:493-495,500`
-   casts `obj.slots as Inventory` and `obj.equipment as Equipment`
-   from `characters.inventory` JSONB straight onto the live
-   player without a Zod parse. Only safe because migration
-   `0001_initial.sql:87-90` declares no insert/update RLS policy
-   on `characters` — clients can't write the column; only the
-   service-role-bypassed game server can. If a future migration
-   ever adds `characters_update_own`, this becomes a trivial
-   path to forged inventory state. Gate with a Zod parse anyway.
-
-2. **CSRF state uses `Math.random()`.**
-   `packages/client/lib/discord/auth.ts:180-185` —
-   `makeOauthState()` builds OAuth state from `Date.now() +
-   Math.random() + process.pid`, hashed and truncated. Not
-   cryptographically random. Replace with
-   `crypto.randomBytes(16).toString('hex')`. One-line fix.
-
-3. **Discord lookup paginates only the first 200 users.**
-   `packages/client/lib/discord/auth.ts:144-149` —
-   `listUsers({ perPage: 200 })` then filters by email. Once
-   the user count grows past 200, anyone whose row falls off
-   page 1 can't sign in via the recovery branch. Capture the
-   id elsewhere or paginate.
-
-4. **Single secret reused for two auth flows.**
-   `JOIN_TOKEN_SECRET` is the HMAC key for join tokens
-   (`shared/src/token.ts:41`) AND the password seed for every
-   Discord user (`discord/auth.ts:33-40`). Rotating it
-   silently invalidates every Discord user's password (the
-   provision path self-heals on next sign-in, so it's only a
-   smell, not a break). Add `DISCORD_USER_SECRET` if/when
-   independent rotation matters.
-
-5. **No WebSocket-level rate limit.** `index.ts:175-299` —
-   only `handleChat` (`world.ts:2521`, ~1.6 msg/s) is rate
-   limited. `fire`, `build_request`, `craft_request`,
-   `inventory_swap` rely on per-handler gating. A malicious
-   client can saturate the 256 MB Fly machine with valid
-   `inventory_swap` calls. Add a token bucket per connection
-   in `index.ts` before dispatch.
-
-6. **Tile coordinates unbounded in protocol.**
-   `shared/src/protocol.ts:390-391` — `tileX/tileY:
-   z.number().int()` with no min/max. Build-handler safety
-   relies on player-distance check at `scene.ts:652-659`:
-   huge values overflow `(tileX + 0.5) * tileSize` to
-   Infinity, distance fails, early return. Works, but it's
-   load-bearing IEEE-754 behavior. Add `.min(-100000).max(100000)`
-   for defense in depth. Same applies to dir/move vectors
-   (currently `finiteNumber` only — finite but unbounded magnitude).
-
-### Correctness / maintainability
-
-7. **Persistence table is `world_states`, snapshot constant
-   says `WORLD_SNAPSHOT_SCHEMA`.** Actual table is
-   `world_states` (`world.ts:354,439`; migration `0001:54`).
-   Constant at `world.ts:136` says `WORLD_SNAPSHOT_SCHEMA`.
-   Both code reviews and the explore agent mis-named the
-   table. Rename the constant to `WORLD_STATE_SCHEMA` to stop
-   the drift.
-
-8. **`heartbeatTimer` shadows itself.**
-   `packages/server/src/index.ts:131` is the WS-ping sweep
-   timer; line 158 is an inner-scope `touchLastSeen` timer
-   with the same name. Different jobs, same identifier.
-   Rename the inner to `lastSeenTimer`.
-
-9. **Legacy attachment migration drops overflow silently.**
-   `index.ts:435-446` — `migrateLegacyAttachmentSlots` queues
-   overflow attachments and only places them into empty
-   slots; `if (!placed) break;` quietly discards the rest.
-   Pre-Sprint-C saves only, so blast radius is small. At
-   minimum log the discard count so you'd notice if it ever
-   fires unexpectedly.
-
-10. **Per-character DB write every 30s.** `index.ts:276-279` —
-    each connected character writes `last_seen_at` on a
-    30s interval. Trivial at the 5–10 player cap; if the cap
-    rises, batch into a single `update ... in (...)` per world
-    tick.
-
-### What looks right (worth calling out)
-
-- **Join token verification** (`shared/src/token.ts:53-78`):
-  version prefix, length-checked digest, `timingSafeEqual`,
-  `exp` check. Correct.
-- **Pre-auth gate** (`index.ts:167-173,195-215`): 5s auth
-  timeout, drops non-`auth` first message, validates
-  `protocolVersion`, returns specific 4001-4005 close codes.
-- **Hazard tick** (`scene.ts:984-1025`): biome lookup +
-  depth-scaled DPS + suit resist + accumulator-snap on long
-  pauses. Comment at 988-991 ("snap instead of carry
-  remainder so a long pause doesn't fire a burst of catch-up
-  ticks") earns its keep.
-- **RLS deny-by-default for `world_states`** (migration
-  `0001:92-93`): no client policies created.
-- **Heartbeat WS pattern** (`index.ts:131-146`): standard
-  `isAlive` flip-on-pong, terminate stale, clear timer on
-  `wss.close`.
-
-### Highest-leverage next moves
-
-1. Wrap `parseInventoryJson` with a Zod parse against the
-   inventory + equipment schemas. Pre-empts #1 if RLS ever
-   loosens.
-2. Replace `Math.random()` in `makeOauthState`. One-line crypto fix.
-3. Add bounds to `tileX/tileY` + dir/move magnitudes in
-   `protocol.ts`.
-4. Per-connection token bucket in `index.ts` before dispatch.
-5. Rename `WORLD_SNAPSHOT_SCHEMA` → `WORLD_STATE_SCHEMA`.
-
-## Cleanup & Bug List
-
-Running list of small bugs, polish gaps, and audit-driven cleanup
-items. Lighter than a Roadmap entry — each line is a discrete fix
-rather than a design slice. Strike items through (`~~text~~`) once
-the fix lands; remove them on the next prune. New items added at
-the bottom; date-stamp the source if known so future audits can
-tell which review surfaced them.
-
-### Open
-
-**Auth / security (from `Codebase Review Notes (2026-05-06)`):**
-
-- **Replace `Math.random()` in `makeOauthState`**
-  (`packages/client/lib/discord/auth.ts:182`). CSRF state is
-  derived from `Date.now() + Math.random() + process.pid`, hashed
-  and truncated. Swap to `crypto.randomBytes(16).toString('hex')`.
-  One-line fix.
-- **Wrap `parseInventoryJson` with a Zod parse**
-  (`packages/server/src/index.ts:582,584,591`). `obj.slots as
-  Inventory` / `obj.equipment as Equipment` casts skip validation.
-  Safe today only because no client-write RLS policy exists on
-  `characters`; pre-empts the failure mode if RLS ever loosens.
-- **Discord lookup paginates only the first 200 users**
-  (`packages/client/lib/discord/auth.ts:144-149`). Capture the
-  user id elsewhere or paginate.
-- **No WebSocket-level rate limit before dispatch**
-  (`packages/server/src/index.ts:175-299`). Only `handleChat`
-  is rate-limited. Add a per-connection token bucket so a
-  malicious client can't saturate the Fly machine via valid
-  `inventory_swap` / `fire` / `build_request` calls.
-- **Tile coords + dir/move magnitudes unbounded in protocol**
-  (`packages/shared/src/protocol.ts:390-391`). `tileX/tileY:
-  z.number().int()` with no min/max; relies on IEEE-754
-  overflow-then-distance-check at `scene.ts:652-659`. Add
-  `.min(-100000).max(100000)` and equivalent magnitude bounds
-  on dir/move.
-- **`JOIN_TOKEN_SECRET` reused for two flows.** HMAC key for
-  join tokens *and* password seed for every Discord user. Add
-  `DISCORD_USER_SECRET` if/when independent rotation matters.
-
-**Correctness / maintainability (from `Codebase Review Notes (2026-05-06)`):**
-
-- **`heartbeatTimer` shadows itself**
-  (`packages/server/src/index.ts:131,158`). WS-ping sweep timer
-  and inner-scope `touchLastSeen` timer share the identifier.
-  Rename the inner to `lastSeenTimer`.
-- **Rename `WORLD_SNAPSHOT_SCHEMA` → `WORLD_STATE_SCHEMA`**
-  (`packages/server/src/world.ts:136`). Actual table is
-  `world_states`; constant name is misleading.
-- **`migrateLegacyAttachmentSlots` discards overflow silently**
-  (`packages/server/src/index.ts:435-446`). Pre-Sprint-C saves
-  only. Log the discard count so it's observable if it ever
-  fires unexpectedly.
-- **Per-character DB write every 30s**
-  (`packages/server/src/index.ts:276-279`). Trivial at the
-  5–10 player cap; batch into one
-  `update ... in (...)` per world tick if the cap rises.
-
-### Done — pending prune
-
-(Items here are verified shipped; remove on the next pass once
-they've stuck for a cycle or two.)
-
-- ~~All pre-Sprint-E cleanup items (sniper/heavy/energy crafting
-  → Workbench, hand-craftable knife, horde audio stinger,
-  scoped `title=` fallback, `migrateLegacyAttachmentSlots`
-  length cap, Forge buildable status, drop equipped gear into
-  corpse, pause perihelion when empty, perihelion warning text
-  overlap, hide undamaged HP bars, friendly-fire on owned
-  structures, FPS bullets at chest height, respawn position
-  drift, melee enemy standoff, turrets as billboard sprites)~~ —
-  verified 2026-05-10.
-- ~~Corpse-pickup data loss for `attachment` / `consumable`
-  kinds.~~ Verified fixed 2026-05-10 (`scene.ts:1350,1353`).
-- ~~Hide orphan suit-affix blueprints.~~ Made moot by Sprint D.3
-  (Suit Assembly Bench).
+Execution state lives in `ROADMAP.md` — sprint sequencing, what
+shipped, verified-open work, the cleanup/bug list, and
+architectural notes for agents. This document is design intent
+only; where the two disagree about what is built, the roadmap
+(verified against code) wins.
