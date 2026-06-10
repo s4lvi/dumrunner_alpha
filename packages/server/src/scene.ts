@@ -1388,11 +1388,16 @@ export class Scene {
   // ---------- horde control ----------
 
   // Called by World at perihelion. Surface only; dungeon scenes ignore.
-  startHorde(endsAt: number, cycle: number): void {
+  // `threat` drives wave size + composition — the World passes the
+  // crew's deepest floor reached this cycle (floored by cycle index)
+  // so horde pressure mirrors the power capacity the crew earned by
+  // diving, instead of scaling on wall-clock cycles alone. A crew
+  // that pushed to floor 8 faces a floor-8 horde on cycle 1.
+  startHorde(endsAt: number, threat: number): void {
     if (this.kind !== 'surface') return;
     this.hordeActive = true;
     this.hordeEndsAt = endsAt;
-    this.hordeCycle = cycle;
+    this.hordeCycle = Math.max(1, threat);
     // First wave fires immediately so the player feels the shift right away.
     this.nextHordeWaveAt = Date.now();
   }

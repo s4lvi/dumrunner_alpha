@@ -3285,9 +3285,16 @@ export class World {
       durationMs: COMBAT.HORDE_DURATION_MS,
     });
     // Tell the surface scene to start spawning waves. Dungeons keep running
-    // their own enemies; the horde is a surface-only event.
+    // their own enemies; the horde is a surface-only event. Threat scales
+    // with the crew's frontier depth this cycle (floored by cycle index so
+    // veteran worlds never regress to trivial hordes) — mirrors the power
+    // capacity the crew earned by diving, so defense investment is rational
+    // from session one instead of cycle six.
     const surface = this.scenes.get(SURFACE_SCENE_ID);
-    surface?.startHorde(this.hordeEndsAt, this.cycle);
+    surface?.startHorde(
+      this.hordeEndsAt,
+      Math.max(this.deepestFloorReached, this.cycle),
+    );
 
     // Anyone caught in a dungeon when perihelion fires gets the LINK
     // SEVERED treatment: glitch overlay, kill-in-place (corpse drops on
