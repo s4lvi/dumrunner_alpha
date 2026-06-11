@@ -1513,29 +1513,45 @@ export function runFpsV2Game(
       if (Math.abs(targetSelfY - selfY) < 0.05) selfY = targetSelfY;
     }
     const targetFloor = floorAt(selfX, selfY);
-    // Airborne: freeze the camera's floor anchor. The server keeps
-    // absolute height invariant across floor re-anchors mid-jump
-    // (jumpZ compensates), so letting cameraFloorZ chase the floor
-    // under the player would double-count the change and dip the
-    // camera when flying over a pit. The floor re-resolves on
-    // landing.
-    const airborne = cameraJumpZ > 0.5 || selfJumpZ > 0.5;
-    const dz = airborne ? 0 : targetFloor - cameraFloorZ;
-    if (dz > 0) {
-      // Step up — snap. Camera lerping behind the floor while the
-      // player's XY is already on the upper tile puts the camera
-      // below the destination floor's plane, which clips through
-      // riser geometry from a downward-looking angle. Snap-up is
-      // the v1 + standard-FPS feel for stair ascent and avoids
-      // the clip entirely.
-      cameraFloorZ = targetFloor;
-    } else if (dz < 0) {
-      // Step / fall down — lerp. Snapping down would feel like a
-      // teleport; the slight delay reads as gravity instead.
-      const tz = Math.min(1, 1 - Math.exp(-dt / FLOOR_SMOOTH_TAU_MS));
-      cameraFloorZ += dz * tz;
-      if (Math.abs(targetFloor - cameraFloorZ) < 0.05) {
+    // Airborne: mirror the server's floor re-anchor (scene.ts,
+    // xyMoved block). The server re-anchors floorZ to the ground
+    // under the player every tick and compensates jumpZ so
+    // floorZ + jumpZ (the absolute height) is invariant in
+    // flight. The camera must do the SAME re-anchor: chase the
+    // floor AND compensate cameraJumpZ by the shift, keeping
+    // cameraFloorZ + cameraJumpZ — the rendered height — on a
+    // clean ballistic arc. (Freezing cameraFloorZ here, the old
+    // behaviour, broke against the server's floor-relative jumpZ:
+    // the correction term dragged the camera toward
+    // takeoffFloor + (absZ - currentFloor), so the camera
+    // inversely mirrored every hill crossed mid-jump and then
+    // snapped by the accumulated delta at landing.)
+    const airborne =
+      predJumpVZ !== 0 || cameraJumpZ > 0.01 || selfJumpZ > 0.01;
+    if (airborne) {
+      const shift = targetFloor - cameraFloorZ;
+      if (shift !== 0) {
         cameraFloorZ = targetFloor;
+        cameraJumpZ -= shift;
+      }
+    } else {
+      const dz = targetFloor - cameraFloorZ;
+      if (dz > 0) {
+        // Step up — snap. Camera lerping behind the floor while the
+        // player's XY is already on the upper tile puts the camera
+        // below the destination floor's plane, which clips through
+        // riser geometry from a downward-looking angle. Snap-up is
+        // the v1 + standard-FPS feel for stair ascent and avoids
+        // the clip entirely.
+        cameraFloorZ = targetFloor;
+      } else if (dz < 0) {
+        // Step / fall down — lerp. Snapping down would feel like a
+        // teleport; the slight delay reads as gravity instead.
+        const tz = Math.min(1, 1 - Math.exp(-dt / FLOOR_SMOOTH_TAU_MS));
+        cameraFloorZ += dz * tz;
+        if (Math.abs(targetFloor - cameraFloorZ) < 0.05) {
+          cameraFloorZ = targetFloor;
+        }
       }
     }
     // Ballistic jump prediction. Integrate the same gravity the

@@ -445,6 +445,37 @@ type SharedEdge = {
   hi: number;
 };
 
+// Merge shared-edge spans that lie on the same boundary line
+// (same axis + coord) and overlap or touch, so each boundary
+// gets at most one contiguous opening per contiguous contact
+// patch. Disjoint spans on the same line stay separate (two
+// genuinely distinct openings).
+function mergeSharedEdges(edges: SharedEdge[]): SharedEdge[] {
+  const byLine = new Map<string, SharedEdge[]>();
+  for (const e of edges) {
+    const key = `${e.axis}:${e.coord}`;
+    const list = byLine.get(key);
+    if (list) list.push(e);
+    else byLine.set(key, [e]);
+  }
+  const out: SharedEdge[] = [];
+  for (const list of byLine.values()) {
+    list.sort((a, b) => a.lo - b.lo);
+    let cur = { ...list[0] };
+    for (let i = 1; i < list.length; i++) {
+      const e = list[i];
+      if (e.lo <= cur.hi) {
+        if (e.hi > cur.hi) cur.hi = e.hi;
+      } else {
+        out.push(cur);
+        cur = { ...e };
+      }
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
 // Punch a passable doorway at the midpoint of every shared edge
 // between adjacent regions. For each (i,j) in roomGraph the
 // shared edge is computed in world coordinates, the door
@@ -485,10 +516,26 @@ function insertDoorways(
       ];
       const isCorridor = a.kind === 'corridor' || b.kind === 'corridor';
       const minShared = isCorridor ? minCorridorShared : minRoomShared;
+      // Collect every sub-rect contact patch FIRST, then merge
+      // overlapping/touching spans on the same boundary line. An
+      // L-shaped corridor whose two stub rects both touch the same
+      // room edge yields two OVERLAPPING shared edges; punching
+      // both broke silently — the second `punchDoor` can't find a
+      // single polygon edge containing its endpoints once the
+      // first punch split the edge, so the opening stayed at the
+      // first punch's extent while the recorded DoorwaySpec (and
+      // the locked-room doors placed from it) claimed the wider
+      // span. Result: door tiles embedded in solid wall beside the
+      // real opening.
+      const contactEdges: SharedEdge[] = [];
       for (const aRect of aRects) {
         for (const bRect of bRects) {
           const edge = sharedEdgeRects(aRect, bRect, tileSize);
-          if (!edge) continue;
+          if (edge) contactEdges.push(edge);
+        }
+      }
+      {
+        for (const edge of mergeSharedEdges(contactEdges)) {
           if (edge.hi - edge.lo < minShared) continue;
           // Corridor adjacencies: the entire shared edge is the
           // portal so the corridor's full cross-section opens

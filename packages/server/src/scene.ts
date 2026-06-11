@@ -814,6 +814,14 @@ export class Scene {
     ) {
       this.nextBuildingId = snap.nextBuildingId;
     }
+
+    // The building set was just replaced wholesale; the sector map
+    // still reflects the constructor-time set. Rebuild so restored
+    // buildings (surface base walls, dungeon doors) collide and
+    // buildings removed before the save stop blocking. Direct
+    // rebuild — not notifyBuildingsChanged — because hydrate runs
+    // mid-World-restore, before the power bindings expect events.
+    this.rebuildSectorMap();
   }
 
   // ---------- wire snapshot for welcome / scene_changed ----------
@@ -1863,23 +1871,34 @@ export class Scene {
         // snapping them up; they'd have to enter through a
         // legitimate step-up boundary.
         const airborne = conn.jumpZ > 0 || conn.jumpVZ !== 0;
-        const oldFloorZ = conn.floorZ;
-        conn.floorZ = this.floorAt(
-          proposedX,
-          proposedY,
-          // Airborne: can land on any floor at or below the feet —
-          // never snap up past them. Grounded: normal step-up cap.
-          airborne
-            ? conn.floorZ + conn.jumpZ
-            : conn.floorZ + COMBAT.STEP_UP_MAX,
-        );
-        // Jump height is floor-relative; re-anchoring the floor mid-air
-        // (crossing over a pit or platform) must not move the player's
-        // absolute height. Compensate so floorZ + jumpZ is invariant
-        // while airborne — landing still resolves naturally when the
-        // arc brings jumpZ to 0 against the floor below.
         if (airborne) {
-          conn.jumpZ += oldFloorZ - conn.floorZ;
+          // Absolute height (floorZ + jumpZ) is invariant while
+          // flying: re-anchor the floor to the ground under the new
+          // XY and keep the feet height fixed, so the arc stays a
+          // clean parabola over uneven terrain. floorAt's terrain
+          // baseline ignores the cap, so ground that rose ABOVE the
+          // feet comes back as newFloor >= feetZ — that is first
+          // contact with rising ground: land exactly there instead
+          // of compensating jumpZ negative (which produced a phantom
+          // mid-air landing and made the jump track the terrain).
+          const feetZ = conn.floorZ + conn.jumpZ;
+          const newFloor = this.floorAt(proposedX, proposedY, feetZ);
+          if (newFloor >= feetZ) {
+            conn.floorZ = newFloor;
+            conn.jumpZ = 0;
+            conn.jumpVZ = 0;
+            conn.lastLandedAt = now;
+          } else {
+            conn.floorZ = newFloor;
+            conn.jumpZ = feetZ - newFloor;
+          }
+        } else {
+          // Grounded: normal step-up cap.
+          conn.floorZ = this.floorAt(
+            proposedX,
+            proposedY,
+            conn.floorZ + COMBAT.STEP_UP_MAX,
+          );
         }
       }
 
@@ -4497,6 +4516,10 @@ export class Scene {
         if (dx + dy === 1) queue.push(other);
       }
     }
+    // Doors are buildings; their cube walls live in the sector map.
+    // Without a rebuild the opened door keeps blocking movement +
+    // projectiles even though it no longer renders.
+    this.notifyBuildingsChanged();
     return true;
   }
 

@@ -87,6 +87,7 @@ import {
   generateInitialProps,
   generateLockedRoomMeta,
   generateSingleRoomFloor,
+  type InitialDoor,
   type InitialEnemySpawn,
   type InitialLootDrop,
   type InitialPropSpawn,
@@ -786,6 +787,7 @@ export class World {
     initialLoot: InitialLootDrop[] | null = null,
     initialProps: InitialPropSpawn[] | null = null,
     broadcast: boolean = true,
+    initialDoors: InitialDoor[] | null = null,
   ): void {
     if (!this.isSandbox) return;
     const conn = this.connections.get(characterId);
@@ -803,7 +805,7 @@ export class World {
       layout,
       initialSpawns,
       initialLoot,
-      null,
+      initialDoors,
       initialProps,
     );
     this.scenes.set(sceneId, scene);
@@ -914,6 +916,11 @@ export class World {
       initialSpawns,
       initialLoot,
       initialProps,
+      true,
+      // Locked-room doors were silently dropped here — the editor's
+      // "regen floor" preview spawned the locked-room loot but no
+      // doors, so every locked room read as walk-through.
+      meta.doors,
     );
   }
 
