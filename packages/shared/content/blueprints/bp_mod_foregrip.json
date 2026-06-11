@@ -1,8 +1,0 @@
-{
-  "id": "bp_mod_foregrip",
-  "recipeId": "craft_mod_foregrip",
-  "displayName": "Foregrip",
-  "description": "-30% spread. Slots into any ranged weapon mod slot.",
-  "cost": 4,
-  "tier": "uncommon"
-}

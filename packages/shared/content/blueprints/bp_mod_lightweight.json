@@ -1,8 +1,0 @@
-{
-  "id": "bp_mod_lightweight",
-  "recipeId": "craft_mod_lightweight",
-  "displayName": "Lightweight Frame",
-  "description": "+10% fire rate, -10% damage. Faster trigger, weaker rounds.",
-  "cost": 5,
-  "tier": "uncommon"
-}

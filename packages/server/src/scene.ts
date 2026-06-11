@@ -65,7 +65,11 @@ import {
 } from './ai/fsm.js';
 import type { EnemyRuntime } from './ai/runtime.js';
 import { PROPS, type PropRuntime } from './props.js';
-import { rollDropsForKill, killTierBiasFromHp } from './loot.js';
+import {
+  rollDropsForKill,
+  rollAttachmentDropForKill,
+  killTierBiasFromHp,
+} from './loot.js';
 import {
   ensureBuildingAsset,
   ensureEnemyAsset,
@@ -2790,6 +2794,26 @@ export class Scene {
       const lr: LootRuntime = {
         id: part.id,
         content: { kind: 'part', part },
+        x: enemy.x + (Math.random() - 0.5) * 24,
+        y: enemy.y + (Math.random() - 0.5) * 24,
+        expiresAt: now + COMBAT.LOOT_TTL_MS,
+      };
+      this.loot.set(lr.id, lr);
+      this.broadcast({ type: 'loot_spawned', loot: toLootState(lr) });
+    }
+
+    // Attachment drops — drop-only components per the economy law
+    // (crafting recipes for them are gone). Rides the generic
+    // slot-content loot path the drop-item feature already uses.
+    const attachment = rollAttachmentDropForKill(bias);
+    if (attachment) {
+      const id = `la${nextLootCounter()}`;
+      const lr: LootRuntime = {
+        id,
+        content: {
+          kind: 'slot',
+          slot: { kind: 'attachment', instance: attachment },
+        },
         x: enemy.x + (Math.random() - 0.5) * 24,
         y: enemy.y + (Math.random() - 0.5) * 24,
         expiresAt: now + COMBAT.LOOT_TTL_MS,

@@ -1,9 +1,0 @@
-{
-  "id": "bp_aff_speed_5",
-  "recipeId": "craft_aff_speed_5",
-  "displayName": "Servomotor Tune",
-  "description": "+5% movement speed (rolled). Slots into a suit utility mod via the Suit Assembly Bench.",
-  "cost": 5,
-  "tier": "uncommon",
-  "hidden": true
-}

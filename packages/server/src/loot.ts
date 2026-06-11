@@ -1,12 +1,15 @@
 import type {
+  AttachmentInstance,
   CarriedPart,
   PartSlot,
   PartTier,
   WeaponClass,
 } from '@dumrunner/shared';
 import {
+  ATTACHMENT_DEFS,
   LIFE_SUPPORT_SPECIALTIES,
   rollAffixesForPart,
+  rollAttachmentInstance,
 } from '@dumrunner/shared';
 
 // Roll a part-style drop on enemy kill. Slot, tier, and affix count are sampled
@@ -76,10 +79,11 @@ export function rollDropsForKill(killTierBias: number): CarriedPart[] {
     weights.Mk4 += 2;
   }
 
-  // ~5% chance of a part drop per kill. Gear drops are the rare prize;
-  // material drops in the per-template lootTable carry the moment-to-
-  // moment loot feedback.
-  const dropCount = Math.random() < 0.05 ? 1 : 0;
+  // Components-first economy (GDD §The Economy Law): components are
+  // the COMMON drop class — rarity lives in tier + affix count, not
+  // drought. 15% part chance per kill (was 5% when gear was "the
+  // rare prize"); attachments roll separately below.
+  const dropCount = Math.random() < 0.15 ? 1 : 0;
   const drops: CarriedPart[] = [];
   for (let i = 0; i < dropCount; i++) {
     const slot = rollSlot();
@@ -103,6 +107,28 @@ export function rollDropsForKill(killTierBias: number): CarriedPart[] {
     });
   }
   return drops;
+}
+
+// Attachment drops — mods / weapon affixes / suit affixes enter the
+// world from kills only (drop-only per the economy law; their
+// crafting recipes are removed). ~10% per kill, tier-biased the same
+// way parts are, rolled as a unique instance from the full
+// ATTACHMENT_DEFS registry.
+export function rollAttachmentDropForKill(
+  killTierBias: number
+): AttachmentInstance | null {
+  if (Math.random() >= 0.1) return null;
+  const defIds = Object.keys(ATTACHMENT_DEFS);
+  if (defIds.length === 0) return null;
+  const weights: TierWeights = { ...BASELINE_WEIGHTS };
+  for (let i = 0; i < killTierBias; i++) {
+    weights.Mk1 = Math.max(5, weights.Mk1 - 12);
+    weights.Mk2 += 6;
+    weights.Mk3 += 4;
+    weights.Mk4 += 2;
+  }
+  const defId = defIds[Math.floor(Math.random() * defIds.length)];
+  return rollAttachmentInstance(defId, rollTier(weights));
 }
 
 // killTierBias derived from a template's maxHp. Crude but stable; replace once

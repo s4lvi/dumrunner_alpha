@@ -5,7 +5,5 @@
   "description": "High-cadence laser carbine. Lower per-hit damage but blinding projectile speed. Crafted at the Weapon Bench.",
   "cost": 12,
   "tier": "rare",
-  "prerequisites": [
-    "bp_mod_overclock"
-  ]
+  "prerequisites": []
 }
