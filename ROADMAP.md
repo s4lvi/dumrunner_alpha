@@ -168,6 +168,38 @@ this is the migration. Steps are roughly ordered; 1 ships alone,
    turrets, consumable kits, exotic assemblies); ungate basic
    weapon piece-assembly.
 
+Shipped so far: step 1 (2026-06-10), steps 2+4 (attachments
+drop-only, rates up), step 3 (weapons assemble from a class-pinned
+frame drop + binder; new 'part' recipe-input matcher; frames
+weighted 3x in the slot roll). Open: 5 (Forge salvage/reroll),
+6 (benches from components), 7 (schematic scoping audit).
+
+---
+
+## Base layouts (NEW — requested 2026-06-10)
+
+Design in GDD §Base Building › Base Layouts: the surface base is a
+swappable designed platform (flat ground in hilly desolate
+overworld) with turret mounts, wall geometry, and
+workbench/storage capacity slots; built + swapped at the Power
+Link; starter = square with 4 corner mounts. Implementation
+slices:
+
+1. **`BaseLayoutDef`** content type (footprint tile mask /
+   polygon, turret-mount sockets, wall pieces, bench + storage
+   slot counts) + the starter square layout as authored content.
+2. **Surface integration** — platform renders as flat sectors
+   standing over the terrain noise (per-sector noise machinery
+   already supports flat overrides); buildings constrain to the
+   platform; turrets only at mounts.
+3. **Swap flow at the Power Link** — uplink tab lists known layout
+   schematics; build consumes components (economy law); swapping
+   re-seats existing buildings into the new layout's slots,
+   spilling overflow to storage.
+4. **Authoring** — layout editor reusing the rooms-editor pattern
+   (tile paint + socket anchors), and/or a procgen generator for
+   per-cycle variety.
+
 Migration notes: PROTOCOL_VERSION bump; inventory-schema migration
 for any new slot kinds; existing recipe JSON rewritten in place
 (the editor suite makes this authoring, not engineering). Champions

@@ -528,6 +528,33 @@ Computed assembly stats = sum/composition of base stats + affixes from all slots
 
 ## Base Building
 
+### Base Layouts
+
+The surface base is built on a **layout** — a swappable platform
+standing on flat ground in the middle of the hilly, desolate
+overworld. A layout is a designed footprint that provides:
+
+- **Turret mounts** — fixed sockets; turrets are built into mounts,
+  not free-placed. The starter layout is a plain square platform
+  with one mount at each corner.
+- **Flat buildable ground** — the platform is the base's level
+  surface for benches and chests amid the terrain noise.
+- **Wall geometry** — more advanced layouts ship increasingly
+  complex defensive shapes (wall mazes, chokepoints, kill lanes).
+- **Capacity slots** — each layout declares how many workbench and
+  storage slots it supports, so layout progression is also base
+  capability progression.
+
+New layout designs are **built and swapped at the Power Link** (the
+uplink that doubles as the dungeon entrance) — layouts are products
+under the economy law: schematics bought with artifacts, assembled
+from dungeon-sourced components. Swapping a layout preserves the
+buildings on it where slots allow. Layouts are authored in a
+dedicated editor (same content-pipeline pattern as room templates)
+and/or generated procedurally; both feed one `BaseLayoutDef` format.
+
+### Placement rules
+
 - **Grid-snapped tile placement** on the 32-pixel surface grid.
 - Build mode is driven by the equipped hotbar slot — selecting a placeable item enters build mode automatically; deselecting exits. No separate toggle key.
 - A translucent **3D ghost cube** is raycast at the tile under the camera reticle (green = in range, red = out).
