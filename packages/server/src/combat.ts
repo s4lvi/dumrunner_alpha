@@ -129,11 +129,6 @@ export const COMBAT = {
   EYE_HEIGHT_STAND: 16,
   EYE_HEIGHT_CROUCH: 10,
   CROUCH_SPEED_MULT: 0.55,
-  // Brief grace window after landing where step-up gate ignores
-  // the floor delta. Without it, landing on a platform after a
-  // jump can read as a step-up too tall if the landing position
-  // is slightly inside a higher floor patch.
-  JUMP_LANDING_GRACE_MS: 50,
 
   // Stamina / sprint
   PLAYER_MAX_STAMINA: 100,

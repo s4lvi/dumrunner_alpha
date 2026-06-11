@@ -207,29 +207,26 @@ export interface SceneConnection {
   // `inputCrouch` is held-state — true while the key is down.
   inputJump: boolean;
   inputCrouch: boolean;
-  // Vertical-movement state (Phase 7). jumpZ rides above the
-  // current floor; gravity pulls it back down each tick. The
-  // player can't fire while > grounded? actually they can; this
-  // is purely positional. crouching halves the hitbox height
-  // and dims walk speed.
-  jumpZ: number;
-  jumpVZ: number;
+  // Vertical-movement state. `z` is the ABSOLUTE world-z of the
+  // player's feet; `vz` the vertical velocity (wu/s). Grounded
+  // ⇔ z <= floorZ with vz <= 0; airborne integrates z/vz under
+  // gravity. crouching halves the hitbox height and dims walk
+  // speed.
+  z: number;
+  vz: number;
   crouching: boolean;
-  // Server-tracked floor height under the player. Updated each
-  // tick AFTER the move resolves, bounded by the previous
-  // floor + STEP_UP_MAX — so the player can only climb one
-  // step-height per tick, even when their XY happens to fall
-  // inside an overhead sector's polygon. Without this state,
-  // `floorAt(x, y)` (stateless) would snap them up to that
-  // overhead's floor on the next tick.
+  // Server-tracked floor height under the player — the grounded
+  // collision anchor. Updated each tick AFTER the move resolves,
+  // bounded by the previous floor + STEP_UP_MAX — so the player
+  // can only climb one step-height per tick, even when their XY
+  // happens to fall inside an overhead sector's polygon. Without
+  // this state, `floorAt(x, y)` (stateless) would snap them up
+  // to that overhead's floor on the next tick. While grounded,
+  // z === floorZ.
   floorZ: number;
-  // Epoch ms of the most recent landing. Step-up gate ignores
-  // floor deltas for JUMP_LANDING_GRACE_MS after a landing so
-  // touching down on a platform doesn't read as "step too tall".
-  lastLandedAt: number;
   // Last broadcast vertical state — triggers a fresh player_moved
   // whenever jump or crouch changes even if XY is unchanged.
-  lastJumpZSent: number;
+  lastZSent: number;
   lastCrouchSent: boolean;
   inventory: Inventory;
   equipment: Equipment;
@@ -300,7 +297,7 @@ type ProjectileRuntime = ProjectileState & {
   // shooter's eye position at spawn so a crouching shooter's
   // bullet flies low and a jumping shooter's bullet flies high.
   // Used to filter player-hit checks against the target's
-  // vertical span (floor + jumpZ to floor + jumpZ + height).
+  // vertical span (feet z to feet z + height).
   // Server-only; no wire impact.
   originZ: number;
   // Optional status effects to apply to whatever this projectile
@@ -1125,8 +1122,7 @@ export class Scene {
         // players reads naturally and a standing shot misses a
         // crouched target.
         originZ:
-          this.floorAt(conn.x, conn.y) +
-          conn.jumpZ +
+          conn.z +
           (conn.crouching ? COMBAT.EYE_HEIGHT_CROUCH : COMBAT.EYE_HEIGHT_STAND),
         // Vertical velocity from the camera pitch (slope = dz/dxy
         // at fire time). projectileSpeed is the horizontal speed;
@@ -1660,48 +1656,53 @@ export class Scene {
       } else if (conn.crouching) {
         // Stand up only if standing height fits under the ceiling —
         // releasing crouch in a low passage keeps the player crouched
-        // instead of clipping the head through the ceiling.
-        const standFloor = this.floorAt(conn.x, conn.y);
-        const standCeiling = this.ceilingAt(conn.x, conn.y, standFloor);
-        if (
-          standFloor + conn.jumpZ + COMBAT.PLAYER_HEIGHT_STAND <=
-          standCeiling
-        ) {
+        // instead of clipping the head through the ceiling. The
+        // ceiling context is the grounded anchor (conn.floorZ), NOT
+        // the uncapped floorAt — under an overhead platform the
+        // uncapped lookup returns the platform's own floor, which
+        // would make ceilingAt report the headroom ABOVE the
+        // platform instead of the underside above the player.
+        const standCeiling = this.ceilingAt(conn.x, conn.y, conn.floorZ);
+        if (conn.z + COMBAT.PLAYER_HEIGHT_STAND <= standCeiling) {
           conn.crouching = false;
         }
       }
-      const grounded = conn.jumpZ <= 0 && conn.jumpVZ <= 0;
+      const grounded = conn.z <= conn.floorZ && conn.vz <= 0;
       if (conn.inputJump && grounded) {
-        conn.jumpVZ = COMBAT.JUMP_VZ_INIT;
-        conn.jumpZ = 0.01; // nudge off the ground so grounded next tick is false
+        conn.vz = COMBAT.JUMP_VZ_INIT;
       }
       conn.inputJump = false;
-      if (!(conn.jumpZ <= 0 && conn.jumpVZ === 0)) {
-        // In the air OR falling onto a lower floor — integrate.
-        conn.jumpVZ -= COMBAT.GRAVITY * dt;
-        conn.jumpZ += conn.jumpVZ * dt;
+      if (!(conn.z <= conn.floorZ && conn.vz === 0)) {
+        // In the air OR falling onto a lower floor — integrate
+        // absolute z under gravity.
+        conn.vz -= COMBAT.GRAVITY * dt;
+        conn.z += conn.vz * dt;
         // Head-bonk: if the player's head would clip into a
-        // ceiling at the current XY, cap jumpZ and zero out the
+        // ceiling at the current XY, cap z and zero out the
         // upward velocity so they drop back down instead of
         // tunneling through. PLAYER_HEIGHT_STAND is the upper
         // bound — crouching mid-air gives no extra clearance
         // since we don't auto-uncrouch.
-        if (conn.jumpVZ > 0) {
-          const playerFloor = this.floorAt(conn.x, conn.y);
-          const ceiling = this.ceilingAt(conn.x, conn.y, playerFloor);
-          const headTop = playerFloor + conn.jumpZ + COMBAT.PLAYER_HEIGHT_STAND;
-          if (headTop > ceiling) {
-            conn.jumpZ = Math.max(
-              0,
-              ceiling - playerFloor - COMBAT.PLAYER_HEIGHT_STAND,
+        if (conn.vz > 0) {
+          // Ceiling context = grounded anchor, same reasoning as
+          // the stand-up gate above: jumping while under an
+          // overhead platform must bonk against the platform's
+          // underside, not the ceiling above the platform.
+          const ceiling = this.ceilingAt(conn.x, conn.y, conn.floorZ);
+          if (conn.z + COMBAT.PLAYER_HEIGHT_STAND > ceiling) {
+            conn.z = Math.max(
+              conn.floorZ,
+              ceiling - COMBAT.PLAYER_HEIGHT_STAND,
             );
-            conn.jumpVZ = 0;
+            conn.vz = 0;
           }
         }
-        if (conn.jumpZ <= 0 && conn.jumpVZ <= 0) {
-          conn.jumpZ = 0;
-          conn.jumpVZ = 0;
-          conn.lastLandedAt = now;
+        // Landing: first contact with the floor anchor. (Rising
+        // terrain mid-flight lands via the airborne re-anchor in
+        // the xyMoved block below.)
+        if (conn.z <= conn.floorZ && conn.vz <= 0) {
+          conn.z = conn.floorZ;
+          conn.vz = 0;
         }
       }
 
@@ -1711,17 +1712,17 @@ export class Scene {
       if (!moving) {
         // Jump straight to the broadcast check.
         const verticalChanged =
-          conn.jumpZ !== conn.lastJumpZSent ||
+          conn.z !== conn.lastZSent ||
           conn.crouching !== conn.lastCrouchSent;
         if (verticalChanged) {
-          conn.lastJumpZSent = conn.jumpZ;
+          conn.lastZSent = conn.z;
           conn.lastCrouchSent = conn.crouching;
           this.broadcast({
             type: 'player_moved',
             characterId: conn.characterId,
             x: conn.x,
             y: conn.y,
-            jumpZ: conn.jumpZ,
+            z: conn.z,
             crouching: conn.crouching,
           });
         }
@@ -1769,6 +1770,10 @@ export class Scene {
         // overhead sector whose polygon they incidentally fall
         // inside (sliding past an angled wall, for example).
         const fromFloor = conn.floorZ;
+        // Height of the feet above the grounded anchor — the
+        // airborne climb budget (a jumping player can clear
+        // risers up to their current height). 0 when grounded.
+        const heightAboveFloor = Math.max(0, conn.z - conn.floorZ);
         const usePolygon = POLY_COLLISION && this.sectorMap !== null;
         const fits = usePolygon
           ? (x: number, y: number) =>
@@ -1779,7 +1784,7 @@ export class Scene {
                 y,
                 COMBAT.PLAYER_RADIUS,
                 fromFloor,
-                conn.jumpZ,
+                heightAboveFloor,
                 conn.crouching,
               )
           : (x: number, y: number) => {
@@ -1807,7 +1812,7 @@ export class Scene {
               proposedY,
               COMBAT.PLAYER_RADIUS,
               fromFloor,
-              conn.jumpZ,
+              heightAboveFloor,
             );
             if (tangent) {
               const dot = dxFull * tangent.tx + dyFull * tangent.ty;
@@ -1847,7 +1852,7 @@ export class Scene {
         const pushed = this.depenetratePosition(
           proposedX,
           proposedY,
-          conn.jumpZ,
+          Math.max(0, conn.z - conn.floorZ),
           conn.crouching,
         );
         proposedX = pushed.x;
@@ -1856,7 +1861,7 @@ export class Scene {
 
       const xyMoved = proposedX !== conn.x || proposedY !== conn.y;
       const verticalChanged =
-        conn.jumpZ !== conn.lastJumpZSent ||
+        conn.z !== conn.lastZSent ||
         conn.crouching !== conn.lastCrouchSent;
       if (!xyMoved && !verticalChanged) continue;
 
@@ -1870,46 +1875,40 @@ export class Scene {
         // prevents an overhead sector at the new XY from
         // snapping them up; they'd have to enter through a
         // legitimate step-up boundary.
-        const airborne = conn.jumpZ > 0 || conn.jumpVZ !== 0;
+        const airborne = conn.z > conn.floorZ || conn.vz !== 0;
         if (airborne) {
-          // Absolute height (floorZ + jumpZ) is invariant while
-          // flying: re-anchor the floor to the ground under the new
-          // XY and keep the feet height fixed, so the arc stays a
-          // clean parabola over uneven terrain. floorAt's terrain
-          // baseline ignores the cap, so ground that rose ABOVE the
-          // feet comes back as newFloor >= feetZ — that is first
-          // contact with rising ground: land exactly there instead
-          // of compensating jumpZ negative (which produced a phantom
-          // mid-air landing and made the jump track the terrain).
-          const feetZ = conn.floorZ + conn.jumpZ;
-          const newFloor = this.floorAt(proposedX, proposedY, feetZ);
-          if (newFloor >= feetZ) {
-            conn.floorZ = newFloor;
-            conn.jumpZ = 0;
-            conn.jumpVZ = 0;
-            conn.lastLandedAt = now;
-          } else {
-            conn.floorZ = newFloor;
-            conn.jumpZ = feetZ - newFloor;
+          // Absolute z is invariant while flying — only the floor
+          // anchor re-resolves under the new XY, so the arc stays
+          // a clean parabola over uneven terrain. floorAt's
+          // terrain baseline ignores the cap, so ground that rose
+          // ABOVE the feet comes back as newFloor >= z — that is
+          // first contact with rising ground: land exactly there.
+          const newFloor = this.floorAt(proposedX, proposedY, conn.z);
+          conn.floorZ = newFloor;
+          if (newFloor >= conn.z) {
+            conn.z = newFloor;
+            conn.vz = 0;
           }
         } else {
-          // Grounded: normal step-up cap.
+          // Grounded: normal step-up cap; feet snap to the floor
+          // (step-up and step-down alike).
           conn.floorZ = this.floorAt(
             proposedX,
             proposedY,
             conn.floorZ + COMBAT.STEP_UP_MAX,
           );
+          conn.z = conn.floorZ;
         }
       }
 
-      conn.lastJumpZSent = conn.jumpZ;
+      conn.lastZSent = conn.z;
       conn.lastCrouchSent = conn.crouching;
       this.broadcast({
         type: 'player_moved',
         characterId: conn.characterId,
         x: proposedX,
         y: proposedY,
-        jumpZ: conn.jumpZ,
+        z: conn.z,
         crouching: conn.crouching,
       });
     }
@@ -2537,8 +2536,7 @@ export class Scene {
             if (t === null || t >= earliestT) continue;
             // Vertical hit filter — same shape as enemy → player.
             const hitZ = fromZ + stepZ * t;
-            const tFloor = this.floorAt(conn.x, conn.y);
-            const tBot = tFloor + conn.jumpZ;
+            const tBot = conn.z;
             const tTop =
               tBot +
               (conn.crouching
@@ -2572,12 +2570,11 @@ export class Scene {
           // Vertical hit filter — the bullet's Z at the hit time
           // must overlap the target's silhouette. Bullet Z
           // travels linearly along (fromZ → newZ), interpolated
-          // by t; the target's vertical span is floor + jumpZ to
-          // floor + jumpZ + height. Crouching halves the
-          // silhouette so head-height shots sail over.
+          // by t; the target's vertical span is feet z to
+          // feet z + height. Crouching halves the silhouette so
+          // head-height shots sail over.
           const hitZ = fromZ + stepZ * t;
-          const tFloor = this.floorAt(conn.x, conn.y);
-          const tBot = tFloor + conn.jumpZ;
+          const tBot = conn.z;
           const tTop =
             tBot +
             (conn.crouching
@@ -3527,7 +3524,7 @@ export class Scene {
   private depenetratePosition(
     x: number,
     y: number,
-    jumpZ: number,
+    heightAboveFloor: number,
     crouching: boolean,
   ): { x: number; y: number } {
     if (!this.sectorMap || !this.wallIndex) return { x, y };
@@ -3539,7 +3536,7 @@ export class Scene {
     for (let pass = 0; pass < 3; pass++) {
       let moved = false;
       const fromFloor = this.floorAt(x, y);
-      const climbBudget = Math.max(COMBAT.STEP_UP_MAX, jumpZ);
+      const climbBudget = Math.max(COMBAT.STEP_UP_MAX, heightAboveFloor);
       const stepLimitTop = fromFloor + climbBudget;
       const playerTop = fromFloor + playerHeight;
       for (const wallIdx of this.wallIndex.cellsTouchingSegmentPadded(
@@ -3691,10 +3688,10 @@ export class Scene {
     y1: number,
     radius: number,
     fromFloor: number,
-    jumpZ: number = 0,
+    heightAboveFloor: number = 0,
   ): { tx: number; ty: number } | null {
     if (!this.sectorMap || !this.wallIndex) return null;
-    const climbBudget = Math.max(COMBAT.STEP_UP_MAX, jumpZ);
+    const climbBudget = Math.max(COMBAT.STEP_UP_MAX, heightAboveFloor);
     const stepLimitTop = fromFloor + climbBudget;
     // Use standing height for the head-clearance test — slightly
     // conservative when crouched but avoids needing a per-call
@@ -3766,7 +3763,7 @@ export class Scene {
     y1: number,
     radius: number,
     fromFloor: number,
-    jumpZ: number = 0,
+    heightAboveFloor: number = 0,
     crouching: boolean = false,
   ): boolean {
     if (!this.sectorMap || !this.wallIndex) return true;
@@ -3776,13 +3773,13 @@ export class Scene {
     // any) blocked. Use this when the editor / playtest disagree
     // about whether the player can enter a pit / platform / etc.
     const debug = process.env.MOVE_DEBUG === '1';
-    const climbBudget = Math.max(COMBAT.STEP_UP_MAX, jumpZ);
+    const climbBudget = Math.max(COMBAT.STEP_UP_MAX, heightAboveFloor);
     const floorCap = fromFloor + climbBudget;
     const dest = this.walkableSectorAt(x1, y1, floorCap);
     if (debug) {
       console.log(
         `[MOVE] from=(${x0.toFixed(1)},${y0.toFixed(1)}) to=(${x1.toFixed(1)},${y1.toFixed(1)}) ` +
-          `r=${radius} fromFloor=${fromFloor} jumpZ=${jumpZ} crouch=${crouching} ` +
+          `r=${radius} fromFloor=${fromFloor} heightAboveFloor=${heightAboveFloor} crouch=${crouching} ` +
           `climbBudget=${climbBudget} floorCap=${floorCap} dest=${dest ? `s${dest.id}(floorZ=${dest.floorZ})` : 'NONE'}`,
       );
     }

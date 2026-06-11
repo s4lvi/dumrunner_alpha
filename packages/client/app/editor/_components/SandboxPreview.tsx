@@ -214,7 +214,7 @@ export const SandboxPreview = forwardRef<
           game?.removePlayer(msg.characterId);
           break;
         case 'player_moved':
-          game?.movePlayer(msg.characterId, msg.x, msg.y);
+          game?.movePlayer(msg.characterId, msg.x, msg.y, msg.z, msg.crouching);
           break;
         case 'player_damaged':
           game?.setPlayerHp(

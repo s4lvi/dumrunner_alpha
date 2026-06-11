@@ -208,24 +208,24 @@ export function runFpsV2Game(
   const SELF_SMOOTH_TAU_MS = 50;
   let lastSelfTickAt = 0;
 
-  // Smoothed camera floor height. Targets `floorAtSelf()` each
-  // tick; we lerp toward it so step-up onto a platform reads as
-  // a quick rise instead of a snap. Step-down uses the same
-  // tau — short enough that it doesn't feel like floating, long
-  // enough that walking off a ledge doesn't camera-jolt.
-  let cameraFloorZ = 0;
+  // Smoothed absolute feet z the camera reads. While grounded it
+  // targets the local floor mirror under the lerped XY (snap up
+  // on step-up, lerp down on step-down); while airborne it runs
+  // a ballistic prediction corrected toward the server's
+  // broadcast absolute z. selfZ is the latest server-reported
+  // absolute feet z.
+  let cameraZ = 0;
   const FLOOR_SMOOTH_TAU_MS = 70;
 
-  // Phase 7 — vertical movement state mirrored from the server.
-  // selfJumpZ is the server-reported target; cameraJumpZ is the
-  // per-frame value the camera actually reads. The client runs the
-  // SAME ballistic integration as the server (COMBAT.GRAVITY /
-  // JUMP_VZ_INIT) so the arc renders as a smooth 60 Hz parabola,
-  // with a soft correction lerp toward the 20 Hz server samples so
-  // we never drift from authority (head-bonks, landings).
-  let selfJumpZ = 0;
-  let cameraJumpZ = 0;
-  let predJumpVZ = 0;
+  // Vertical movement state mirrored from the server. selfZ is
+  // the server-reported target; cameraZ is the per-frame value
+  // the camera actually reads. The client runs the SAME ballistic
+  // integration as the server (COMBAT.GRAVITY / JUMP_VZ_INIT) so
+  // the arc renders as a smooth 60 Hz parabola, with a soft
+  // correction lerp toward the 20 Hz server samples so we never
+  // drift from authority (head-bonks, landings).
+  let selfZ = 0;
+  let predVZ = 0;
   let selfCrouching = false;
   const JUMP_CORRECT_TAU_MS = 80;
   // Mirror of the server's jump physics (COMBAT.JUMP_VZ_INIT /
@@ -994,7 +994,7 @@ export function runFpsV2Game(
       performance.now(),
       camera.selfX,
       camera.selfY,
-      camera.floorZ + 16,
+      camera.feetZ + 16,
     );
     // Re-bind biome textures. lookupTexture is synchronous after
     // first call's async load resolves, so this re-poll picks up
@@ -1032,7 +1032,7 @@ export function runFpsV2Game(
     fog.uCameraPos[0] = camera.selfX;
     fog.uCameraPos[1] = camera.selfY;
     // Eye height — same as the camera matrix uses.
-    fog.uCameraPos[2] = camera.floorZ + 16;
+    fog.uCameraPos[2] = camera.feetZ + 16;
     // Tighter range inside dungeons (small enclosed corridors
     // benefit from atmospheric falloff; open surface should
     // see far). Detected by tileGrid presence — dungeons always
@@ -1350,7 +1350,10 @@ export function runFpsV2Game(
     const playerTex = lookupTexture('player', 'default');
     for (const p of players.values()) {
       if (p.characterId === init.self.characterId) continue;
-      const groundZ = floorAt(p.x, p.y);
+      // Broadcast absolute feet z anchors the billboard so a
+      // jumping teammate visibly leaves the ground; fall back to
+      // the local floor mirror when z hasn't arrived yet.
+      const groundZ = p.z ?? floorAt(p.x, p.y);
       if (playerTex) {
         texturedSprites.push(
           {
@@ -1422,7 +1425,7 @@ export function runFpsV2Game(
   } | null {
     if (!layout) return null;
     const tileSize = layout.tileSize > 0 ? layout.tileSize : 32;
-    const eyeZ = camera.floorZ + camera.eyeHeightSmoothed + camera.jumpZ;
+    const eyeZ = camera.feetZ + camera.eyeHeightSmoothed;
     const groundZAtSelf = floorAt(selfX, selfY);
     const heightAboveFloor = eyeZ - groundZAtSelf;
     let tx: number;
@@ -1512,30 +1515,40 @@ export function runFpsV2Game(
       if (Math.abs(targetSelfX - selfX) < 0.05) selfX = targetSelfX;
       if (Math.abs(targetSelfY - selfY) < 0.05) selfY = targetSelfY;
     }
+    // Local floor mirror under the lerped XY — the grounded
+    // camera target. The server broadcasts absolute z, so while
+    // airborne no floor re-anchoring/compensation is needed:
+    // cameraZ predicts the ballistic arc directly in absolute z
+    // and corrects toward the broadcast value.
     const targetFloor = floorAt(selfX, selfY);
-    // Airborne: mirror the server's floor re-anchor (scene.ts,
-    // xyMoved block). The server re-anchors floorZ to the ground
-    // under the player every tick and compensates jumpZ so
-    // floorZ + jumpZ (the absolute height) is invariant in
-    // flight. The camera must do the SAME re-anchor: chase the
-    // floor AND compensate cameraJumpZ by the shift, keeping
-    // cameraFloorZ + cameraJumpZ — the rendered height — on a
-    // clean ballistic arc. (Freezing cameraFloorZ here, the old
-    // behaviour, broke against the server's floor-relative jumpZ:
-    // the correction term dragged the camera toward
-    // takeoffFloor + (absZ - currentFloor), so the camera
-    // inversely mirrored every hill crossed mid-jump and then
-    // snapped by the accumulated delta at landing.)
-    const airborne =
-      predJumpVZ !== 0 || cameraJumpZ > 0.01 || selfJumpZ > 0.01;
+    const airborne = predVZ !== 0 || selfZ > targetFloor + 0.01;
     if (airborne) {
-      const shift = targetFloor - cameraFloorZ;
-      if (shift !== 0) {
-        cameraFloorZ = targetFloor;
-        cameraJumpZ -= shift;
+      // Ballistic jump prediction. Integrate the same gravity the
+      // server uses so the arc is a smooth per-frame parabola
+      // instead of 20 Hz steps, then softly correct toward the
+      // latest server sample so authority always wins (head-bonk
+      // caps, landings).
+      const dts = dt / 1000;
+      predVZ -= JUMP_GRAVITY * dts;
+      // Terminal clamp: a real jump never exceeds ~|JUMP_VZ_INIT|
+      // downward. If the local floor mirror ever disagrees with
+      // the server (selfZ stuck above the mirrored floor), the
+      // integration would otherwise run away and fight the
+      // correction term with ever-growing velocity.
+      if (predVZ < -3 * JUMP_VZ_INIT) predVZ = -3 * JUMP_VZ_INIT;
+      cameraZ += predVZ * dts;
+      const corr = Math.min(1, 1 - Math.exp(-dt / JUMP_CORRECT_TAU_MS));
+      cameraZ += (selfZ - cameraZ) * corr;
+      if (
+        predVZ <= 0 &&
+        cameraZ <= targetFloor &&
+        selfZ <= targetFloor + 0.01
+      ) {
+        cameraZ = targetFloor;
+        predVZ = 0;
       }
     } else {
-      const dz = targetFloor - cameraFloorZ;
+      const dz = targetFloor - cameraZ;
       if (dz > 0) {
         // Step up — snap. Camera lerping behind the floor while the
         // player's XY is already on the upper tile puts the camera
@@ -1543,49 +1556,34 @@ export function runFpsV2Game(
         // riser geometry from a downward-looking angle. Snap-up is
         // the v1 + standard-FPS feel for stair ascent and avoids
         // the clip entirely.
-        cameraFloorZ = targetFloor;
+        cameraZ = targetFloor;
       } else if (dz < 0) {
         // Step / fall down — lerp. Snapping down would feel like a
         // teleport; the slight delay reads as gravity instead.
         const tz = Math.min(1, 1 - Math.exp(-dt / FLOOR_SMOOTH_TAU_MS));
-        cameraFloorZ += dz * tz;
-        if (Math.abs(targetFloor - cameraFloorZ) < 0.05) {
-          cameraFloorZ = targetFloor;
+        cameraZ += dz * tz;
+        if (Math.abs(targetFloor - cameraZ) < 0.05) {
+          cameraZ = targetFloor;
         }
       }
     }
-    // Ballistic jump prediction. Integrate the same gravity the
-    // server uses so the arc is a smooth per-frame parabola instead
-    // of 20 Hz steps, then softly correct toward the latest server
-    // sample so authority always wins (head-bonk caps, landings,
-    // floor re-anchors).
-    if (cameraJumpZ > 0 || predJumpVZ !== 0 || selfJumpZ > 0) {
-      const dts = dt / 1000;
-      predJumpVZ -= JUMP_GRAVITY * dts;
-      cameraJumpZ += predJumpVZ * dts;
-      const corr = Math.min(1, 1 - Math.exp(-dt / JUMP_CORRECT_TAU_MS));
-      cameraJumpZ += (selfJumpZ - cameraJumpZ) * corr;
-      if (cameraJumpZ <= 0 && selfJumpZ <= 0) {
-        cameraJumpZ = 0;
-        predJumpVZ = 0;
-      }
-    }
-    camera.setSelfPosition(selfX, selfY, cameraFloorZ);
-    camera.setVertical(cameraJumpZ, selfCrouching);
+    camera.setSelfPosition(selfX, selfY, cameraZ);
+    camera.setCrouching(selfCrouching);
   }
 
   // Client-side mirror of the server's floor lookup. Terrain
   // is the baseline; tile-rect platforms + authored sectors
   // override when higher AND ≤ cap. The cap defaults to the
-  // current camera floor + STEP_UP_MAX so a brief slide past
+  // current camera feet z + STEP_UP_MAX so a brief slide past
   // an angled wall into an overhead's polygon doesn't snap the
   // camera up to the overhead's floor — same gating principle
-  // as the server's stateful `conn.floorZ`.
+  // as the server's stateful `conn.floorZ`. (While airborne the
+  // feet z rises, which matches the server's cap = feet z.)
   function floorAt(x: number, y: number): number {
     let z = 0;
     const terrain = layout?.terrain;
     if (terrain) z = terrainHeightAt(terrain, x, y);
-    const cap = cameraFloorZ + STEP_UP_MAX_CLIENT;
+    const cap = cameraZ + STEP_UP_MAX_CLIENT;
     const platforms = layout?.platforms;
     if (platforms && platforms.length > 0) {
       const tileSize = layout?.tileSize ?? 32;
@@ -1732,9 +1730,12 @@ export function runFpsV2Game(
     // Kick the local jump prediction on the press frame (grounded
     // only — the server ignores airborne jump presses). The server
     // echo confirms/corrects via the smoothing pass.
-    if (jumpEdge && cameraJumpZ <= 0 && selfJumpZ <= 0) {
-      predJumpVZ = JUMP_VZ_INIT;
-      cameraJumpZ = 0.01;
+    if (
+      jumpEdge &&
+      predVZ === 0 &&
+      selfZ <= floorAt(selfX, selfY) + 0.01
+    ) {
+      predVZ = JUMP_VZ_INIT;
     }
     const crouch =
       keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
@@ -1917,8 +1918,10 @@ export function runFpsV2Game(
       if (p.characterId === init.self.characterId) {
         selfX = p.x;
         selfY = p.y;
-        cameraFloorZ = floorAt(p.x, p.y);
-        camera.setSelfPosition(p.x, p.y, cameraFloorZ);
+        cameraZ = p.z ?? floorAt(p.x, p.y);
+        selfZ = cameraZ;
+        predVZ = 0;
+        camera.setSelfPosition(p.x, p.y, cameraZ);
       }
     },
     removePlayer: (id: string) => {
@@ -1928,14 +1931,14 @@ export function runFpsV2Game(
       id: string,
       x: number,
       y: number,
-      jumpZ?: number,
+      z?: number,
       crouching?: boolean,
     ) => {
       const p = players.get(id);
       if (p) {
         p.x = x;
         p.y = y;
-        p.jumpZ = jumpZ;
+        p.z = z;
         p.crouching = crouching;
       }
       if (id === init.self.characterId) {
@@ -1948,18 +1951,21 @@ export function runFpsV2Game(
         if (dx * dx + dy * dy > SELF_SNAP_PX * SELF_SNAP_PX) {
           selfX = x;
           selfY = y;
-          cameraFloorZ = floorAt(x, y);
-          camera.setSelfPosition(x, y, cameraFloorZ);
+          cameraZ = z ?? floorAt(x, y);
+          predVZ = 0;
+          camera.setSelfPosition(x, y, cameraZ);
         }
         targetSelfX = x;
         targetSelfY = y;
-        // selfJumpZ / selfCrouching are the smoothing pass's
+        // selfZ / selfCrouching are the smoothing pass's
         // targets — the actual camera value lerps toward them
         // each frame inside tickSelfSmoothing.
-        selfJumpZ = jumpZ ?? 0;
+        selfZ = z ?? floorAt(x, y);
         selfCrouching = crouching ?? false;
       }
     },
+    isSelfAirborne: () =>
+      predVZ !== 0 || selfZ > floorAt(selfX, selfY) + 0.01,
     setPlayerHp: (
       characterId: string,
       hp: number,
@@ -1997,13 +2003,16 @@ export function runFpsV2Game(
         p.y = y;
       }
       if (id === init.self.characterId) {
-        // Respawn is a teleport — snap, don't lerp.
+        // Respawn is a teleport — snap, don't lerp, and clear
+        // any in-flight vertical prediction.
         selfX = x;
         selfY = y;
         targetSelfX = x;
         targetSelfY = y;
-        cameraFloorZ = floorAt(x, y);
-        camera.setSelfPosition(x, y, cameraFloorZ);
+        cameraZ = floorAt(x, y);
+        selfZ = cameraZ;
+        predVZ = 0;
+        camera.setSelfPosition(x, y, cameraZ);
         selfDead = false;
         lastHpDropAt = 0;
         lastBigHpDropAt = 0;
@@ -2059,7 +2068,7 @@ export function runFpsV2Game(
       // server-confirmed real shot. Visible to everyone via the
       // shared lighting model (a teammate's fire briefly lights
       // up walls around them). 60ms TTL keeps it punchy.
-      lights.add(muzzleFlashAt(p.x, p.y, camera.floorZ + 16, nowMs));
+      lights.add(muzzleFlashAt(p.x, p.y, camera.feetZ + 16, nowMs));
       // If this projectile is ours, kick the view-model into
       // its fire state. `interrupt: true` so a chain of shots
       // restarts the fire animation per shot rather than
@@ -2233,8 +2242,14 @@ export function runFpsV2Game(
       targetSelfX = selfX;
       targetSelfY = selfY;
       lastSelfTickAt = 0;
-      cameraFloorZ = floorAt(selfX, selfY);
-      camera.setSelfPosition(selfX, selfY, cameraFloorZ);
+      // Scene swap resets the vertical state too — a swap taken
+      // mid-jump must not carry a stale ballistic prediction (or
+      // a stale floor/z) into the new scene.
+      cameraZ = state.self.z ?? floorAt(selfX, selfY);
+      selfZ = cameraZ;
+      predVZ = 0;
+      selfCrouching = state.self.crouching ?? false;
+      camera.setSelfPosition(selfX, selfY, cameraZ);
       // Rebuild sector geometry against the new layout +
       // buildings. Surface layout with no tileGrid converts to
       // an open-air sector + cubes per building.

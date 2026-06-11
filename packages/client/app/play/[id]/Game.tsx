@@ -825,7 +825,7 @@ export function Game({
           msg.characterId,
           msg.x,
           msg.y,
-          msg.jumpZ,
+          msg.z,
           msg.crouching,
         );
         // Footstep SFX for self only, throttled, and only while
@@ -833,7 +833,10 @@ export function Game({
         // Server broadcasts a player_moved at every meaningful position
         // delta; we throttle playback to a step cadence (~330ms) so it
         // feels like footfalls rather than a hum.
-        if (msg.characterId === selfIdRef.current && (msg.jumpZ ?? 0) <= 0) {
+        if (
+          msg.characterId === selfIdRef.current &&
+          !(gameRef.current?.isSelfAirborne() ?? false)
+        ) {
           const now = performance.now();
           if (now - lastFootstepAtRef.current > 330) {
             lastFootstepAtRef.current = now;

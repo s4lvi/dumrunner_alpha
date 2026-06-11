@@ -51,11 +51,11 @@ export class Camera {
   pitch = 0;
   selfX = 0;
   selfY = 0;
-  floorZ = 0;
-  // Phase 7 vertical-movement state. jumpZ rides above floorZ;
-  // crouching swaps eye height to the crouch value. Renderer
-  // writes these every frame from the server-broadcast values.
-  jumpZ = 0;
+  // Absolute world-z of the player's feet (smoothed by the
+  // renderer). The eye composes directly on top of this.
+  feetZ = 0;
+  // Crouching swaps eye height to the crouch value. Renderer
+  // writes this every frame from the server-broadcast value.
   crouching = false;
   // Smoothed eye height for the crouch lerp — snaps when not
   // animating, lerps when crouching state changes.
@@ -85,14 +85,13 @@ export class Camera {
     );
   }
 
-  setSelfPosition(x: number, y: number, floorZ: number): void {
+  setSelfPosition(x: number, y: number, feetZ: number): void {
     this.selfX = x;
     this.selfY = y;
-    this.floorZ = floorZ;
+    this.feetZ = feetZ;
   }
 
-  setVertical(jumpZ: number, crouching: boolean): void {
-    this.jumpZ = jumpZ;
+  setCrouching(crouching: boolean): void {
     this.crouching = crouching;
   }
 
@@ -117,14 +116,14 @@ export class Camera {
     // camera's right axis.
     // Lerp eye height toward the standing / crouching target so
     // crouch transitions read as a smooth bob rather than a snap.
-    // 120 ms time constant matches the v2 plan; jumpZ rides on
-    // top (the server reports it, so no smoothing needed here).
+    // 120 ms time constant matches the v2 plan; the feet z is
+    // already smoothed by the renderer.
     const eyeTarget = this.crouching ? EYE_HEIGHT_CROUCH : EYE_HEIGHT;
     this.eyeHeightSmoothed += (eyeTarget - this.eyeHeightSmoothed) * 0.18;
     if (Math.abs(eyeTarget - this.eyeHeightSmoothed) < 0.05) {
       this.eyeHeightSmoothed = eyeTarget;
     }
-    const eyeZ = this.floorZ + this.eyeHeightSmoothed + this.jumpZ;
+    const eyeZ = this.feetZ + this.eyeHeightSmoothed;
     // Compose in column-major order. Conceptually:
     //   view = R_pitch * R_yaw * T(-eye)
     // R_yaw rotates world so that looking +Y is straight ahead;

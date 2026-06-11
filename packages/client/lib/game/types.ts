@@ -88,9 +88,12 @@ export type GameHandle = {
     characterId: string,
     x: number,
     y: number,
-    jumpZ?: number,
+    z?: number,
     crouching?: boolean,
   ): void;
+  // True while the local player is mid-jump / falling. Consumers
+  // (footstep SFX gating) treat absence of data as grounded.
+  isSelfAirborne(): boolean;
   setPlayerHp(
     characterId: string,
     hp: number,

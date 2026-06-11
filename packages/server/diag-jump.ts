@@ -1,13 +1,13 @@
 // Jump-over-terrain diagnostic. Builds a REAL surface Scene (noise
 // terrain, same config as world.ts surfaceLayout) and drives the
 // actual simulatePlayerMovement tick with a fake connection that
-// sprints in a fixed direction and jumps. Prints absolute z
-// (floorZ + jumpZ) per tick so the arc's shape is visible in data.
+// sprints in a fixed direction and jumps. Prints the absolute feet
+// z per tick so the arc's shape is visible in data.
 //
 // PASS criteria:
 //   - while airborne, absolute z follows a single clean parabola
 //     (second difference ~= -GRAVITY * dt^2, no terrain coupling)
-//   - jumpZ never goes negative
+//   - z never dips below the floor anchor (no clipping into ground)
 //   - exactly ONE landing per jump, at first contact with ground
 import { Scene, type SceneBindings, type SceneConnection } from './src/scene.js';
 import { COMBAT } from './src/combat.js';
@@ -54,12 +54,11 @@ function makeConn(x: number, y: number, floorZ: number): SceneConnection {
     inputSprint: false,
     inputJump: false,
     inputCrouch: false,
-    jumpZ: 0,
-    jumpVZ: 0,
+    z: floorZ,
+    vz: 0,
     crouching: false,
     floorZ,
-    lastLandedAt: 0,
-    lastJumpZSent: 0,
+    lastZSent: floorZ,
     lastCrouchSent: false,
     inventory: { slots: [] } as unknown as SceneConnection['inventory'],
     equipment: {} as SceneConnection['equipment'],
@@ -112,14 +111,14 @@ function runJump(
   label: string,
   dirX: number,
   terrainCfg: typeof TERRAIN = TERRAIN,
-): { landings: number; negJumpZ: number; maxArcErr: number } {
+): { landings: number; belowFloor: number; maxArcErr: number } {
   const dt = COMBAT.TICK_MS / 1000;
   let now = Date.now();
   conn.inputX = dirX;
   conn.inputY = 0;
   conn.inputJump = true;
   let landings = 0;
-  let negJumpZ = 0;
+  let belowFloor = 0;
   // Absolute z per airborne tick, for parabola verification.
   const arc: number[] = [];
   let wasAirborne = false;
@@ -128,15 +127,14 @@ function runJump(
     now += COMBAT.TICK_MS;
     (scene as any).simulatePlayerMovement(dt, now);
     const terr = terrainHeightAt(terrainCfg, conn.x, conn.y);
-    const absZ = conn.floorZ + conn.jumpZ;
-    const airborne = conn.jumpZ > 0 || conn.jumpVZ !== 0;
-    if (airborne) arc.push(absZ);
-    if (conn.jumpZ < -1e-9) negJumpZ++;
+    const airborne = conn.z > conn.floorZ || conn.vz !== 0;
+    if (airborne) arc.push(conn.z);
+    if (conn.z - conn.floorZ < -1e-9) belowFloor++;
     if (wasAirborne && !airborne) landings++;
     console.log(
       `  t=${tick} x=${conn.x.toFixed(1)} floorZ=${conn.floorZ.toFixed(2)}` +
-        ` jumpZ=${conn.jumpZ.toFixed(2)} vz=${conn.jumpVZ.toFixed(2)}` +
-        ` absZ=${absZ.toFixed(2)} terrain=${terr.toFixed(2)}` +
+        ` z=${conn.z.toFixed(2)} vz=${conn.vz.toFixed(2)}` +
+        ` terrain=${terr.toFixed(2)}` +
         `${airborne ? ' AIR' : ' ground'}${wasAirborne && !airborne ? ' <LAND>' : ''}`,
     );
     wasAirborne = airborne;
@@ -154,10 +152,10 @@ function runJump(
     if (err > maxArcErr) maxArcErr = err;
   }
   console.log(
-    `  => landings=${landings} negJumpZTicks=${negJumpZ}` +
+    `  => landings=${landings} belowFloorTicks=${belowFloor}` +
       ` maxParabolaErr=${maxArcErr.toFixed(4)} (expected ~0; dd target=${(-g).toFixed(4)})`,
   );
-  return { landings, negJumpZ, maxArcErr };
+  return { landings, belowFloor, maxArcErr };
 }
 
 async function main() {
@@ -198,9 +196,10 @@ async function main() {
   const down = runJump(scene, conn, 'jump while running DOWNHILL (-x)', -1);
 
   // Steep stress case: terrain rising faster than the arc can
-  // clear. The old compensation drove jumpZ negative here (phantom
-  // mid-air landing); the fix must land exactly once, at first
-  // contact with the rising ground, with jumpZ never < 0.
+  // clear. The old floor-relative compensation drove jumpZ
+  // negative here (phantom mid-air landing); the absolute-z model
+  // must land exactly once, at first contact with the rising
+  // ground, with z never below the floor anchor.
   const STEEP = { amplitude: 200, frequency: 1 / 384, octaves: 2, seed: 77 };
   const steepLayout = { ...surfaceLayout(), terrain: STEEP };
   let steepStart: { x: number; y: number } | null = null;
@@ -215,7 +214,7 @@ async function main() {
       }
     }
   }
-  let steep = { landings: 1, negJumpZ: 0, maxArcErr: 0 };
+  let steep = { landings: 1, belowFloor: 0, maxArcErr: 0 };
   if (steepStart) {
     const steepScene = new Scene('surface', 'surface', bindings, steepLayout);
     steepScene.addMember('diag');
@@ -247,9 +246,9 @@ async function main() {
     up.landings === 1 &&
     down.landings === 1 &&
     steep.landings === 1 &&
-    up.negJumpZ === 0 &&
-    down.negJumpZ === 0 &&
-    steep.negJumpZ === 0 &&
+    up.belowFloor === 0 &&
+    down.belowFloor === 0 &&
+    steep.belowFloor === 0 &&
     up.maxArcErr < 0.01 &&
     down.maxArcErr < 0.01 &&
     steep.maxArcErr < 0.01;

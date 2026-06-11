@@ -455,12 +455,11 @@ export type Player = {
   displayName: string;
   x: number;
   y: number;
-  // Vertical-movement state — Phase 7 of the v2 polygon /
-  // collision plan. `jumpZ` is height above the current floor
-  // (0 = grounded); `crouching` halves the eye / hitbox height.
-  // Optional so welcome / state messages from pre-Phase-7
-  // servers still deserialize.
-  jumpZ?: number;
+  // Vertical-movement state. `z` is the ABSOLUTE world-z of the
+  // player's feet (grounded ⇒ z === floor height at x,y);
+  // `crouching` halves the eye / hitbox height. Optional so
+  // welcome / state messages from older servers still deserialize.
+  z?: number;
   crouching?: boolean;
   hp: number;
   maxHp: number;
@@ -1237,9 +1236,10 @@ export type ServerMessage =
       characterId: string;
       x: number;
       y: number;
-      // Phase 7 vertical state. Optional so renderers from
-      // pre-Phase-7 builds tolerate the message; absent ⇒ 0 / false.
-      jumpZ?: number;
+      // Vertical state: absolute world-z of the feet. Optional so
+      // renderers from older builds tolerate the message;
+      // absent ⇒ grounded at the local floor / not crouching.
+      z?: number;
       crouching?: boolean;
     }
   | { type: 'player_damaged'; characterId: string; hp: number; maxHp: number; shield: number; maxShield: number }
@@ -1455,4 +1455,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 45;
+export const PROTOCOL_VERSION = 46;

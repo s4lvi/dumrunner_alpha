@@ -724,12 +724,11 @@ export class World {
       inputSprint: false,
       inputJump: false,
       inputCrouch: false,
-      jumpZ: 0,
-      jumpVZ: 0,
+      z: 0,
+      vz: 0,
       crouching: false,
       floorZ: 0,
-      lastLandedAt: 0,
-      lastJumpZSent: 0,
+      lastZSent: 0,
       lastCrouchSent: false,
       lastFireAt: 0,
       reloadingUntil: 0,
@@ -814,10 +813,8 @@ export class World {
     conn.x = layout.spawn.x;
     conn.y = layout.spawn.y;
     // Reset vertical state so a swap doesn't leave the player
-    // mid-jump or stuck in a stale jumpZ from the prior scene.
-    conn.jumpZ = 0;
-    conn.jumpVZ = 0;
-    conn.lastJumpZSent = 0;
+    // mid-jump or stuck at a stale z from the prior scene.
+    conn.vz = 0;
     // Seed the stateful floor from the spawn position. Use the
     // LOWEST sector at this XY (spawnFloorAt) — if the author's
     // spawn happens to land inside an overlapping platform's
@@ -827,6 +824,8 @@ export class World {
       layout.spawnZ !== undefined
         ? layout.spawnZ
         : scene.spawnFloorAt(layout.spawn.x, layout.spawn.y);
+    conn.z = conn.floorZ;
+    conn.lastZSent = conn.z;
     if (!broadcast) return;
     const snap = scene.toWireSnapshot();
     this.sendTo(characterId, {
@@ -1123,6 +1122,8 @@ export class World {
       displayName: conn.displayName,
       x: conn.x,
       y: conn.y,
+      z: conn.z,
+      crouching: conn.crouching,
       hp: conn.hp,
       maxHp: conn.maxHp,
       stamina: conn.stamina,
@@ -1200,12 +1201,11 @@ export class World {
       inputSprint: false,
       inputJump: false,
       inputCrouch: false,
-      jumpZ: 0,
-      jumpVZ: 0,
+      z: 0,
+      vz: 0,
       crouching: false,
       floorZ: 0,
-      lastLandedAt: 0,
-      lastJumpZSent: 0,
+      lastZSent: 0,
       lastCrouchSent: false,
       lastFireAt: 0,
       reloadingUntil: 0,
@@ -1277,6 +1277,13 @@ export class World {
 
     const scene = this.requireScene(sceneId);
     scene.addMember(player.characterId);
+
+    // Seed the vertical state from the spawn floor so the first
+    // tick's grounded / step-up checks start from the real
+    // ground height instead of z=0.
+    conn.floorZ = scene.spawnFloorAt(conn.x, conn.y);
+    conn.z = conn.floorZ;
+    conn.lastZSent = conn.z;
 
     const others = this.playersInScene(sceneId, player.characterId);
     const wireSnap = scene.toWireSnapshot();
@@ -1392,6 +1399,14 @@ export class World {
     const toScene = this.requireScene(toSceneId);
     toScene.addMember(characterId);
 
+    // Reset vertical state — a transition mid-jump must not
+    // carry airborne z/vz (or a stale floor anchor) into the
+    // destination scene.
+    conn.floorZ = toScene.spawnFloorAt(spawnX, spawnY);
+    conn.z = conn.floorZ;
+    conn.vz = 0;
+    conn.lastZSent = conn.z;
+
     conn.interactCooldownUntil = Date.now() + TRANSITION_COOLDOWN_MS;
 
     const wireSnap = toScene.toWireSnapshot();
@@ -1461,6 +1476,8 @@ export class World {
         conn.x = drop.x;
         conn.y = drop.y;
         conn.floorZ = arena.spawnFloorAt(drop.x, drop.y);
+        conn.z = conn.floorZ;
+        conn.vz = 0;
         conn.dirty = true;
         arena.broadcast({
           type: 'player_respawned',
@@ -1495,6 +1512,11 @@ export class World {
       // entrance and broadcast a respawn event without a scene swap.
       conn.x = safe.x;
       conn.y = safe.y;
+      conn.floorZ = surface
+        ? surface.spawnFloorAt(safe.x, safe.y)
+        : 0;
+      conn.z = conn.floorZ;
+      conn.vz = 0;
       conn.dirty = true;
       surface?.broadcast({
         type: 'player_respawned',
@@ -3985,6 +4007,8 @@ function toPlayer(conn: Connection): Player {
     displayName: conn.displayName,
     x: conn.x,
     y: conn.y,
+    z: conn.z,
+    crouching: conn.crouching,
     hp: conn.hp,
     maxHp: conn.maxHp,
     stamina: conn.stamina,

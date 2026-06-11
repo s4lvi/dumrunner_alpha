@@ -212,14 +212,41 @@ export function pointSegmentDistance(
   return Math.hypot(px - cx, py - cy);
 }
 
+// Exact distance between two line segments p0→p1 and q0→q1.
+// 0 when they intersect; otherwise the minimum is always attained
+// at an endpoint of one segment against the other segment, so four
+// point-segment distances cover every non-crossing configuration
+// (including parallel and collinear overlap, where an endpoint of
+// one lies inside the other and the distance correctly reads 0).
+export function segmentSegmentDistance(
+  p0x: number,
+  p0y: number,
+  p1x: number,
+  p1y: number,
+  q0x: number,
+  q0y: number,
+  q1x: number,
+  q1y: number,
+): number {
+  if (
+    segmentSegmentIntersect(p0x, p0y, p1x, p1y, q0x, q0y, q1x, q1y) !== null
+  ) {
+    return 0;
+  }
+  return Math.min(
+    pointSegmentDistance(q0x, q0y, q1x, q1y, p0x, p0y),
+    pointSegmentDistance(q0x, q0y, q1x, q1y, p1x, p1y),
+    pointSegmentDistance(p0x, p0y, p1x, p1y, q0x, q0y),
+    pointSegmentDistance(p0x, p0y, p1x, p1y, q1x, q1y),
+  );
+}
+
 // Swept circle-vs-segment: returns true iff a circle of `radius`
 // moving in a straight line from (x0, y0) to (x1, y1) clears the
-// segment a→b without intersecting it. The conservative test (point
-// (x1,y1)'s distance to a→b ≥ radius) misses early-collision cases
-// where the circle "passes through" a wall on the way; we sample
-// along the swept path at step ≤ radius/2 so the test catches any
-// tunneling at our per-tick move magnitudes (~7 px at PLAYER_RADIUS
-// 10 — well under one sample).
+// segment a→b without intersecting it. Exact segment-capsule test
+// (the swept circle is a capsule of `radius` around the move
+// segment) — no sampling, so a thin / angled wall can never slip
+// between sample points regardless of move length.
 export function sweptCircleClearsSegment(
   x0: number,
   y0: number,
@@ -231,21 +258,7 @@ export function sweptCircleClearsSegment(
   bx: number,
   by: number,
 ): boolean {
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const moveLen = Math.hypot(dx, dy);
-  if (moveLen === 0) {
-    return pointSegmentDistance(ax, ay, bx, by, x0, y0) >= radius;
-  }
-  const stepLen = radius * 0.5;
-  const steps = Math.max(1, Math.ceil(moveLen / stepLen));
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps;
-    const sx = x0 + dx * t;
-    const sy = y0 + dy * t;
-    if (pointSegmentDistance(ax, ay, bx, by, sx, sy) < radius) return false;
-  }
-  return true;
+  return segmentSegmentDistance(x0, y0, x1, y1, ax, ay, bx, by) >= radius;
 }
 
 // Segment-vs-segment intersection. Returns the parameter t along
