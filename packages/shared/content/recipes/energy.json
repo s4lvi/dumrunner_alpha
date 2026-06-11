@@ -3,19 +3,25 @@
   "name": "Energy Carbine",
   "inputs": [
     {
+      "kind": "part",
+      "slot": "frame",
+      "weaponClass": "energy",
+      "count": 1
+    },
+    {
       "kind": "material",
       "materialId": "circuit",
-      "count": 8
+      "count": 4
     },
     {
       "kind": "material",
       "materialId": "crystal",
-      "count": 2
+      "count": 1
     },
     {
       "kind": "material",
       "materialId": "wire",
-      "count": 6
+      "count": 3
     }
   ],
   "output": {

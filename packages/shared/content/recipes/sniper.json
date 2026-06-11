@@ -3,14 +3,20 @@
   "name": "Sniper Rifle",
   "inputs": [
     {
+      "kind": "part",
+      "slot": "frame",
+      "weaponClass": "sniper",
+      "count": 1
+    },
+    {
       "kind": "material",
       "materialId": "alloy",
-      "count": 6
+      "count": 3
     },
     {
       "kind": "material",
       "materialId": "circuit",
-      "count": 4
+      "count": 2
     },
     {
       "kind": "material",

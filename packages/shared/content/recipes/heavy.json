@@ -3,19 +3,25 @@
   "name": "Heavy Slug Cannon",
   "inputs": [
     {
+      "kind": "part",
+      "slot": "frame",
+      "weaponClass": "heavy",
+      "count": 1
+    },
+    {
       "kind": "material",
       "materialId": "scrap",
-      "count": 25
+      "count": 12
     },
     {
       "kind": "material",
       "materialId": "alloy",
-      "count": 10
+      "count": 5
     },
     {
       "kind": "material",
       "materialId": "circuit",
-      "count": 3
+      "count": 2
     }
   ],
   "output": {

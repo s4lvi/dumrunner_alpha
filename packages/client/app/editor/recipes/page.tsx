@@ -720,7 +720,9 @@ function RecipeSummary({ recipe }: { recipe: RecipeDef }) {
               ? i.materialId
               : i.kind === 'ammo'
                 ? i.ammoId
-                : i.weaponId}
+                : i.kind === 'part'
+                  ? `${i.weaponClass ? `${i.weaponClass} ` : ''}${i.slot}`
+                  : i.weaponId}
             <span className="text-zinc-600"> ({i.kind})</span>
           </div>
         ))}

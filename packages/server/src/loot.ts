@@ -46,8 +46,22 @@ function nextDropId(): string {
   return `l${_nextDropId++}`;
 }
 
+// Frames are the gun chassis — with weapon recipes consuming a
+// class-pinned frame (economy law), they have to be the common
+// part drop or weapon crafting starves. ~3x weight on frames;
+// everything else uniform.
+const SLOT_WEIGHTS: Array<[PartSlot, number]> = ALL_SLOTS.map((s) => [
+  s,
+  s === 'frame' ? 3 : 1,
+]);
+const SLOT_WEIGHT_TOTAL = SLOT_WEIGHTS.reduce((t, [, w]) => t + w, 0);
+
 function rollSlot(): PartSlot {
-  return ALL_SLOTS[Math.floor(Math.random() * ALL_SLOTS.length)];
+  let r = Math.random() * SLOT_WEIGHT_TOTAL;
+  for (const [slot, w] of SLOT_WEIGHTS) {
+    if ((r -= w) < 0) return slot;
+  }
+  return 'frame';
 }
 
 function rollTier(weights: TierWeights): PartTier {

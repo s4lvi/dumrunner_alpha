@@ -909,6 +909,30 @@ const recipeInputSchema = z.discriminatedUnion('kind', [
       count: z.number().int().positive(),
     })
     .strict(),
+  // Part matcher — consumes a dropped CarriedPart by slot (and class
+  // when pinned). Economy law: weapons assemble from dropped pieces.
+  z
+    .object({
+      kind: z.literal('part'),
+      slot: z.enum([
+        'barrel',
+        'frame',
+        'grip',
+        'magazine',
+        'weapon_mod',
+        'chassis',
+        'plating',
+        'life_support',
+        'utility_mod',
+        'cargo_grid',
+      ]),
+      weaponClass: z
+        .enum(['pistol', 'smg', 'rifle', 'shotgun', 'sniper', 'heavy', 'energy'])
+        .nullable()
+        .optional(),
+      count: z.number().int().positive(),
+    })
+    .strict(),
 ]);
 
 const recipeOutputSchema = z.discriminatedUnion('kind', [

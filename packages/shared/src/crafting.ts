@@ -39,14 +39,30 @@ import {
   type UpgradeKind,
   type WeaponKind,
 } from './inventory';
-import type { BuildingKind, WorkstationKind } from './protocol';
+import type {
+  BuildingKind,
+  PartSlot,
+  WeaponClass,
+  WorkstationKind,
+} from './protocol';
 
 export type RecipeInput =
   | { kind: 'material'; materialId: MaterialKind; count: number }
   | { kind: 'ammo'; ammoId: AmmoKind; count: number }
   // "Weapon-as-component" — consumes a built weapon of the given family.
   // Powers the per-family turret variants (shotgun turret eats a shotgun).
-  | { kind: 'weapon'; weaponId: WeaponKind; count: number };
+  | { kind: 'weapon'; weaponId: WeaponKind; count: number }
+  // Part matcher (economy law: weapons assemble from dropped pieces).
+  // Consumes a dropped CarriedPart whose slot matches — and, when
+  // weaponClass is set, whose class matches too. Any tier qualifies;
+  // the matcher takes the LOWEST-tier match first so god-rolls aren't
+  // silently eaten as crafting fodder.
+  | {
+      kind: 'part';
+      slot: PartSlot;
+      weaponClass?: WeaponClass | null;
+      count: number;
+    };
 
 export type RecipeOutput =
   | { kind: 'placeable'; buildingKind: BuildingKind; count: number }
@@ -145,6 +161,72 @@ export function hasRecipeInput(inv: Inventory, input: RecipeInput): boolean {
       return countAmmo(inv, input.ammoId) >= input.count;
     case 'weapon':
       return countWeapons(inv, input.weaponId) >= input.count;
+    case 'part':
+      return countRecipeParts(inv, input) >= input.count;
+  }
+}
+
+// Part-matcher helpers. A slot matches when the CarriedPart's slot
+// equals the input's, and (when the input pins a class) the classes
+// match. Tier is intentionally unconstrained.
+function partMatches(
+  inv: Inventory,
+  idx: number,
+  input: Extract<RecipeInput, { kind: 'part' }>
+): boolean {
+  const s = inv[idx];
+  if (!s || s.kind !== 'part') return false;
+  if (s.part.slot !== input.slot) return false;
+  if (input.weaponClass != null && s.part.weaponClass !== input.weaponClass) {
+    return false;
+  }
+  return true;
+}
+
+const TIER_ORDER: Record<string, number> = {
+  Mk1: 0,
+  Mk2: 1,
+  Mk3: 2,
+  Mk4: 3,
+  Alien: 4,
+};
+
+export function countRecipeParts(
+  inv: Inventory,
+  input: Extract<RecipeInput, { kind: 'part' }>
+): number {
+  let n = 0;
+  for (let i = 0; i < inv.length; i++) if (partMatches(inv, i, input)) n++;
+  return n;
+}
+
+function consumeMatchingParts(
+  inv: Inventory,
+  input: Extract<RecipeInput, { kind: 'part' }>
+): void {
+  for (let taken = 0; taken < input.count; taken++) {
+    // Lowest tier (then fewest affixes) first — crafting fodder
+    // should never silently eat a god-roll.
+    let best = -1;
+    for (let i = 0; i < inv.length; i++) {
+      if (!partMatches(inv, i, input)) continue;
+      if (best === -1) {
+        best = i;
+        continue;
+      }
+      const a = inv[i];
+      const b = inv[best];
+      if (a.kind !== 'part' || b.kind !== 'part') continue;
+      const dt =
+        (TIER_ORDER[a.part.tier] ?? 0) - (TIER_ORDER[b.part.tier] ?? 0);
+      const aAff = a.part.affixes?.length ?? 0;
+      const bAff = b.part.affixes?.length ?? 0;
+      if (dt < 0 || (dt === 0 && aAff < bAff)) {
+        best = i;
+      }
+    }
+    if (best === -1) return; // caller validated; defensive
+    inv[best] = { kind: 'empty' };
   }
 }
 
@@ -161,6 +243,9 @@ export function consumeRecipeInput(inv: Inventory, input: RecipeInput): void {
       return;
     case 'weapon':
       consumeWeapons(inv, input.weaponId, input.count);
+      return;
+    case 'part':
+      consumeMatchingParts(inv, input);
       return;
   }
 }

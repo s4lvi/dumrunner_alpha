@@ -3,19 +3,25 @@
   "name": "Rifle",
   "inputs": [
     {
+      "kind": "part",
+      "slot": "frame",
+      "weaponClass": "rifle",
+      "count": 1
+    },
+    {
       "kind": "material",
       "materialId": "scrap",
-      "count": 22
+      "count": 11
     },
     {
       "kind": "material",
       "materialId": "alloy",
-      "count": 5
+      "count": 2
     },
     {
       "kind": "material",
       "materialId": "circuit",
-      "count": 4
+      "count": 2
     }
   ],
   "output": {

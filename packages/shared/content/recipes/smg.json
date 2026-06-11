@@ -3,19 +3,25 @@
   "name": "SMG",
   "inputs": [
     {
+      "kind": "part",
+      "slot": "frame",
+      "weaponClass": "smg",
+      "count": 1
+    },
+    {
       "kind": "material",
       "materialId": "scrap",
-      "count": 18
+      "count": 9
     },
     {
       "kind": "material",
       "materialId": "wire",
-      "count": 6
+      "count": 3
     },
     {
       "kind": "material",
       "materialId": "circuit",
-      "count": 2
+      "count": 1
     }
   ],
   "output": {

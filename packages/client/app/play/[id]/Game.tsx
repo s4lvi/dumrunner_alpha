@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   countAmmo,
   countMaterial,
+  countRecipeParts,
   emptyEquipment,
   emptyInventory,
   AFFIX_DEFS,
@@ -5778,12 +5779,16 @@ function RecipeDetails({
         ? input.materialId
         : input.kind === 'ammo'
         ? input.ammoId
+        : input.kind === 'part'
+        ? `${input.weaponClass ? `${input.weaponClass} ` : ''}${input.slot}`
         : input.weaponId;
     const have =
       input.kind === 'material'
         ? countMaterial(inventory, input.materialId)
         : input.kind === 'ammo'
         ? countAmmo(inventory, input.ammoId)
+        : input.kind === 'part'
+        ? countRecipeParts(inventory, input)
         : countWeaponsInInventory(inventory, input.weaponId);
     return { id, have, need: input.count, satisfied: have >= input.count };
   });
@@ -5939,12 +5944,16 @@ function CraftRow({
         ? input.materialId
         : input.kind === 'ammo'
         ? input.ammoId
+        : input.kind === 'part'
+        ? `${input.weaponClass ? `${input.weaponClass} ` : ''}${input.slot}`
         : input.weaponId;
     const have =
       input.kind === 'material'
         ? countMaterial(inventory, input.materialId)
         : input.kind === 'ammo'
         ? countAmmo(inventory, input.ammoId)
+        : input.kind === 'part'
+        ? countRecipeParts(inventory, input)
         : countWeaponsInInventory(inventory, input.weaponId);
     return {
       id,

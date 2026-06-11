@@ -419,10 +419,15 @@ async function validateRefByKind(
     | { kind: 'placeable'; buildingKind: string }
     | { kind: 'attachment'; defId: string }
     | { kind: 'consumable'; consumableId: string }
-    | { kind: 'upgrade'; upgradeId: string },
+    | { kind: 'upgrade'; upgradeId: string }
+    // Part-matcher inputs carry enum-validated slot/class fields,
+    // not a registry id — nothing to cross-check.
+    | { kind: 'part'; slot: string; weaponClass?: string | null },
   fieldPath: string,
 ): Promise<string | null> {
   switch (ref.kind) {
+    case 'part':
+      return null;
     case 'material':
       if (!(ref.materialId in MATERIALS)) {
         return `${fieldPath}: material "${ref.materialId}" doesn't exist`;
