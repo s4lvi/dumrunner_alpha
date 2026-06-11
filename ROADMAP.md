@@ -445,10 +445,8 @@ From the 2026-05-06 code review; **all 10 re-verified still open
 
 **Security:**
 
-- **`makeOauthState` uses `Math.random()`**
-  (`packages/client/lib/discord/auth.ts:182`). CSRF state from
-  `Date.now() + Math.random() + process.pid`. Swap to
-  `crypto.randomBytes(16).toString('hex')`. One-liner.
+- ~~`makeOauthState` uses `Math.random()`~~ — fixed 2026-06-10
+  (`crypto.randomBytes(16)`).
 - **`parseInventoryJson` casts without Zod**
   (`packages/server/src/index.ts:609,611`). `obj.slots as
   Inventory` / `obj.equipment as Equipment`. Safe only because no
@@ -460,23 +458,20 @@ From the 2026-05-06 code review; **all 10 re-verified still open
   (`packages/server/src/index.ts:241-406`). Only chat is limited.
   Per-connection token bucket so valid `inventory_swap` / `fire`
   spam can't saturate the Fly machine.
-- **Tile coords + dir/move magnitudes unbounded**
-  (`packages/shared/src/protocol.ts:537-539,549-550,590-591`).
-  Add `.min(-100000).max(100000)` + magnitude bounds; today an
-  IEEE-754 overflow-then-distance-check is load-bearing.
+- ~~Tile coords + dir/move magnitudes unbounded~~ — fixed
+  2026-06-10 (±100000 tile bounds, ±8 vector components).
 - **`JOIN_TOKEN_SECRET` reused for two flows** — join-token HMAC
   key *and* Discord synthetic-user password seed. Add
   `DISCORD_USER_SECRET` if independent rotation ever matters.
 
 **Maintainability:**
 
-- **`heartbeatTimer` shadows itself**
-  (`packages/server/src/index.ts:193,219`). Rename the inner
-  per-connection timer to `lastSeenTimer`.
+- ~~`heartbeatTimer` shadows itself~~ — fixed 2026-06-10 (inner
+  timer renamed `lastSeenTimer`).
 - ~~Rename `WORLD_SNAPSHOT_SCHEMA` → `WORLD_STATE_SCHEMA`~~ —
   done 2026-06-10 with the snapshot v4 change.
-- **`migrateLegacyAttachmentSlots` discards overflow silently**
-  (`packages/server/src/index.ts:550-562`). Log the discard count.
+- ~~`migrateLegacyAttachmentSlots` discards overflow silently~~ —
+  fixed 2026-06-10 (drop count logged).
 - **Per-character `last_seen_at` write every 30s**
   (`packages/server/src/index.ts:378-380`). Fine at the 5–10
   player cap; batch per world tick if the cap rises.
