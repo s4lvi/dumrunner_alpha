@@ -1,5 +1,5 @@
 import 'server-only';
-import { createHash, createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { serverEnv } from '../env';
 import { supabaseAdmin } from '../supabase/admin';
 
@@ -176,10 +176,9 @@ export async function provisionDiscordSession(profile: DiscordProfile): Promise<
 }
 
 // CSRF state for the OAuth round-trip. Stored in a short-lived
-// http-only cookie; we compare-equal on the callback.
+// http-only cookie; we compare-equal on the callback. Must be
+// cryptographically random — the old Date.now()/Math.random()
+// derivation was guessable, defeating the CSRF check.
 export function makeOauthState(): string {
-  return createHash('sha256')
-    .update(`${Date.now()}:${Math.random()}:${process.pid}`)
-    .digest('hex')
-    .slice(0, 32);
+  return randomBytes(16).toString('hex');
 }

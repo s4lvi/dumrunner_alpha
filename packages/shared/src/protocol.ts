@@ -549,6 +549,11 @@ export type ProjectileState = {
 // editing one place.
 
 const finiteNumber = z.number().finite();
+// Direction / movement vector components. Clients send unit-ish
+// vectors; bound the magnitude so a hostile client can't feed
+// huge components into downstream math (normalisation divides by
+// length, but intermediate squares can overflow precision).
+const unitishNumber = z.number().finite().min(-8).max(8);
 
 export const AuthMsgSchema = z.object({
   type: z.literal('auth'),
@@ -561,8 +566,8 @@ export const AuthMsgSchema = z.object({
 // simulation. Server clamps + normalises.
 export const InputMsgSchema = z.object({
   type: z.literal('input'),
-  moveX: finiteNumber,
-  moveY: finiteNumber,
+  moveX: unitishNumber,
+  moveY: unitishNumber,
   sprint: z.boolean(),
   // Phase 7 vertical inputs. `jump` is edge-triggered (true on
   // press, the server consumes it once). `crouch` is held. Both
@@ -573,13 +578,13 @@ export const InputMsgSchema = z.object({
 
 export const FireMsgSchema = z.object({
   type: z.literal('fire'),
-  dirX: finiteNumber,
-  dirY: finiteNumber,
+  dirX: unitishNumber,
+  dirY: unitishNumber,
   // Pitch-aware vertical aim. Optional so older clients still
   // fire (Phase 7 added this); server defaults to 0 (level) when
   // absent. Sent as the un-normalised Z component of the
   // camera's forward vector — server normalises the full vec3.
-  dirZ: finiteNumber.optional(),
+  dirZ: unitishNumber.optional(),
 });
 
 // Closed set of BuildingKinds that players are allowed to place
@@ -614,8 +619,10 @@ export type PlaceableBuildingKind = z.infer<typeof BuildingKindSchema>;
 export const BuildRequestMsgSchema = z.object({
   type: z.literal('build_request'),
   kind: BuildingKindSchema,
-  tileX: z.number().int(),
-  tileY: z.number().int(),
+  // Bounded so a hostile client can't send coordinates that only
+  // fail via IEEE-754 overflow in downstream distance math.
+  tileX: z.number().int().min(-100000).max(100000),
+  tileY: z.number().int().min(-100000).max(100000),
 });
 
 export const DemolishRequestMsgSchema = z.object({

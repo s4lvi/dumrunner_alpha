@@ -216,7 +216,9 @@ wss.on('connection', (ws: WebSocket) => {
   // with a valid signed JoinToken. Anything else is a protocol violation.
   let player: Player | null = null;
   let serverId: string | null = null;
-  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  // Per-connection last_seen heartbeat (named distinctly from the
+  // module-level WS ping-sweep heartbeatTimer it used to shadow).
+  let lastSeenTimer: ReturnType<typeof setInterval> | null = null;
   // Editor-sandbox connections run a per-WS World{sandbox:true}.
   // No more parallel `SandboxWorld` class — message dispatch is
   // the same MESSAGE_HANDLERS table the live game uses, sandbox
@@ -375,7 +377,7 @@ wss.on('connection', (ws: WebSocket) => {
       // "occupying a slot"; without this heartbeat, a character that
       // joined an hour ago and never disconnected would appear idle.
       void touchLastSeen(characterId);
-      heartbeatTimer = setInterval(
+      lastSeenTimer = setInterval(
         () => touchLastSeen(characterId),
         30_000
       );
@@ -408,7 +410,7 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('close', () => {
     clearTimeout(authTimer);
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (lastSeenTimer) clearInterval(lastSeenTimer);
     if (sandboxWorld && player) {
       // Sandbox world is per-connection; remove the player + let
       // the timer-stop path tear it down via idle shutdown.
