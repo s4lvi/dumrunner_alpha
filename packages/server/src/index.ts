@@ -190,6 +190,16 @@ wss.on('listening', () => {
 // dead and we tear them down.
 type HeartbeatWS = WebSocket & { isAlive?: boolean };
 const HEARTBEAT_INTERVAL_MS = 25_000;
+// Rate-limit tuning. Wide bucket: all messages — sized for the 60Hz
+// input stream plus bursts (hotbar scrolling, chat, UI). Tight
+// bucket: everything except input — 25/s sustained with a 60 burst
+// covers every legitimate UI interaction with a wide margin.
+const RATE_WIDE_CAP = 240;
+const RATE_WIDE_PER_SEC = 120;
+const RATE_TIGHT_CAP = 60;
+const RATE_TIGHT_PER_SEC = 25;
+const RATE_DROPS_BEFORE_CLOSE = 600;
+
 const heartbeatTimer = setInterval(() => {
   for (const client of wss.clients) {
     const c = client as HeartbeatWS;
@@ -240,7 +250,35 @@ wss.on('connection', (ws: WebSocket) => {
     }
   }, 5000);
 
+  // Per-connection rate limiting — two token buckets refilled
+  // continuously. The wide bucket covers everything including the
+  // ~60Hz input stream; the tight bucket covers every NON-input
+  // message (fire/build/craft/inventory ops) so a hostile client
+  // can't saturate the machine with valid-but-spammed actions.
+  // Sustained overflow closes the socket.
+  let wideBudget = RATE_WIDE_CAP;
+  let tightBudget = RATE_TIGHT_CAP;
+  let rateRefillAt = Date.now();
+  let rateDrops = 0;
+
   ws.on('message', async (data) => {
+    // Rate gate before any parsing — the cheapest rejection path.
+    const rnow = Date.now();
+    const elapsed = (rnow - rateRefillAt) / 1000;
+    rateRefillAt = rnow;
+    wideBudget = Math.min(RATE_WIDE_CAP, wideBudget + elapsed * RATE_WIDE_PER_SEC);
+    tightBudget = Math.min(
+      RATE_TIGHT_CAP,
+      tightBudget + elapsed * RATE_TIGHT_PER_SEC
+    );
+    if (wideBudget < 1) {
+      if (++rateDrops > RATE_DROPS_BEFORE_CLOSE) {
+        ws.close(4008, 'rate_limited');
+      }
+      return;
+    }
+    wideBudget -= 1;
+
     // Parse JSON envelope.
     let raw: unknown;
     try {
@@ -259,6 +297,20 @@ wss.on('connection', (ws: WebSocket) => {
       return;
     }
     const msg = parsed.data;
+
+    // Non-input messages draw from the tight bucket too. Input is
+    // exempt (legitimately ~frame-rate); everything else has no
+    // business exceeding tens per second.
+    if (msg.type !== 'input') {
+      if (tightBudget < 1) {
+        if (++rateDrops > RATE_DROPS_BEFORE_CLOSE) {
+          ws.close(4008, 'rate_limited');
+        }
+        return;
+      }
+      tightBudget -= 1;
+    }
+    rateDrops = 0;
 
     if (!player) {
       // Pre-auth: only 'auth' is accepted.

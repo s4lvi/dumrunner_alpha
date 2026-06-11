@@ -454,10 +454,10 @@ From the 2026-05-06 code review; **all 10 re-verified still open
 - **Discord lookup paginates only the first 200 users**
   (`packages/client/lib/discord/auth.ts:144`). Capture the user id
   elsewhere or paginate.
-- **No WebSocket-level rate limit before dispatch**
-  (`packages/server/src/index.ts:241-406`). Only chat is limited.
-  Per-connection token bucket so valid `inventory_swap` / `fire`
-  spam can't saturate the Fly machine.
+- ~~No WebSocket-level rate limit before dispatch~~ — fixed
+  2026-06-10: dual per-connection token buckets (wide 120/s for
+  everything incl. the input stream; tight 25/s for non-input
+  actions), sustained overflow closes 4008.
 - ~~Tile coords + dir/move magnitudes unbounded~~ — fixed
   2026-06-10 (±100000 tile bounds, ±8 vector components).
 - **`JOIN_TOKEN_SECRET` reused for two flows** — join-token HMAC
