@@ -30,6 +30,19 @@ async function main() {
         );
         if (!near) misplaced++;
       }
+      // Pit riser walls: every pit sector should carry perimeter
+      // walls; report how many walls reference each pit and their
+      // z-override bands so missing risers are visible in data.
+      for (const pit of pits) {
+        const ws = map.walls.filter((w: any) => w.sectorId === pit.id);
+        console.log(
+          `  pit s${pit.id} floorZ=${pit.floorZ} walls=${ws.length}` +
+          ` bands=${ws
+            .map((w: any) => `[${w.floorZOverride ?? '-'},${w.ceilingZOverride ?? '-'}]s${w.solid ? 1 : 0}`)
+            .slice(0, 4)
+            .join(' ')}`
+        );
+      }
       console.log(
         `seed=${seed} floor=${floor} sectors=${secs.length}` +
         ` plats=${plats.length} pits=${pits.length} withHoles=${holes.length}` +

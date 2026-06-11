@@ -1513,7 +1513,14 @@ export function runFpsV2Game(
       if (Math.abs(targetSelfY - selfY) < 0.05) selfY = targetSelfY;
     }
     const targetFloor = floorAt(selfX, selfY);
-    const dz = targetFloor - cameraFloorZ;
+    // Airborne: freeze the camera's floor anchor. The server keeps
+    // absolute height invariant across floor re-anchors mid-jump
+    // (jumpZ compensates), so letting cameraFloorZ chase the floor
+    // under the player would double-count the change and dip the
+    // camera when flying over a pit. The floor re-resolves on
+    // landing.
+    const airborne = cameraJumpZ > 0.5 || selfJumpZ > 0.5;
+    const dz = airborne ? 0 : targetFloor - cameraFloorZ;
     if (dz > 0) {
       // Step up — snap. Camera lerping behind the floor while the
       // player's XY is already on the upper tile puts the camera

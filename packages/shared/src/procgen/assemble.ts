@@ -668,9 +668,25 @@ function recarveSubSectorHoles(
         { x: px + pw, y: py },
       ];
       for (const s of map.sectors) {
-        // Skip the sub-sector itself (same floor height as the
-        // carve source); parents are room sectors at floorZ 0.
-        if (s.floorZ === v.floorZ) continue;
+        if (s.floorZ === v.floorZ && pointInPolygon(s.verts, cx, cy)) {
+          // The sub-sector itself. The round-trip also strips the
+          // explicit riser bands assembleSceneLayout pinned on its
+          // perimeter walls (floorZOverride/ceilingZOverride) — the
+          // renderer needs them to draw the pit/platform sides.
+          // Re-pin: band spans room floor (0) ↔ sub-sector floor,
+          // solid:false so the step-up gate still allows climbing.
+          const riserBot = Math.min(0, v.floorZ);
+          const riserTop = Math.max(0, v.floorZ);
+          for (const w of map.walls) {
+            if (w.sectorId !== s.id) continue;
+            w.solid = false;
+            w.floorZOverride = riserBot;
+            w.ceilingZOverride = riserTop;
+          }
+          continue;
+        }
+        // Other containing sectors (the parent room at floorZ 0)
+        // get the footprint hole.
         if (!pointInPolygon(s.verts, cx, cy)) continue;
         s.holes = [...(s.holes ?? []), hole];
       }

@@ -570,6 +570,13 @@ export class Scene {
     }
     if (kind === 'dungeon_floor' && initialDoors) {
       this.populateDoors(initialDoors);
+      // Doors are buildings, and buildings enter collision via the
+      // sector-map rebuild — which already ran above, BEFORE these
+      // doors existed. Rebuild so locked doors actually block. This
+      // was masked when doors sat behind sealed polygon walls; they
+      // now sit in open doorway portals where the cube is the only
+      // thing in the way.
+      this.rebuildSectorMap();
     }
     if (kind === 'dungeon_floor' && initialProps) {
       this.populateInitialProps(initialProps);
