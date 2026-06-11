@@ -89,21 +89,27 @@ High level; the code is the record. PROTOCOL_VERSION 44.
 
 Open (verified against code 2026-06-10):
 
-- **Empty-server clock stasis can stretch cycles.** The cycle
-  anchor slides forward whenever `connections.size === 0`
-  (`world.ts:3128-3141`); connect/disconnect churn keeps pushing
-  perihelion out. Cap the slide.
-- **Loot drop TTL** — 90s expiry too short for tactical pacing;
-  consider 180s or floor-depth scaling.
+- **Cycle clock vs downtime.** On rejoin after an empty period the
+  snapshot-restored `cycleStartedAt` isn't adjusted for the gap —
+  verify whether offline time burns cycle time (and decide which
+  behavior is wanted) before changing the stasis logic.
+- ~~Loot drop TTL~~ — bumped 90s → 180s (2026-06-10); revisit
+  floor-depth scaling if it still pinches.
 
 Minor watchlist (low): input zeroed on server stalls
 (`PLAYER_INPUT_TTL_MS` vs variable dt); turret targeting is
 O(turrets × enemies) and AI LoS O(enemies × players) per tick —
-the horde perf ceiling; `lastChatAt` map never pruned;
-`lastLandedAt` grace written but never read; `findBlockingWall`
-uses standing height while crouched; post-eviction corpses at
-cycle end escape the wipe; loot pickup tie-break is map-iteration
-order.
+the horde perf ceiling; `lastLandedAt` grace written but never
+read; `findBlockingWall` uses standing height while crouched;
+post-eviction corpses at cycle end escape the wipe; loot pickup
+tie-break is map-iteration order.
+
+Note on the "empty-server clock stasis" item previously listed
+here: the world's timers stop entirely when the last player
+leaves, so the slide path barely runs — the review's read was
+off. Real behavior to verify instead: whether downtime counts
+against the cycle on rejoin (cycleStartedAt is restored from
+snapshot without adjusting for the gap).
 
 Fixed 2026-06-10 (gameplay-systems review + playtest report):
 corpse looting destroyed `upgrade` items; blueprint per-cycle wipe

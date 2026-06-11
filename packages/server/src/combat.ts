@@ -171,7 +171,9 @@ export const COMBAT = {
   ENEMY_FALLBACK_HP: 100,
   ENEMY_FALLBACK_RADIUS: 18,
 
-  LOOT_TTL_MS: 90_000,
+  // 180s — 90s read as too short for the deliberate tactical pacing
+  // (loot vanished while players were still clearing the room).
+  LOOT_TTL_MS: 180_000,
   LOOT_PICKUP_RADIUS: 28,
 
   // Players can only place buildings within this many tiles of their current

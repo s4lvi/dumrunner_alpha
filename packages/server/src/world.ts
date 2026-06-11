@@ -1342,6 +1342,9 @@ export class World {
     this.connections.delete(characterId);
     this.removeFromCurrentScene(conn);
     void this.persistConnection(conn);
+    // Drop per-character bookkeeping that would otherwise grow with
+    // unique-player history for the life of the process.
+    this.lastChatAt.delete(conn.characterId);
     this.systemChat(`${departingName} left the server.`);
 
     if (this.connections.size === 0) {

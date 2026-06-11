@@ -547,9 +547,10 @@ function migrateLegacyAttachmentSlots(inv: Inventory): Inventory {
     }
   }
 
-  // Place queued instances into existing empty slots; drop
-  // overflow. Logging the loss isn't critical for the alpha —
-  // this path only fires for ancient saves anyway.
+  // Place queued instances into existing empty slots; drop overflow.
+  // This path only fires for ancient saves, but log the loss so an
+  // unexpected trigger is observable instead of silent.
+  let dropped = 0;
   for (const inst of queue) {
     let placed = false;
     for (let i = 0; i < out.length; i++) {
@@ -559,7 +560,12 @@ function migrateLegacyAttachmentSlots(inv: Inventory): Inventory {
         break;
       }
     }
-    if (!placed) break;
+    if (!placed) dropped++;
+  }
+  if (dropped > 0) {
+    console.warn(
+      `[migrate] legacy attachment migration dropped ${dropped} overflow instance(s) — no empty slots`
+    );
   }
   return out;
 }
