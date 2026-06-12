@@ -4164,8 +4164,11 @@ function ModalTabs<T extends string>({
   return (
     <div
       className={
+        // Compact rows live inside narrow rails (e.g. the 200px
+        // recipe column) — wrap instead of overflowing into the
+        // neighbouring pane.
         'flex border-b border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 ' +
-        (compact ? 'px-3' : 'px-5')
+        (compact ? 'px-2 flex-wrap min-w-0' : 'px-5')
       }
     >
       {tabs.map((t) => (
@@ -4173,7 +4176,9 @@ function ModalTabs<T extends string>({
           key={t.id}
           onClick={() => onSelect(t.id)}
           className={
-            (compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-4 py-2 text-xs') +
+            (compact
+              ? 'px-2 py-1.5 text-[10px] whitespace-nowrap'
+              : 'px-4 py-2 text-xs') +
             ' uppercase tracking-wider border-b-2 -mb-px transition-colors duration-100 ' +
             (active === t.id
               ? 'text-zinc-100 border-[color:var(--accent)]'
@@ -4524,7 +4529,7 @@ function WorkstationModal({
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-[200px_1fr] sm:divide-x divide-[color:var(--panel-border)] min-h-[280px]">
           {/* Left column — category tabs + recipe list */}
-          <div className="flex flex-col min-h-0">
+          <div className="flex flex-col min-h-0 min-w-0 overflow-hidden">
             {categoryTabs.length > 1 && (
               <ModalTabs
                 compact
