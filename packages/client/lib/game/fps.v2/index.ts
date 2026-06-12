@@ -1308,9 +1308,10 @@ export function runFpsV2Game(
     }
     for (const l of loot.values()) {
       // Resolve a per-loot texture by content kind. Materials
-      // have `material/<materialId>` overrides; parts use the
-      // tier colour as a fallback (no per-part static texture
-      // today); everything else uses a generic amber pouch.
+      // have `material/<materialId>` overrides; parts and
+      // attachment instances get labeled fallback billboards
+      // (tier colour / amber — no texture category exists for
+      // them); everything else uses a generic amber pouch.
       // Same priority chain v1 uses so authored textures port
       // cleanly.
       let staticTex: import('pixi.js').Texture | null = null;
@@ -1318,9 +1319,7 @@ export function runFpsV2Game(
       if (l.content.kind === 'material') {
         color = materialTint(l.content.materialId);
         // Labeled fallback names the missing `material/<id>`
-        // override. Parts / generic pouches keep the colored
-        // billboard — they have no per-id texture category to
-        // upload against.
+        // override.
         staticTex =
           lookupTexture('material', l.content.materialId) ??
           makeLabeledFallbackTexture(
@@ -1329,7 +1328,27 @@ export function runFpsV2Game(
             color,
           );
       } else if (l.content.kind === 'part') {
+        // No `part` texture category exists in the editor, so the
+        // labeled fallback is the texture: tier color background,
+        // slot (+ weapon class when class-locked) as the id.
         color = TIER_COLORS_NUM[l.content.part.tier] ?? PROJECTILE_DEFAULT_COLOR;
+        const part = l.content.part;
+        const partId = part.weaponClass
+          ? `${part.slot} (${part.weaponClass})`
+          : part.slot;
+        staticTex = makeLabeledFallbackTexture('part', partId, color);
+      } else if (
+        l.content.kind === 'slot' &&
+        l.content.slot.kind === 'attachment'
+      ) {
+        // Attachment-instance drops — same deal, no texture
+        // category to upload against, so label the billboard with
+        // the attachment defId in the existing amber.
+        staticTex = makeLabeledFallbackTexture(
+          'mod',
+          l.content.slot.instance.defId,
+          color,
+        );
       }
       const groundZ = entityFloorAt(l.x, l.y);
       if (staticTex) {
@@ -1361,14 +1380,28 @@ export function runFpsV2Game(
     // per live particle into the scratch list — same billboard
     // path as everything else, so they depth-test against walls.
     particles.update(nowMs, spriteScratch);
+    // Corpse pouches — labeled billboard in the old solid grey.
+    // No `corpse` texture category exists in the editor, so the
+    // label is the texture rather than a missing-override hint.
+    const corpseTex = makeLabeledFallbackTexture(
+      'corpse',
+      'pouch',
+      CORPSE_COLOR,
+    );
     for (const c of corpses.values()) {
-      spriteScratch.push({
-        x: c.x,
-        y: c.y,
-        anchorZ: entityFloorAt(c.x, c.y),
-        height: CORPSE_SIZE,
-        color: CORPSE_COLOR,
-      });
+      texturedSprites.push(
+        {
+          textureKey: corpseTex.uid,
+          texture: corpseTex,
+          x: c.x,
+          y: c.y,
+          anchorZ: entityFloorAt(c.x, c.y),
+          height: CORPSE_SIZE,
+          aspect: textureAspect(corpseTex),
+          tint: 0xffffff,
+        },
+        camera,
+      );
     }
     // Other players (multiplayer). Skip self — the camera is
     // already at our world position; rendering a sprite there
