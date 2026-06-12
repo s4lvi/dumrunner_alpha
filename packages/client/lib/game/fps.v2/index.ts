@@ -1113,7 +1113,7 @@ export function runFpsV2Game(
       );
       const staticTex = animTex ? null : lookupTexture('enemy', e.kind);
       const tex = animTex ?? staticTex;
-      const groundZ = floorAt(e.x, e.y);
+      const groundZ = entityFloorAt(e.x, e.y);
       // Hit flash: white tint for HIT_FLASH_MS after the server
       // reports an HP drop. setEnemyHp writes the timestamp.
       const flashAt = enemyHitFlashAt.get(e.id) ?? 0;
@@ -1160,7 +1160,7 @@ export function runFpsV2Game(
       // it sits on the actual ground.
       const offsetFrac = v.spriteGroundOffset ?? 0;
       const anchorZ =
-        floorAt(p.x, p.y) + offsetFrac * Math.max(0, ceilingZ - h);
+        entityFloorAt(p.x, p.y) + offsetFrac * Math.max(0, ceilingZ - h);
       // Animation frame first, static prop/<kind> texture
       // second, colored tint last. The static fallback is what
       // gives props authored before the animation system shipped
@@ -1294,7 +1294,7 @@ export function runFpsV2Game(
       } else if (l.content.kind === 'part') {
         color = TIER_COLORS_NUM[l.content.part.tier] ?? PROJECTILE_DEFAULT_COLOR;
       }
-      const groundZ = floorAt(l.x, l.y);
+      const groundZ = entityFloorAt(l.x, l.y);
       if (staticTex) {
         texturedSprites.push(
           {
@@ -1347,7 +1347,7 @@ export function runFpsV2Game(
       spriteScratch.push({
         x: c.x,
         y: c.y,
-        anchorZ: floorAt(c.x, c.y),
+        anchorZ: entityFloorAt(c.x, c.y),
         height: CORPSE_SIZE,
         color: CORPSE_COLOR,
       });
@@ -1363,7 +1363,7 @@ export function runFpsV2Game(
       // Broadcast absolute feet z anchors the billboard so a
       // jumping teammate visibly leaves the ground; fall back to
       // the local floor mirror when z hasn't arrived yet.
-      const groundZ = p.z ?? floorAt(p.x, p.y);
+      const groundZ = p.z ?? entityFloorAt(p.x, p.y);
       if (playerTex) {
         texturedSprites.push(
           {
@@ -1415,7 +1415,7 @@ export function runFpsV2Game(
     // most representative height.
     const cx = ox + tileSize * 0.5;
     const cy = oy + tileSize * 0.5;
-    const oz = floorAt(cx, cy);
+    const oz = entityFloorAt(cx, cy);
     ghostCube.setTransform(ox, oy, oz, tileSize, tileSize, tileSize);
     const color = target.inRange ? 0x55ff88 : 0xff5555;
     ghostCube.setColor(color, 0.32);
@@ -1599,10 +1599,27 @@ export function runFpsV2Game(
   // as the server's stateful `conn.floorZ`. (While airborne the
   // feet z rises, which matches the server's cap = feet z.)
   function floorAt(x: number, y: number): number {
+    return floorAtWithCap(x, y, cameraZ + STEP_UP_MAX_CLIENT);
+  }
+
+  // Uncapped floor resolution for anchoring OTHER entities
+  // (props, enemies, loot, corpses, remote players without a
+  // broadcast z). The player cap above is camera-relative — it
+  // exists so the LOCAL camera doesn't snap onto an overhead
+  // sector — but entity anchors must not depend on the local
+  // player's height: a prop standing on a raised platform sits
+  // at the platform top whether or not we've jumped. Procgen
+  // never stacks walkable floors over pits/platforms today, so
+  // the smallest-containing-sector / highest-platform rule
+  // resolves the true standing floor from xy alone.
+  function entityFloorAt(x: number, y: number): number {
+    return floorAtWithCap(x, y, Infinity);
+  }
+
+  function floorAtWithCap(x: number, y: number, cap: number): number {
     let z = 0;
     const terrain = layout?.terrain;
     if (terrain) z = terrainHeightAt(terrain, x, y);
-    const cap = cameraZ + STEP_UP_MAX_CLIENT;
     const platforms = layout?.platforms;
     if (platforms && platforms.length > 0) {
       const tileSize = layout?.tileSize ?? 32;
