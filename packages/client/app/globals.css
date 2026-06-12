@@ -50,3 +50,37 @@ input, select, textarea, button {
   animation: scene-transition-wipe 520ms ease-out forwards;
   will-change: opacity, background-position;
 }
+
+/* Toast entrance — short slide in from the right + fade. Replayed per
+   toast because the element is keyed on the toast's timestamp. */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.toast-in {
+  animation: toast-in 150ms ease-out;
+}
+
+/* Modal entrance — subtle rise + fade so panels feel mounted rather
+   than popped. Shared by every Modal via the panel wrapper. */
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.modal-pop {
+  animation: modal-pop 140ms ease-out;
+}

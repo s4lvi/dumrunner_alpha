@@ -2431,6 +2431,11 @@ export class Scene {
       let hit = false;
       let earliestT = 1;
       let hitAction: (() => void) | null = null;
+      // What kind of thing the earliest hit struck — drives the
+      // client's impact particles (blood vs sparks). Every branch
+      // that wins earliestT must also set this, since a later
+      // candidate with a smaller t overwrites a prior winner.
+      let hitKind: 'flesh' | 'surface' = 'surface';
 
       if (p.ownerKind === 'player') {
         for (const enemy of this.enemies.values()) {
@@ -2446,6 +2451,7 @@ export class Scene {
           );
           if (t !== null && t < earliestT) {
             earliestT = t;
+            hitKind = 'flesh';
             hitAction = () => {
               this.damageEnemy(enemy, p.damage, now);
               // Apply each imbue to the enemy. burn_dps and
@@ -2488,6 +2494,7 @@ export class Scene {
             );
             if (t !== null && t < earliestT) {
               earliestT = t;
+              hitKind = 'surface';
               hitAction = () => {
                 /* friendly building absorbs the round, no damage */
               };
@@ -2513,6 +2520,7 @@ export class Scene {
           );
           if (t !== null && t < earliestT) {
             earliestT = t;
+            hitKind = 'surface';
             const target = prop;
             hitAction = () => this.damageProp(target, p.damage, now);
           }
@@ -2546,6 +2554,7 @@ export class Scene {
                 : COMBAT.PLAYER_HEIGHT_STAND);
             if (hitZ < tBot || hitZ > tTop) continue;
             earliestT = t;
+            hitKind = 'flesh';
             const targetConn = conn;
             const killerId = p.ownerCharacterId;
             hitAction = () => {
@@ -2584,6 +2593,7 @@ export class Scene {
               : COMBAT.PLAYER_HEIGHT_STAND);
           if (hitZ < tBot || hitZ > tTop) continue;
           earliestT = t;
+          hitKind = 'flesh';
           hitAction = () => {
             this.applyDamage(conn, p.damage, now);
             if (conn.hp <= 0) this.killPlayer(conn, now);
@@ -2610,6 +2620,7 @@ export class Scene {
             );
             if (t !== null && t < earliestT) {
               earliestT = t;
+              hitKind = 'surface';
               hitAction = () => this.damageBuilding(b, p.damage, now);
             }
           }
@@ -2631,6 +2642,7 @@ export class Scene {
         if (wallT !== null && wallT < earliestT) {
           earliestT = wallT;
           hitAction = null;
+          hitKind = 'surface';
         }
       }
 
@@ -2647,6 +2659,7 @@ export class Scene {
         if (tGround < earliestT) {
           earliestT = tGround;
           hitAction = null;
+          hitKind = 'surface';
         }
       }
 
@@ -2665,6 +2678,7 @@ export class Scene {
           x: p.x,
           y: p.y,
           z: p.z,
+          hitKind,
         });
         hit = true;
       } else if (earliestT < 1) {
@@ -2682,6 +2696,7 @@ export class Scene {
           x: p.x,
           y: p.y,
           z: p.z,
+          hitKind,
         });
         hit = true;
       }

@@ -33,6 +33,7 @@ import {
   buildTexturedWallGeometry,
 } from './sectorGeometry';
 import { createSpriteLayer, type SpriteRequest } from './spriteLayer';
+import { createParticleSystem } from './particles';
 import { lookupTexture } from './textureCache';
 import {
   createTexturedSectorCameraUniforms,
@@ -248,15 +249,11 @@ export function runFpsV2Game(
   // only on the press frame, not while held.
   let lastSpaceDown = false;
 
-  // Bullet impact sprites — transient billboards spawned on
-  // 'hit' despawns. Owned by the renderer (no server state),
-  // GC'd after IMPACT_TTL_MS.
-  type Impact = { id: string; x: number; y: number; z: number; spawnedAt: number };
-  const impacts: Impact[] = [];
-  let impactCursor = 0;
-  const IMPACT_TTL_MS = 220;
-  const IMPACT_SIZE = 6;
-  const IMPACT_COLOR = 0xffe7a8;
+  // Impact particles — blood bursts on flesh hits, spark bursts
+  // on surface hits. Owned by the renderer (no server state);
+  // fixed-pool CPU sim ticked from updateSprites, rendered as
+  // tiny depth-tested billboards through the sprite layer.
+  const particles = createParticleSystem();
 
   // Minimap fog. seenTiles is a per-cell bitmap (1 byte/cell)
   // that the minimap painter reads to dim unexplored tiles.
@@ -1319,30 +1316,11 @@ export function runFpsV2Game(
         });
       }
     }
-    // Bullet impact sprites. In-place compaction GCs old entries
-    // so the list doesn't grow unbounded. Each impact reads as
-    // a small flash that fades by scaling alpha — first cut uses
-    // a flat colored billboard; later we can swap in a texture
-    // override + per-weapon family.
-    {
-      const nowI = performance.now();
-      let write = 0;
-      for (let i = 0; i < impacts.length; i++) {
-        const imp = impacts[i];
-        const age = nowI - imp.spawnedAt;
-        if (age >= IMPACT_TTL_MS) continue;
-        if (write !== i) impacts[write] = imp;
-        write++;
-        spriteScratch.push({
-          x: imp.x,
-          y: imp.y,
-          anchorZ: imp.z - IMPACT_SIZE * 0.5,
-          height: IMPACT_SIZE,
-          color: IMPACT_COLOR,
-        });
-      }
-      impacts.length = write;
-    }
+    // Impact particles (blood / sparks). The system integrates
+    // its own dt from `nowMs` and pushes one preallocated sprite
+    // per live particle into the scratch list — same billboard
+    // path as everything else, so they depth-test against walls.
+    particles.update(nowMs, spriteScratch);
     for (const c of corpses.values()) {
       spriteScratch.push({
         x: c.x,
@@ -2086,11 +2064,34 @@ export function runFpsV2Game(
     },
     setEnemyHp: (id: string, hp: number) => {
       const prev = enemyPrevHp.get(id);
+      const e = enemies.get(id);
       if (prev !== undefined && hp < prev) {
-        enemyHitFlashAt.set(id, performance.now());
+        const now = performance.now();
+        enemyHitFlashAt.set(id, now);
+        // Small blood tick at the enemy's body on ANY damage —
+        // covers melee swings, which never spawn a projectile so
+        // the despawnProjectile burst can't fire. Projectile hits
+        // also pass here, stacking a little extra on top of the
+        // contact-point burst, which reads fine. Half intensity
+        // keeps it a tick, not a full splatter.
+        if (e) {
+          const groundZ = entityFloorAt(e.x, e.y);
+          const v = enemyVisualFor(e.kind);
+          particles.spawnImpact(
+            'flesh',
+            e.x,
+            e.y,
+            groundZ + v.size * 0.55,
+            now,
+            groundZ,
+            undefined,
+            undefined,
+            undefined,
+            0.5,
+          );
+        }
       }
       enemyPrevHp.set(id, hp);
-      const e = enemies.get(id);
       if (e) e.hp = hp;
     },
     spawnProjectile: (p: ProjectileState) => {
@@ -2125,7 +2126,12 @@ export function runFpsV2Game(
       x?: number,
       y?: number,
       z?: number,
+      hitKind?: 'flesh' | 'surface',
     ) => {
+      // Grab the velocity before deletion — it biases the
+      // particle spray back toward the shooter so blood/sparks
+      // read as splashing OFF the hit surface.
+      const proj = projectiles.get(id);
       projectiles.delete(id);
       projectileSpawnedAt.delete(id);
       if (
@@ -2134,12 +2140,20 @@ export function runFpsV2Game(
         y !== undefined &&
         z !== undefined
       ) {
-        // Spawn a transient impact sprite at the contact point.
-        // Short TTL — pops as a quick spark / dust puff and
-        // dissipates over a few frames. The sprite layer reads
-        // these and draws billboards at their world position.
-        const now = performance.now();
-        impacts.push({ id: `imp${impactCursor++}`, x, y, z, spawnedAt: now });
+        // Burst at the contact point: blood for flesh hits,
+        // sparks for walls / terrain / buildings / props. Old
+        // servers don't send hitKind — default to sparks.
+        particles.spawnImpact(
+          hitKind ?? 'surface',
+          x,
+          y,
+          z,
+          performance.now(),
+          entityFloorAt(x, y),
+          proj?.vx,
+          proj?.vy,
+          proj ? (proj.vz ?? 0) : undefined,
+        );
       }
     },
     spawnLoot: (l: LootState) => loot.set(l.id, l),

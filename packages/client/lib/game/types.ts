@@ -133,6 +133,10 @@ export type GameHandle = {
     x?: number,
     y?: number,
     z?: number,
+    // Server-classified impact surface — 'flesh' sprays blood,
+    // 'surface' sprays sparks. Absent on 'expired' despawns and
+    // from pre-48 servers; renderer falls back to sparks.
+    hitKind?: 'flesh' | 'surface',
   ): void;
   spawnLoot(l: LootState): void;
   despawnLoot(id: string): void;

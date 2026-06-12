@@ -1272,6 +1272,11 @@ export type ServerMessage =
       x?: number;
       y?: number;
       z?: number;
+      // What the projectile struck, for the client's impact
+      // particles: 'flesh' (enemy or player body) sprays blood,
+      // 'surface' (wall / terrain / building / prop) sprays
+      // sparks. Optional so 'expired' despawns omit it.
+      hitKind?: 'flesh' | 'surface';
     }
   | { type: 'loot_spawned'; loot: LootState }
   | { type: 'loot_despawned'; id: string; reason: 'picked_up' | 'expired' }
@@ -1465,4 +1470,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 47;
+export const PROTOCOL_VERSION = 48;

@@ -188,6 +188,14 @@ export function Game({
     x: number;
     y: number;
   } | null>(null);
+  // Ref mirror so the global Escape handler (set up once) can close
+  // the context menu as the innermost layer.
+  const slotMenuRef = useRef<{ slot: number; x: number; y: number } | null>(
+    null
+  );
+  useEffect(() => {
+    slotMenuRef.current = slotMenu;
+  }, [slotMenu]);
   const [nearInteractable, setNearInteractable] = useState<{
     id: string;
     label: string;
@@ -280,10 +288,14 @@ export function Game({
   const [buildings, setBuildings] = useState<Map<string, BuildingState>>(
     () => new Map()
   );
-  // Transient on-screen toast for server-pushed error messages.
-  const [toast, setToast] = useState<{ message: string; key: number } | null>(
-    null
-  );
+  // Transient on-screen toast for server-pushed error messages and
+  // local info notices. Tone drives the colour family (error = amber,
+  // info = cyan).
+  const [toast, setToast] = useState<{
+    message: string;
+    key: number;
+    tone: 'error' | 'info';
+  } | null>(null);
   // Triggers the LINK SEVERED full-screen glitch overlay when set. Auto-
   // clears after a short window; the regular respawn flow handles state.
   const [linkSeveredAt, setLinkSeveredAt] = useState<number | null>(null);
@@ -1045,6 +1057,7 @@ export function Game({
           msg.x,
           msg.y,
           msg.z,
+          msg.hitKind,
         );
         break;
       case 'loot_spawned':
@@ -1226,6 +1239,7 @@ export function Game({
         setToast({
           message: friendlyErrorMessage(msg.message),
           key: Date.now(),
+          tone: 'error',
         });
         break;
     }
@@ -1321,6 +1335,14 @@ export function Game({
     showInventoryRef.current = showInventory;
     if (showInventory) audio.playSfx('ui-back');
   }, [showInventory]);
+
+  // Mirror the chest modal's walk-away behaviour for station modals:
+  // when the open station's kind leaves crafting range, close it.
+  useEffect(() => {
+    if (stationModalKind && !nearWorkstations.has(stationModalKind)) {
+      setStationModalKind(null);
+    }
+  }, [stationModalKind, nearWorkstations]);
 
   // Global UI SFX. Click on any non-disabled <button> plays ui-click;
   // hover (entering a new button) plays ui-hover. Implemented as
@@ -1542,22 +1564,36 @@ export function Game({
         setShowInventory((s) => !s);
         return;
       }
-      if (e.key === 'Escape' && chestModalIdRef.current) {
-        e.preventDefault();
-        chestModalIdRef.current = null;
-        setChestModalId(null);
-        return;
-      }
-      if (e.key === 'Escape' && containerModalRef.current) {
-        e.preventDefault();
-        containerModalRef.current = null;
-        setContainerModal(null);
-        return;
-      }
       if (e.key === 'Escape') {
+        // One layer per press, innermost first: context menu, then
+        // chest/container, then whichever modal is open. The inline
+        // attachment choosers (weapon/suit assembly) sit innermost of
+        // all — they intercept Escape on the capture phase inside
+        // their own components before this handler runs.
+        e.preventDefault();
+        if (slotMenuRef.current) {
+          setSlotMenu(null);
+          return;
+        }
+        if (chestModalIdRef.current) {
+          chestModalIdRef.current = null;
+          setChestModalId(null);
+          return;
+        }
+        if (containerModalRef.current) {
+          containerModalRef.current = null;
+          setContainerModal(null);
+          return;
+        }
+        if (showTradeModalRef.current) {
+          setShowTradeModal(false);
+          return;
+        }
+        if (stationModalKindRef.current !== null) {
+          setStationModalKind(null);
+          return;
+        }
         setShowInventory(false);
-        setShowTradeModal(false);
-        setStationModalKind(null);
         return;
       }
       // E to interact — same priority chain the mobile Interact
@@ -1573,6 +1609,7 @@ export function Game({
         setToast({
           message: muted ? 'Audio muted' : 'Audio unmuted',
           key: Date.now(),
+          tone: 'info',
         });
         return;
       }
@@ -1794,7 +1831,9 @@ export function Game({
             <InteractPrompt label="Loot Container" />
           )}
         <ControlsHint />
-        {toast && <Toast message={toast.message} keyId={toast.key} />}
+        {toast && (
+          <Toast key={toast.key} message={toast.message} tone={toast.tone} />
+        )}
         {linkSeveredAt !== null && <LinkSeveredOverlay />}
 
         {showInventory && (
@@ -2274,12 +2313,25 @@ function isExpectedServerError(code: string): boolean {
   );
 }
 
-// Transient on-screen toast for server-pushed errors. Shows top-right
-// of the canvas; auto-dismisses via a useEffect on the host.
-function Toast({ message }: { message: string; keyId: number }) {
+// Transient on-screen toast. Shows top-right of the canvas with a
+// slide+fade entrance (keyed per toast so it replays); auto-dismisses
+// via a useEffect on the host. Error tone = amber, info tone = cyan.
+function Toast({
+  message,
+  tone,
+}: {
+  message: string;
+  tone: 'error' | 'info';
+}) {
+  const palette =
+    tone === 'error'
+      ? 'border-amber-500 bg-amber-950/95 text-amber-100'
+      : 'border-cyan-600 bg-cyan-950/95 text-cyan-100';
   return (
-    <div className="absolute top-3 right-3 pointer-events-none z-40 select-none animate-fade-in">
-      <div className="px-3 py-2 rounded border-2 border-amber-500 bg-amber-950/95 text-amber-100 text-xs shadow-[0_4px_16px_rgba(0,0,0,0.5)] max-w-xs">
+    <div className="absolute top-3 right-3 pointer-events-none z-40 select-none toast-in">
+      <div
+        className={`px-3 py-2 rounded border-2 ${palette} text-xs shadow-[0_4px_16px_rgba(0,0,0,0.5)] max-w-xs`}
+      >
         {message}
       </div>
     </div>
@@ -3273,24 +3325,18 @@ function InventoryPanel({
 
   return (
     <Modal onClose={onClose} width="min(960px, 96vw)">
-      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50 gap-6">
-        <h2 className="font-semibold text-base">Inventory</h2>
-        <div className="flex items-center gap-2">
+      <ModalHeader
+        title="Inventory"
+        meta={
           <button
             onClick={onSort}
-            className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+            className={BTN_GHOST + ' px-2 py-1 text-xs'}
           >
             Sort
           </button>
-          <button
-            onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300 text-sm"
-            aria-label="Close inventory"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
+        }
+        onClose={onClose}
+      />
       <div className="p-3 flex flex-col md:flex-row gap-4 max-h-[calc(100vh-120px)] overflow-y-auto">
         <div className="flex flex-col gap-3">
           <CharacterPanel
@@ -3652,38 +3698,26 @@ function TradeModal({
   const heldKeys = countMaterial(inventory, 'key');
   return (
     <Modal onClose={onClose} width="min(640px, 92vw)">
-      <div className="flex flex-wrap items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50 gap-2">
-        <h2 className="font-semibold flex items-center gap-2 text-base">
-          <ItemIcon kind="material" subkind="artifact" />
-          <span>Artifact Uplink</span>
-        </h2>
-        <div className="text-xs text-zinc-400">
-          Held: <span className="text-pink-400 font-semibold">{artifacts}</span>{' '}
-          artifact{artifacts === 1 ? '' : 's'}
-        </div>
-        <button
-          onClick={onClose}
-          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
-        >
-          Close
-        </button>
-      </div>
-      <div className="flex border-b border-[color:var(--panel-border)] bg-[color:var(--bg)]/30">
-        {(['blueprints', 'keys'] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={
-              'px-4 py-2 text-xs uppercase tracking-wider transition-colors ' +
-              (tab === t
-                ? 'text-zinc-100 border-b-2 border-[color:var(--accent)] -mb-px'
-                : 'text-zinc-500 hover:text-zinc-300')
-            }
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+      <ModalHeader
+        title="Artifact Uplink"
+        icon={<ItemIcon kind="material" subkind="artifact" />}
+        meta={
+          <div className="text-xs text-zinc-400 whitespace-nowrap">
+            Held:{' '}
+            <span className="text-pink-400 font-semibold">{artifacts}</span>{' '}
+            artifact{artifacts === 1 ? '' : 's'}
+          </div>
+        }
+        onClose={onClose}
+      />
+      <ModalTabs
+        tabs={[
+          { id: 'blueprints', label: 'Blueprints' },
+          { id: 'keys', label: 'Keys' },
+        ]}
+        active={tab}
+        onSelect={setTab}
+      />
       {!nearUplink && (
         <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
           Move closer to the uplink to trade.
@@ -4048,12 +4082,93 @@ function TradeKeysPanel({
         <button
           onClick={() => onPurchaseKey(count)}
           disabled={!enabled}
-          title={enabled ? '' : reason}
-          className="px-3 py-1.5 rounded text-xs border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+          title={enabled ? undefined : reason}
+          className={BTN_PRIMARY + ' px-3 py-1.5 text-xs'}
         >
           Buy
         </button>
       </div>
+    </div>
+  );
+}
+
+// Shared button treatments. One ghost + one primary (emerald) family
+// so every modal's actions read the same: subtle brighten on hover,
+// 1px press-down on click, dimmed + not-allowed when disabled. Call
+// sites append their own padding / text size.
+const BTN_BASE =
+  'rounded border transition-all duration-100 enabled:active:translate-y-px ' +
+  'disabled:opacity-40 disabled:cursor-not-allowed';
+const BTN_GHOST =
+  BTN_BASE +
+  ' border-[color:var(--panel-border)] text-zinc-300' +
+  ' enabled:hover:text-zinc-100 enabled:hover:bg-[color:var(--bg)]';
+const BTN_PRIMARY =
+  BTN_BASE +
+  ' border-emerald-700 bg-emerald-950/30 text-emerald-200' +
+  ' enabled:hover:bg-emerald-950 enabled:hover:border-emerald-500';
+
+// Shared modal header row: icon + title on the left, optional meta
+// content, ✕ close on the right. Every modal renders this so the
+// chrome is identical across surfaces.
+function ModalHeader({
+  title,
+  icon,
+  meta,
+  onClose,
+}: {
+  title: string;
+  icon?: React.ReactNode;
+  meta?: React.ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
+      <h2 className="font-semibold flex items-center gap-2 text-base min-w-0">
+        {icon}
+        <span className="truncate">{title}</span>
+      </h2>
+      <div className="flex items-center gap-3 shrink-0">
+        {meta}
+        <button
+          onClick={onClose}
+          aria-label={`Close ${title}`}
+          className={BTN_GHOST + ' px-2 py-1 text-xs leading-none'}
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Shared tab strip for modal sub-surfaces (workbench craft/assemble,
+// uplink blueprints/keys). Active tab gets the accent underline.
+function ModalTabs<T extends string>({
+  tabs,
+  active,
+  onSelect,
+}: {
+  tabs: { id: T; label: string }[];
+  active: T;
+  onSelect: (tab: T) => void;
+}) {
+  return (
+    <div className="flex border-b border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 px-5">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          onClick={() => onSelect(t.id)}
+          className={
+            'px-4 py-2 text-xs uppercase tracking-wider border-b-2 -mb-px transition-colors duration-100 ' +
+            (active === t.id
+              ? 'text-zinc-100 border-[color:var(--accent)]'
+              : 'text-zinc-500 border-transparent hover:text-zinc-300')
+          }
+        >
+          {t.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -4083,7 +4198,7 @@ function Modal({
       <div className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" />
       {/* Panel */}
       <div
-        className="relative bg-[color:var(--panel)] border-2 border-[color:var(--accent)] rounded-lg shadow-[0_24px_60px_rgba(0,0,0,0.6)] overflow-hidden"
+        className="relative modal-pop bg-[color:var(--panel)] border-2 border-[color:var(--accent)] rounded-lg shadow-[0_24px_60px_rgba(0,0,0,0.6)] overflow-hidden"
         style={{ width, maxHeight: 'calc(100vh - 64px)' }}
       >
         {children}
@@ -4253,18 +4368,11 @@ function WorkstationModal({
 
   return (
     <Modal onClose={onClose} width="min(720px, 94vw)">
-      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
-        <h2 className="font-semibold flex items-center gap-2 text-base">
-          <ItemIcon kind="placeable" subkind={kind} />
-          <span>{STATION_LABEL[kind] ?? kind}</span>
-        </h2>
-        <button
-          onClick={onClose}
-          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
-        >
-          Close
-        </button>
-      </div>
+      <ModalHeader
+        title={STATION_LABEL[kind] ?? kind}
+        icon={<ItemIcon kind="placeable" subkind={kind} />}
+        onClose={onClose}
+      />
       {!inRange && (
         <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
           Move closer to the {STATION_LABEL[kind] ?? kind} to craft.
@@ -4272,30 +4380,14 @@ function WorkstationModal({
       )}
 
       {isWeaponBench && (
-        <div className="flex border-b border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 px-5">
-          <button
-            onClick={() => setTab('craft')}
-            className={
-              'px-4 py-2 text-xs uppercase tracking-wider transition-colors ' +
-              (tab === 'craft'
-                ? 'text-zinc-100 border-b-2 border-[color:var(--accent)] -mb-px'
-                : 'text-zinc-500 hover:text-zinc-300')
-            }
-          >
-            Craft
-          </button>
-          <button
-            onClick={() => setTab('assemble')}
-            className={
-              'px-4 py-2 text-xs uppercase tracking-wider transition-colors ' +
-              (tab === 'assemble'
-                ? 'text-zinc-100 border-b-2 border-[color:var(--accent)] -mb-px'
-                : 'text-zinc-500 hover:text-zinc-300')
-            }
-          >
-            Assemble
-          </button>
-        </div>
+        <ModalTabs
+          tabs={[
+            { id: 'craft', label: 'Craft' },
+            { id: 'assemble', label: 'Assemble' },
+          ]}
+          active={tab}
+          onSelect={setTab}
+        />
       )}
 
       {(jobsAtStation.length > 0 || hasOutput) && (
@@ -4334,7 +4426,7 @@ function WorkstationModal({
                 </div>
                 <button
                   onClick={() => onPickup(kind)}
-                  className="px-2 py-1 rounded text-[10px] border border-emerald-700 bg-emerald-950/40 text-emerald-200 hover:bg-emerald-950"
+                  className={BTN_PRIMARY + ' px-2 py-1 text-[10px]'}
                 >
                   Take All
                 </button>
@@ -4370,10 +4462,10 @@ function WorkstationModal({
                 <li key={r.id}>
                   <button
                     onClick={() => setSelectedId(r.id)}
-                    className={`w-full text-left px-3 py-2 text-sm border-l-2 ${
+                    className={`w-full text-left px-3 py-2 text-sm border-l-2 transition-colors duration-100 ${
                       active
                         ? 'bg-[color:var(--bg)] border-[color:var(--accent)] text-zinc-100'
-                        : 'border-transparent text-zinc-400 hover:bg-[color:var(--bg)]/60'
+                        : 'border-transparent text-zinc-400 hover:bg-[color:var(--bg)]/60 hover:text-zinc-200'
                     }`}
                   >
                     {r.name}
@@ -4490,6 +4582,21 @@ function WeaponAssemblyPanel({
     | { kind: 'mod' }
     | null
   >(null);
+
+  // Escape closes the inline chooser before the global handler can
+  // close the whole modal — capture phase + stopPropagation make
+  // this the innermost layer.
+  useEffect(() => {
+    if (!chooser) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setChooser(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [chooser]);
 
   if (weapons.length === 0) {
     return (
@@ -4652,12 +4759,12 @@ function WeaponAssemblyPanel({
                       : undefined
                   }
                   className={
-                    'w-full text-left px-2 py-1.5 rounded text-[11px] border ' +
+                    'w-full text-left px-2 py-1.5 rounded text-[11px] border transition-colors duration-100 ' +
                     (w.idx === selectedIdx
                       ? 'border-[color:var(--accent)] text-zinc-100 bg-[color:var(--bg)]'
                       : blocked
                         ? 'border-[color:var(--panel-border)] text-zinc-600 hover:bg-[color:var(--bg)]/40'
-                        : 'border-[color:var(--panel-border)] text-zinc-400 hover:bg-[color:var(--bg)]')
+                        : 'border-[color:var(--panel-border)] text-zinc-400 hover:bg-[color:var(--bg)] hover:text-zinc-200')
                   }
                 >
                   {weaponDisplayName(w.weapon)}
@@ -4689,7 +4796,7 @@ function WeaponAssemblyPanel({
                     else setChooser(isOpen ? null : { kind: 'piece', piece });
                   }}
                   className={
-                    'flex flex-col items-center justify-center text-[10px] rounded border h-16 px-1 ' +
+                    'flex flex-col items-center justify-center text-[10px] rounded border h-16 px-1 transition-colors duration-100 ' +
                     (!enabled
                       ? 'border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 text-zinc-700 cursor-not-allowed'
                       : attached
@@ -4738,7 +4845,7 @@ function WeaponAssemblyPanel({
                       }}
                       disabled={!m && i !== staged.mods.length}
                       className={
-                        'flex items-center justify-center text-[10px] rounded border h-12 px-1 ' +
+                        'flex items-center justify-center text-[10px] rounded border h-12 px-1 transition-colors duration-100 ' +
                         (m
                           ? 'border-blue-500/60 bg-blue-950/20 text-blue-200 hover:bg-blue-950/40'
                           : i === staged.mods.length
@@ -4832,7 +4939,7 @@ function WeaponAssemblyPanel({
               {isModified && (
                 <button
                   onClick={reset}
-                  className="px-2 py-1 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+                  className={BTN_GHOST + ' px-2 py-1 text-[10px]'}
                 >
                   Reset
                 </button>
@@ -4843,9 +4950,13 @@ function WeaponAssemblyPanel({
                 title={
                   weaponBlocked
                     ? `Apply a Mk${selected.weapon.tier} Bench Upgrade to lift the cap.`
-                    : undefined
+                    : !inRange
+                      ? 'Move closer to the bench'
+                      : !isModified
+                        ? 'No changes staged'
+                        : undefined
                 }
-                className="px-3 py-1.5 rounded text-[11px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950 disabled:opacity-30"
+                className={BTN_PRIMARY + ' px-3 py-1.5 text-[11px]'}
               >
                 Assemble
               </button>
@@ -4886,18 +4997,11 @@ function PrecisionMillModal({
 
   return (
     <Modal onClose={onClose} width="min(640px, 94vw)">
-      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
-        <h2 className="font-semibold flex items-center gap-2 text-base">
-          <ItemIcon kind="placeable" subkind="precision_mill" />
-          <span>Precision Machining Mill</span>
-        </h2>
-        <button
-          onClick={onClose}
-          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
-        >
-          Close
-        </button>
-      </div>
+      <ModalHeader
+        title="Precision Machining Mill"
+        icon={<ItemIcon kind="placeable" subkind="precision_mill" />}
+        onClose={onClose}
+      />
       {!inRange && (
         <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
           Move closer to the mill to tier up.
@@ -4950,7 +5054,27 @@ function PrecisionMillModal({
                 <button
                   onClick={() => onTierUpWeapon(w.idx)}
                   disabled={maxed || !inRange || !canAfford}
-                  className="px-3 py-1.5 rounded text-[11px] border border-amber-700 bg-amber-950/30 text-amber-200 hover:bg-amber-950 disabled:opacity-30"
+                  title={
+                    maxed
+                      ? undefined
+                      : !inRange
+                        ? 'Move closer to the mill'
+                        : !canAfford && cost
+                          ? 'Missing: ' +
+                            cost
+                              .filter(
+                                (c) =>
+                                  countMaterial(inventory, c.materialId) <
+                                  c.count
+                              )
+                              .map(
+                                (c) =>
+                                  MATERIALS[c.materialId]?.name ?? c.materialId
+                              )
+                              .join(', ')
+                          : undefined
+                  }
+                  className={BTN_PRIMARY + ' px-3 py-1.5 text-[11px]'}
                 >
                   {nextLabel}
                 </button>
@@ -4984,18 +5108,11 @@ function SuitAssemblyModal({
 }) {
   return (
     <Modal onClose={onClose} width="min(720px, 94vw)">
-      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
-        <h2 className="font-semibold flex items-center gap-2 text-base">
-          <ItemIcon kind="placeable" subkind="suit_bench" />
-          <span>Suit Assembly Bench</span>
-        </h2>
-        <button
-          onClick={onClose}
-          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
-        >
-          Close
-        </button>
-      </div>
+      <ModalHeader
+        title="Suit Assembly Bench"
+        icon={<ItemIcon kind="placeable" subkind="suit_bench" />}
+        onClose={onClose}
+      />
       {!inRange && (
         <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
           Move closer to the bench to assemble.
@@ -5057,11 +5174,25 @@ function SuitAssemblyPanel({
 
   const [chooserOpen, setChooserOpen] = useState(false);
 
+  // Escape closes the inline chooser before the global handler can
+  // close the whole modal — capture phase + stopPropagation make
+  // this the innermost layer.
+  useEffect(() => {
+    if (!chooserOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setChooserOpen(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [chooserOpen]);
+
   if (equippedSlots.length === 0 || !selectedPart || !selectedSlot) {
     return (
       <div className="px-5 py-8 text-zinc-500 text-sm text-center">
-        No suit parts equipped. Equip a part in the inventory panel
-        first.
+        Equip a part in your Suit first.
       </div>
     );
   }
@@ -5163,10 +5294,10 @@ function SuitAssemblyPanel({
                 <button
                   onClick={() => setSelectedSlot(slot)}
                   className={
-                    'w-full text-left px-2 py-1.5 rounded text-[11px] border ' +
+                    'w-full text-left px-2 py-1.5 rounded text-[11px] border transition-colors duration-100 ' +
                     (slot === selectedSlot
                       ? 'border-[color:var(--accent)] text-zinc-100 bg-[color:var(--bg)]'
-                      : 'border-[color:var(--panel-border)] text-zinc-400 hover:bg-[color:var(--bg)]')
+                      : 'border-[color:var(--panel-border)] text-zinc-400 hover:bg-[color:var(--bg)] hover:text-zinc-200')
                   }
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -5198,7 +5329,7 @@ function SuitAssemblyPanel({
                   }}
                   disabled={!inst && !isAddSlot}
                   className={
-                    'flex flex-col items-center justify-center text-[10px] rounded border h-16 px-1 ' +
+                    'flex flex-col items-center justify-center text-[10px] rounded border h-16 px-1 transition-colors duration-100 ' +
                     (inst
                       ? 'border-emerald-500/60 bg-emerald-950/20 text-emerald-200 hover:bg-emerald-950/40'
                       : isAddSlot
@@ -5283,7 +5414,7 @@ function SuitAssemblyPanel({
               {isModified && (
                 <button
                   onClick={reset}
-                  className="px-2 py-1 rounded text-[10px] border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
+                  className={BTN_GHOST + ' px-2 py-1 text-[10px]'}
                 >
                   Reset
                 </button>
@@ -5291,7 +5422,14 @@ function SuitAssemblyPanel({
               <button
                 onClick={commit}
                 disabled={!isModified || !inRange}
-                className="px-3 py-1.5 rounded text-[11px] border border-emerald-700 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950 disabled:opacity-30"
+                title={
+                  !inRange
+                    ? 'Move closer to the bench'
+                    : !isModified
+                      ? 'No changes staged'
+                      : undefined
+                }
+                className={BTN_PRIMARY + ' px-3 py-1.5 text-[11px]'}
               >
                 Assemble
               </button>
@@ -5588,20 +5726,7 @@ function StorageChestModal({
 
   return (
     <Modal onClose={onClose} width="min(720px, 95vw)">
-      <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[color:var(--accent)]/30 bg-[color:var(--bg)]/50">
-        <div>
-          <h2 className="font-semibold text-zinc-100 text-base">Storage</h2>
-          <p className="text-[11px] text-zinc-500">
-            Click a slot to transfer to the other side.
-          </p>
-        </div>
-        <button
-          onClick={onClose}
-          className="px-2 py-1 rounded text-xs border border-[color:var(--panel-border)] text-zinc-300 hover:bg-[color:var(--bg)]"
-        >
-          Close [Esc]
-        </button>
-      </div>
+      <ModalHeader title="Storage" onClose={onClose} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-5 max-h-[calc(100vh-160px)] overflow-y-auto">
         <ChestSlotGrid
           title="Your inventory"
@@ -5642,10 +5767,10 @@ function ChestSlotGrid({
               disabled={empty}
               onClick={() => onClick(idx, slot)}
               className={
-                'aspect-square rounded border w-14 h-14 flex items-center justify-center ' +
+                'aspect-square rounded border w-14 h-14 flex items-center justify-center transition-all duration-100 ' +
                 (empty
                   ? 'bg-[color:var(--bg)] border-[color:var(--panel-border)] cursor-default'
-                  : 'bg-[color:var(--bg)] border-[color:var(--panel-border)] hover:border-[color:var(--accent)]')
+                  : 'bg-[color:var(--bg)] border-[color:var(--panel-border)] hover:border-[color:var(--accent)] hover:brightness-110 active:translate-y-px')
               }
             >
               <SlotIcon slot={slot} />
@@ -5663,7 +5788,8 @@ function outputSlotLabel(slot: InventorySlot): string {
     return `${slot.count}× ${name}`;
   }
   if (slot.kind === 'material') {
-    return `${slot.count}× ${slot.materialId}`;
+    const def = MATERIALS[slot.materialId];
+    return `${slot.count}× ${def?.name ?? slot.materialId}`;
   }
   if (slot.kind === 'ammo') {
     return `${slot.count}× ${slot.ammoId.replace(/_/g, ' ')}`;
@@ -5763,21 +5889,22 @@ function CraftJobRow({
   );
 }
 
-// Right-column recipe panel inside the workstation modal. Shows the
-// recipe name, output, the full ingredient list with have/need per row,
-// and a craft button that lights up only when everything is satisfied.
-function RecipeDetails({
-  recipe,
-  inventory,
-  inRange,
-  onCraft,
-}: {
-  recipe: Recipe;
-  inventory: Inventory;
-  inRange: boolean;
-  onCraft: (recipeId: string) => void;
-}) {
-  const inputRows = recipe.inputs.map((input) => {
+// Resolve a recipe's inputs into renderable {id, have, need} rows.
+// Part inputs (weapon parts that drop from enemies) are flagged so
+// the UI can mark them as loot rather than craftable materials.
+type RecipeInputRow = {
+  id: string;
+  have: number;
+  need: number;
+  satisfied: boolean;
+  isPart: boolean;
+};
+
+function recipeInputRows(
+  recipe: Recipe,
+  inventory: Inventory
+): RecipeInputRow[] {
+  return recipe.inputs.map((input) => {
     const id =
       input.kind === 'material'
         ? input.materialId
@@ -5794,8 +5921,57 @@ function RecipeDetails({
         : input.kind === 'part'
         ? countRecipeParts(inventory, input)
         : countWeaponsInInventory(inventory, input.weaponId);
-    return { id, have, need: input.count, satisfied: have >= input.count };
+    return {
+      id,
+      have,
+      need: input.count,
+      satisfied: have >= input.count,
+      isPart: input.kind === 'part',
+    };
   });
+}
+
+function titleCaseId(id: string): string {
+  return id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// "Missing: Pistol Frame (enemy drop), Scrap" — disabled craft-button
+// tooltip.
+function missingInputsTitle(rows: RecipeInputRow[]): string {
+  return (
+    'Missing: ' +
+    rows
+      .filter((r) => !r.satisfied)
+      .map((r) => titleCaseId(r.id) + (r.isPart ? ' (enemy drop)' : ''))
+      .join(', ')
+  );
+}
+
+// Amber loot-style tag for part inputs — they drop from enemies,
+// they aren't craftable.
+function PartDropChip() {
+  return (
+    <span className="shrink-0 px-1 py-px rounded-sm border border-amber-500/60 bg-amber-950/50 text-amber-300 text-[9px] uppercase tracking-wider leading-none">
+      enemy drop
+    </span>
+  );
+}
+
+// Right-column recipe panel inside the workstation modal. Shows the
+// recipe name, output, the full ingredient list with have/need per row,
+// and a craft button that lights up only when everything is satisfied.
+function RecipeDetails({
+  recipe,
+  inventory,
+  inRange,
+  onCraft,
+}: {
+  recipe: Recipe;
+  inventory: Inventory;
+  inRange: boolean;
+  onCraft: (recipeId: string) => void;
+}) {
+  const inputRows = recipeInputRows(recipe, inventory);
   const allSatisfied = inputRows.every((r) => r.satisfied);
   const enabled = inRange && allSatisfied;
 
@@ -5811,15 +5987,29 @@ function RecipeDetails({
       </div>
       <ul className="space-y-1 text-xs">
         {inputRows.map((r) => (
-          <li key={r.id} className="flex items-center justify-between">
-            <span className="capitalize text-zinc-300">
-              {r.id.replace(/_/g, ' ')}
+          <li key={r.id} className="flex items-center justify-between gap-2">
+            <span
+              className={
+                'flex items-center gap-1.5 min-w-0 ' +
+                (r.satisfied ? 'text-zinc-400' : 'text-zinc-100 font-medium')
+              }
+            >
+              <span
+                aria-hidden
+                className={r.satisfied ? 'text-emerald-400' : 'text-red-400'}
+              >
+                {r.satisfied ? '✓' : '✗'}
+              </span>
+              <span className="capitalize truncate">
+                {r.id.replace(/_/g, ' ')}
+              </span>
+              {r.isPart && <PartDropChip />}
             </span>
             <span
               className={
                 r.satisfied
                   ? 'tabular-nums text-emerald-400'
-                  : 'tabular-nums text-red-400/80'
+                  : 'tabular-nums text-red-400 font-semibold'
               }
             >
               {r.have}
@@ -5838,10 +6028,10 @@ function RecipeDetails({
           !inRange
             ? 'Move closer to the station'
             : !allSatisfied
-              ? 'Insufficient materials'
-              : ''
+              ? missingInputsTitle(inputRows)
+              : undefined
         }
-        className="mt-4 px-3 py-2 rounded text-sm border border-[color:var(--panel-border)] text-zinc-100 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed self-start"
+        className={BTN_PRIMARY + ' mt-4 px-3 py-2 text-sm self-start'}
       >
         Craft
       </button>
@@ -5866,7 +6056,18 @@ function CraftPanel({
       r.workstation === null &&
       (r.blueprintId === null || knownBlueprints.has(r.blueprintId))
   );
-  if (recipes.length === 0) return null;
+  if (recipes.length === 0) {
+    return (
+      <div className="pt-2 border-t border-[color:var(--panel-border)]">
+        <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
+          Field Craft
+        </div>
+        <div className="text-xs text-zinc-500">
+          No recipes known — buy blueprints at the Artifact Uplink.
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="pt-2 border-t border-[color:var(--panel-border)]">
       <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
@@ -5942,30 +6143,7 @@ function CraftRow({
   // Resolve every input into a {id, have, need, satisfied} row so the UI
   // can show "3/5 scrap" per ingredient instead of the old single
   // collapsed line.
-  const inputRows = recipe.inputs.map((input) => {
-    const id =
-      input.kind === 'material'
-        ? input.materialId
-        : input.kind === 'ammo'
-        ? input.ammoId
-        : input.kind === 'part'
-        ? `${input.weaponClass ? `${input.weaponClass} ` : ''}${input.slot}`
-        : input.weaponId;
-    const have =
-      input.kind === 'material'
-        ? countMaterial(inventory, input.materialId)
-        : input.kind === 'ammo'
-        ? countAmmo(inventory, input.ammoId)
-        : input.kind === 'part'
-        ? countRecipeParts(inventory, input)
-        : countWeaponsInInventory(inventory, input.weaponId);
-    return {
-      id,
-      have,
-      need: input.count,
-      satisfied: have >= input.count,
-    };
-  });
+  const inputRows = recipeInputRows(recipe, inventory);
   const allInputsSatisfied = inputRows.every((r) => r.satisfied);
 
   const stationOk =
@@ -5975,7 +6153,7 @@ function CraftRow({
   if (!stationOk && recipe.workstation) {
     reasons.push(`At ${STATION_LABEL[recipe.workstation]}`);
   }
-  if (!allInputsSatisfied) reasons.push('Insufficient materials');
+  if (!allInputsSatisfied) reasons.push(missingInputsTitle(inputRows));
   const enabled = reasons.length === 0;
 
   const outLabel = formatRecipeOutput(recipe.output);
@@ -5985,20 +6163,29 @@ function CraftRow({
       <div className="flex flex-col min-w-0 gap-0.5">
         <span className="font-semibold text-zinc-200">{recipe.name}</span>
         <span className="text-[10px] text-zinc-500">→ {outLabel}</span>
-        <div className="flex flex-wrap gap-x-3 gap-y-0 text-[10px] mt-0.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] mt-0.5">
           {inputRows.map((r) => (
             <span
               key={r.id}
               className={
-                r.satisfied
+                'inline-flex items-center gap-1 ' +
+                (r.satisfied
                   ? 'text-emerald-400'
-                  : 'text-red-400/80'
+                  : 'text-red-400 font-semibold')
               }
             >
               {r.have}
               <span className="text-zinc-600">/</span>
               {r.need}{' '}
-              <span className="text-zinc-400 capitalize">{r.id.replace(/_/g, ' ')}</span>
+              <span
+                className={
+                  'capitalize font-normal ' +
+                  (r.satisfied ? 'text-zinc-400' : 'text-zinc-200')
+                }
+              >
+                {r.id.replace(/_/g, ' ')}
+              </span>
+              {r.isPart && <PartDropChip />}
             </span>
           ))}
         </div>
@@ -6011,8 +6198,8 @@ function CraftRow({
       <button
         onClick={() => onCraft(recipe.id)}
         disabled={!enabled}
-        title={enabled ? '' : reasons.join(' • ')}
-        className="px-2 py-1 rounded text-[11px] border border-[color:var(--panel-border)] text-zinc-200 hover:bg-[color:var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+        title={enabled ? undefined : reasons.join(' • ')}
+        className={BTN_PRIMARY + ' px-2 py-1 text-[11px] shrink-0'}
       >
         Craft
       </button>
@@ -6294,12 +6481,12 @@ function ArmorSlot({
   return (
     <div className="flex flex-col items-center gap-0.5">
       <div
-        className={`w-10 h-10 rounded border ${
+        className={`w-10 h-10 rounded border transition-all duration-100 ${
           inspecting
             ? 'border-[color:var(--accent)] ring-1 ring-[color:var(--accent)]'
             : part
-              ? 'border-[color:var(--accent)]'
-              : 'border-[color:var(--panel-border)]'
+              ? 'border-[color:var(--accent)] hover:brightness-110'
+              : 'border-[color:var(--panel-border)] hover:border-[color:var(--accent)]/60'
         } bg-[color:var(--bg)] flex items-center justify-center ${
           part ? 'cursor-pointer' : ''
         }`}
@@ -6551,10 +6738,13 @@ function SlotCell({
       ? 'w-10 h-10 sm:w-12 sm:h-12 text-[10px] sm:text-xs'
       : 'w-12 h-12 sm:w-14 sm:h-14 text-[10px] sm:text-[11px]';
   const border = highlighted
-    ? 'border-2 border-[color:var(--accent)]'
+    ? 'border-2 border-[color:var(--accent)] ring-2 ring-[color:var(--accent)]/40 shadow-[0_0_10px_rgba(249,115,22,0.35)]'
     : inspecting
       ? 'border-2 border-amber-400/70'
-      : 'border border-[color:var(--panel-border)]';
+      : 'border border-[color:var(--panel-border)]' +
+        (slot.kind !== 'empty'
+          ? ' hover:border-[color:var(--accent)]/70 hover:brightness-110'
+          : '');
 
   const draggable = slot.kind !== 'empty' && !!onSwap;
   // Native title= is only used on the bottom hotbar (size === 'hotbar'),
@@ -6566,7 +6756,7 @@ function SlotCell({
 
   return (
     <div
-      className={`relative rounded ${dim} ${border} bg-[color:var(--bg)] flex items-center justify-center text-center ${
+      className={`relative rounded transition-all duration-100 ${dim} ${border} bg-[color:var(--bg)] flex items-center justify-center text-center ${
         onInspect && slot.kind !== 'empty' ? 'cursor-pointer' : ''
       }`}
       title={title}
@@ -7284,17 +7474,7 @@ function ContainerLootModal({
   const filled = inventory.filter((s) => s.kind !== 'empty');
   return (
     <Modal onClose={onClose} width="min(420px, 92vw)">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 bg-zinc-900/70">
-        <h2 className="text-sm font-semibold tracking-wide text-zinc-200">
-          Container
-        </h2>
-        <button
-          className="text-zinc-400 hover:text-zinc-100 text-xs"
-          onClick={onClose}
-        >
-          [esc]
-        </button>
-      </div>
+      <ModalHeader title="Container" onClose={onClose} />
       <div className="p-3">
         {filled.length === 0 ? (
           <div className="text-[12px] text-zinc-500 italic">empty</div>
@@ -7309,7 +7489,7 @@ function ContainerLootModal({
               ) : (
                 <button
                   key={i}
-                  className="aspect-square bg-zinc-900/80 border border-zinc-700 hover:border-amber-400 rounded flex flex-col items-center justify-center text-[10px] text-zinc-300"
+                  className="aspect-square bg-zinc-900/80 border border-zinc-700 hover:border-amber-400 hover:brightness-110 active:translate-y-px transition-all duration-100 rounded flex flex-col items-center justify-center text-[10px] text-zinc-300"
                   onClick={() => onTake(i)}
                   title="Click to take"
                 >
@@ -7330,9 +7510,6 @@ function ContainerLootModal({
             )}
           </div>
         )}
-        <p className="text-[10px] text-zinc-500 mt-3">
-          Click a slot to take it.
-        </p>
       </div>
     </Modal>
   );
