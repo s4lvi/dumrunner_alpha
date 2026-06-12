@@ -827,6 +827,7 @@ export function Game({
           msg.y,
           msg.z,
           msg.crouching,
+          msg.airborne,
         );
         // Footstep SFX for self only, throttled, and only while
         // grounded — airborne position updates (jumping) aren't steps.

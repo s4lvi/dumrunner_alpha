@@ -290,6 +290,15 @@ export class World {
   // cycleStartedAt / hordeEndsAt forward by the empty gap so
   // perihelion doesn't fire while no one is around to defend.
   private lastHordeClockAt = 0;
+  // Wall-clock when the last player disconnected (null while anyone is
+  // connected). The tick loop STOPS when the world empties, so
+  // tickHordeClock can't slide the cycle anchors itself during the
+  // empty stretch — without this anchor, the offline gap counts toward
+  // the cycle and the first tick after a rejoin fires the pending
+  // perihelion immediately (horde → endHorde / Power-Link loss → every
+  // dungeon scene dropped). That read as "refreshing the page resets
+  // the dungeon". add() consumes this to slide the anchors forward.
+  private emptySinceAt: number | null = null;
   private hydrated = false;
   private worldSeed = 0;
   // Cycle counter — increments at the end of each horde. Procgen seeds
@@ -559,7 +568,7 @@ export class World {
 
     const { data, error } = await supabase
       .from('world_states')
-      .select('state')
+      .select('state, updated_at')
       .eq('server_id', this.serverId)
       .maybeSingle();
     if (error) {
@@ -582,6 +591,19 @@ export class World {
     }
     if (typeof snap.cycleStartedAt === 'number') {
       this.cycleStartedAt = snap.cycleStartedAt;
+      // cycleStartedAt is a wall-clock epoch, so server downtime since
+      // the snapshot was written would count toward the cycle and fire
+      // perihelion (dungeon wipe) on the first tick after the next
+      // join. Slide the anchor forward by the downtime — the cycle
+      // resumes from the same elapsed point it was saved at. The row's
+      // updated_at is stamped on every flushSnapshot, so it's the save
+      // time we need; rows that somehow lack it skip the slide.
+      const savedAtMs =
+        typeof data.updated_at === 'string' ? Date.parse(data.updated_at) : NaN;
+      if (Number.isFinite(savedAtMs)) {
+        const downtime = Date.now() - savedAtMs;
+        if (downtime > 0) this.cycleStartedAt += downtime;
+      }
     }
 
     // Surface scene already exists; dungeon scenes are recreated lazily.
@@ -1143,6 +1165,23 @@ export class World {
   ): void {
     this.cancelIdleShutdown();
 
+    // Empty-pause resume: while the world sat with zero connections the
+    // tick loop was stopped (remove() → stopTimers), so tickHordeClock
+    // never got a chance to slide the cycle anchors across the gap.
+    // Slide them here so disconnected time doesn't count toward
+    // perihelion — otherwise the first tick after a rejoin fires the
+    // horde that "elapsed" while nobody was online, and its cycle
+    // reset / Power-Link loss wipes every dungeon scene right after a
+    // page refresh.
+    if (this.connections.size === 0 && this.emptySinceAt !== null) {
+      const gap = Date.now() - this.emptySinceAt;
+      if (gap > 0) {
+        this.cycleStartedAt += gap;
+        if (this.hordeActive) this.hordeEndsAt += gap;
+      }
+    }
+    this.emptySinceAt = null;
+
     const existing = this.connections.get(player.characterId);
     if (existing) {
       try {
@@ -1368,6 +1407,11 @@ export class World {
       void this.flushSnapshot();
       this.stopTimers();
       this.scheduleIdleShutdown();
+      // Anchor the empty-pause. Timers are stopped now, so the cycle
+      // clock can't slide itself; add() slides cycleStartedAt /
+      // hordeEndsAt forward by (now - emptySinceAt) when the next
+      // player joins.
+      this.emptySinceAt = Date.now();
     }
   }
 
@@ -3199,6 +3243,12 @@ export class World {
   // anchors (cycleStartedAt, hordeEndsAt) get slid forward by the empty
   // gap so the cycle resumes from the same elapsed point when the next
   // player joins — an idle overnight server doesn't burn cycles.
+  // NOTE: in practice the tick loop STOPS when the last player leaves
+  // (remove() → stopTimers), so the zero-connection branch below almost
+  // never runs; the real empty-gap slide happens in add() off the
+  // emptySinceAt anchor, and boot downtime is slid in hydrate(). The
+  // branch stays as a defensive backstop for any tick that lands in the
+  // window between the last disconnect and stopTimers.
   private tickHordeClock(now: number): void {
     const prev = this.lastHordeClockAt;
     this.lastHordeClockAt = now;

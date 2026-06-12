@@ -1241,6 +1241,16 @@ export type ServerMessage =
       // absent ⇒ grounded at the local floor / not crouching.
       z?: number;
       crouching?: boolean;
+      // Server-authoritative grounded/airborne bit (true ⇔ the
+      // player is mid-jump / falling: z above the floor anchor or
+      // vz ≠ 0). The client's vertical camera prediction keys off
+      // this instead of comparing the broadcast z against its
+      // LOCAL floor mirror — that mirror is sampled at the
+      // smoothed (lagging) XY, so while walking over sloped
+      // terrain the comparison misclassifies grounded movement as
+      // airborne and integrates gravity into the camera height.
+      // Absent ⇒ grounded.
+      airborne?: boolean;
     }
   | { type: 'player_damaged'; characterId: string; hp: number; maxHp: number; shield: number; maxShield: number }
   | { type: 'player_stamina'; stamina: number; maxStamina: number }
@@ -1455,4 +1465,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 46;
+export const PROTOCOL_VERSION = 47;

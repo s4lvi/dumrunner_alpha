@@ -1724,6 +1724,7 @@ export class Scene {
             y: conn.y,
             z: conn.z,
             crouching: conn.crouching,
+            airborne: conn.z > conn.floorZ || conn.vz !== 0,
           });
         }
         continue;
@@ -1910,6 +1911,7 @@ export class Scene {
         y: proposedY,
         z: conn.z,
         crouching: conn.crouching,
+        airborne: conn.z > conn.floorZ || conn.vz !== 0,
       });
     }
   }

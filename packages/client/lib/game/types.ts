@@ -90,6 +90,9 @@ export type GameHandle = {
     y: number,
     z?: number,
     crouching?: boolean,
+    // Server-authoritative grounded/airborne bit from the
+    // player_moved broadcast. Absent ⇒ grounded.
+    airborne?: boolean,
   ): void;
   // True while the local player is mid-jump / falling. Consumers
   // (footstep SFX gating) treat absence of data as grounded.

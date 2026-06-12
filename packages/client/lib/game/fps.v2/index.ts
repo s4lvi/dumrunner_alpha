@@ -226,6 +226,16 @@ export function runFpsV2Game(
   // drift from authority (head-bonks, landings).
   let selfZ = 0;
   let predVZ = 0;
+  // Server-authoritative grounded/airborne bit, mirrored from the
+  // player_moved broadcast. The smoothing pass keys airborne
+  // classification off THIS — never off "selfZ vs the local floor
+  // mirror at the smoothed XY". The smoothed XY lags the server
+  // position by ~speed·tau, so on sloped terrain the broadcast z
+  // sits above the lagging mirror every tick and a mirror-based
+  // check misclassifies grounded walking as airborne, integrating
+  // gravity into the camera (the "sink while moving, snap on
+  // stop" regression).
+  let selfAirborne = false;
   let selfCrouching = false;
   const JUMP_CORRECT_TAU_MS = 80;
   // Mirror of the server's jump physics (COMBAT.JUMP_VZ_INIT /
@@ -1521,7 +1531,12 @@ export function runFpsV2Game(
     // cameraZ predicts the ballistic arc directly in absolute z
     // and corrects toward the broadcast value.
     const targetFloor = floorAt(selfX, selfY);
-    const airborne = predVZ !== 0 || selfZ > targetFloor + 0.01;
+    // Airborne ⇔ the server says so, or a just-pressed local jump
+    // is still ascending ahead of the server echo (predVZ > 0).
+    // Grounded frames NEVER integrate gravity — predVZ is cleared
+    // below — so camera height can't accumulate offset while
+    // walking over uneven terrain.
+    const airborne = selfAirborne || predVZ > 0;
     if (airborne) {
       // Ballistic jump prediction. Integrate the same gravity the
       // server uses so the arc is a smooth per-frame parabola
@@ -1548,6 +1563,10 @@ export function runFpsV2Game(
         predVZ = 0;
       }
     } else {
+      // Grounded per server authority: kill any leftover ballistic
+      // velocity so the next frame can't re-enter the airborne
+      // branch on stale prediction state.
+      predVZ = 0;
       const dz = targetFloor - cameraZ;
       if (dz > 0) {
         // Step up — snap. Camera lerping behind the floor while the
@@ -1730,11 +1749,7 @@ export function runFpsV2Game(
     // Kick the local jump prediction on the press frame (grounded
     // only — the server ignores airborne jump presses). The server
     // echo confirms/corrects via the smoothing pass.
-    if (
-      jumpEdge &&
-      predVZ === 0 &&
-      selfZ <= floorAt(selfX, selfY) + 0.01
-    ) {
+    if (jumpEdge && predVZ === 0 && !selfAirborne) {
       predVZ = JUMP_VZ_INIT;
     }
     const crouch =
@@ -1933,6 +1948,7 @@ export function runFpsV2Game(
       y: number,
       z?: number,
       crouching?: boolean,
+      airborne?: boolean,
     ) => {
       const p = players.get(id);
       if (p) {
@@ -1957,15 +1973,15 @@ export function runFpsV2Game(
         }
         targetSelfX = x;
         targetSelfY = y;
-        // selfZ / selfCrouching are the smoothing pass's
-        // targets — the actual camera value lerps toward them
-        // each frame inside tickSelfSmoothing.
+        // selfZ / selfAirborne / selfCrouching are the smoothing
+        // pass's targets — the actual camera value lerps toward
+        // them each frame inside tickSelfSmoothing.
         selfZ = z ?? floorAt(x, y);
+        selfAirborne = airborne ?? false;
         selfCrouching = crouching ?? false;
       }
     },
-    isSelfAirborne: () =>
-      predVZ !== 0 || selfZ > floorAt(selfX, selfY) + 0.01,
+    isSelfAirborne: () => selfAirborne || predVZ > 0,
     setPlayerHp: (
       characterId: string,
       hp: number,

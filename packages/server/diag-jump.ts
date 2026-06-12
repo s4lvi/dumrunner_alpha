@@ -158,6 +158,51 @@ function runJump(
   return { landings, belowFloor, maxArcErr };
 }
 
+// Grounded walk-only trace (no jumping): the absolute-z model
+// must keep conn.z glued to the terrain at every tick while
+// walking over uneven ground — both uphill and downhill. Any
+// tick where z dips below (or floats above) the terrain at the
+// player's XY is a server-side cause of the "sink while moving"
+// regression; zero deviation here pins the bug on the client.
+function runWalk(
+  scene: Scene,
+  conn: SceneConnection,
+  label: string,
+  dirX: number,
+  ticks: number,
+  terrainCfg: typeof TERRAIN = TERRAIN,
+): { maxDev: number; airborneTicks: number } {
+  const dt = COMBAT.TICK_MS / 1000;
+  let now = Date.now();
+  conn.inputX = dirX;
+  conn.inputY = 0;
+  conn.inputJump = false;
+  let maxDev = 0;
+  let airborneTicks = 0;
+  console.log(`-- ${label} --`);
+  for (let tick = 0; tick < ticks; tick++) {
+    now += COMBAT.TICK_MS;
+    (scene as any).simulatePlayerMovement(dt, now);
+    const terr = terrainHeightAt(terrainCfg, conn.x, conn.y);
+    const dev = conn.z - terr;
+    if (Math.abs(dev) > Math.abs(maxDev)) maxDev = dev;
+    const airborne = conn.z > conn.floorZ || conn.vz !== 0;
+    if (airborne) airborneTicks++;
+    if (tick % 8 === 0 || Math.abs(dev) > 1e-9) {
+      console.log(
+        `  t=${tick} x=${conn.x.toFixed(1)} z=${conn.z.toFixed(4)}` +
+          ` terrain=${terr.toFixed(4)} dev=${dev.toFixed(6)}` +
+          ` vz=${conn.vz.toFixed(2)}${airborne ? ' AIR' : ''}`,
+      );
+    }
+  }
+  console.log(
+    `  => maxDev=${maxDev.toFixed(6)} airborneTicks=${airborneTicks}` +
+      ` (expected: dev 0 every tick, never airborne)`,
+  );
+  return { maxDev, airborneTicks };
+}
+
 async function main() {
   const start = findUphillStart();
   console.log(
@@ -242,7 +287,35 @@ async function main() {
     console.log('no steep slope found — skipping stress case');
   }
 
+  // Grounded walk-only regression check over the same slope:
+  // uphill then back downhill, never jumping. z must track the
+  // terrain exactly at every tick.
+  const wz0 = terrainHeightAt(TERRAIN, start.x, start.y);
+  conn = makeConn(start.x, start.y, wz0);
+  const walkScene = new Scene('surface', 'surface', bindings, surfaceLayout());
+  walkScene.addMember('diag');
+  const walkUp = runWalk(
+    walkScene,
+    conn,
+    'walk UPHILL (+x), no jump',
+    1,
+    80,
+  );
+  const wz1 = terrainHeightAt(TERRAIN, conn.x, conn.y);
+  conn = makeConn(conn.x, conn.y, wz1);
+  const walkDown = runWalk(
+    walkScene,
+    conn,
+    'walk DOWNHILL (-x), no jump',
+    -1,
+    80,
+  );
+
   const pass =
+    walkUp.maxDev === 0 &&
+    walkDown.maxDev === 0 &&
+    walkUp.airborneTicks === 0 &&
+    walkDown.airborneTicks === 0 &&
     up.landings === 1 &&
     down.landings === 1 &&
     steep.landings === 1 &&
