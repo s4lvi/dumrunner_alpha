@@ -69,7 +69,10 @@ import {
 import { type GameHandle } from '@/lib/game/types';
 import { runFpsV2Game } from '@/lib/game/fps.v2';
 import { paintMinimap } from '@/lib/game/minimap';
-import { getOverride } from '@/lib/textureOverrides';
+import {
+  getOverride,
+  subscribe as subscribeTextureOverrides,
+} from '@/lib/textureOverrides';
 import { audio } from '@/lib/audio';
 import { loadAssetIndex, type AssetIndex } from '@/lib/assetGen';
 import { rewriteGameWsUrl } from '@/lib/discord/sdk';
@@ -4148,19 +4151,30 @@ function ModalTabs<T extends string>({
   tabs,
   active,
   onSelect,
+  compact = false,
 }: {
   tabs: { id: T; label: string }[];
   active: T;
   onSelect: (tab: T) => void;
+  // Tighter padding + smaller type for secondary tab rows nested
+  // under a primary tab strip (e.g. recipe categories under the
+  // weapon bench's Craft/Assemble tabs).
+  compact?: boolean;
 }) {
   return (
-    <div className="flex border-b border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 px-5">
+    <div
+      className={
+        'flex border-b border-[color:var(--panel-border)] bg-[color:var(--bg)]/30 ' +
+        (compact ? 'px-3' : 'px-5')
+      }
+    >
       {tabs.map((t) => (
         <button
           key={t.id}
           onClick={() => onSelect(t.id)}
           className={
-            'px-4 py-2 text-xs uppercase tracking-wider border-b-2 -mb-px transition-colors duration-100 ' +
+            (compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-4 py-2 text-xs') +
+            ' uppercase tracking-wider border-b-2 -mb-px transition-colors duration-100 ' +
             (active === t.id
               ? 'text-zinc-100 border-[color:var(--accent)]'
               : 'text-zinc-500 border-transparent hover:text-zinc-300')
@@ -4171,6 +4185,36 @@ function ModalTabs<T extends string>({
       ))}
     </div>
   );
+}
+
+// Recipe category tabs — derived from the recipe's output kind so
+// the rail groups by what you GET, not where it's made. Attachment
+// outputs file under Weapons (they're weapon pieces/mods).
+type RecipeCategory = 'weapons' | 'ammo' | 'gear' | 'buildings' | 'materials';
+
+const RECIPE_CATEGORY_TABS: { id: RecipeCategory; label: string }[] = [
+  { id: 'weapons', label: 'Weapons' },
+  { id: 'ammo', label: 'Ammo' },
+  { id: 'gear', label: 'Gear' },
+  { id: 'buildings', label: 'Buildings' },
+  { id: 'materials', label: 'Materials' },
+];
+
+function recipeCategory(r: Recipe): RecipeCategory {
+  switch (r.output.kind) {
+    case 'weapon':
+    case 'attachment':
+      return 'weapons';
+    case 'ammo':
+      return 'ammo';
+    case 'consumable':
+    case 'upgrade':
+      return 'gear';
+    case 'placeable':
+      return 'buildings';
+    case 'material':
+      return 'materials';
+  }
 }
 
 // Shared modal chrome: dimmed backdrop, accent border, drop shadow,
@@ -4334,16 +4378,41 @@ function WorkstationModal({
     [kind, knownBlueprints]
   );
   const inRange = nearWorkstations.has(kind);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    recipes[0]?.id ?? null
+  // Category tabs over the recipe rail. Only categories with at
+  // least one recipe at this station render; the strip itself is
+  // hidden when there's a single category (no choice to make).
+  const categoryTabs = useMemo(
+    () =>
+      RECIPE_CATEGORY_TABS.filter((t) =>
+        recipes.some((r) => recipeCategory(r) === t.id)
+      ),
+    [recipes]
   );
-  // Keep selection valid if recipes shift (rare — happens when a new
-  // blueprint is unlocked while modal is open).
+  const [category, setCategory] = useState<RecipeCategory>(
+    categoryTabs[0]?.id ?? 'weapons'
+  );
+  // Keep the active category valid if the recipe set shifts (e.g. a
+  // blueprint unlock while the modal is open empties / adds a tab).
   useEffect(() => {
-    if (selectedId && !recipes.find((r) => r.id === selectedId)) {
-      setSelectedId(recipes[0]?.id ?? null);
+    if (categoryTabs.length > 0 && !categoryTabs.some((t) => t.id === category)) {
+      setCategory(categoryTabs[0].id);
     }
-  }, [recipes, selectedId]);
+  }, [categoryTabs, category]);
+  const visibleRecipes = useMemo(
+    () => recipes.filter((r) => recipeCategory(r) === category),
+    [recipes, category]
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(
+    visibleRecipes[0]?.id ?? null
+  );
+  // Keep selection valid when the visible set shifts — a tab switch
+  // that filters out the current selection falls back to the first
+  // recipe in the new tab; same for blueprint unlocks mid-session.
+  useEffect(() => {
+    if (!selectedId || !visibleRecipes.some((r) => r.id === selectedId)) {
+      setSelectedId(visibleRecipes[0]?.id ?? null);
+    }
+  }, [visibleRecipes, selectedId]);
   const selected = recipes.find((r) => r.id === selectedId) ?? null;
 
   // Weapon Bench gets a Craft / Assemble tab split — the assembly
@@ -4454,26 +4523,37 @@ function WorkstationModal({
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-[200px_1fr] sm:divide-x divide-[color:var(--panel-border)] min-h-[280px]">
-          {/* Left column — recipe list */}
-          <ul className="overflow-y-auto py-1 max-h-[60vh]">
-            {recipes.map((r) => {
+          {/* Left column — category tabs + recipe list */}
+          <div className="flex flex-col min-h-0">
+            {categoryTabs.length > 1 && (
+              <ModalTabs
+                compact
+                tabs={categoryTabs}
+                active={category}
+                onSelect={setCategory}
+              />
+            )}
+            <ul className="overflow-y-auto py-1 max-h-[60vh]">
+            {visibleRecipes.map((r) => {
               const active = r.id === selectedId;
               return (
                 <li key={r.id}>
                   <button
                     onClick={() => setSelectedId(r.id)}
-                    className={`w-full text-left px-3 py-2 text-sm border-l-2 transition-colors duration-100 ${
+                    className={`w-full text-left px-3 py-2 text-sm border-l-2 transition-colors duration-100 flex items-center gap-2 ${
                       active
                         ? 'bg-[color:var(--bg)] border-[color:var(--accent)] text-zinc-100'
                         : 'border-transparent text-zinc-400 hover:bg-[color:var(--bg)]/60 hover:text-zinc-200'
                     }`}
                   >
-                    {r.name}
+                    <RecipeOutputIcon output={r.output} size={20} />
+                    <span className="truncate">{r.name}</span>
                   </button>
                 </li>
               );
             })}
-          </ul>
+            </ul>
+          </div>
           {/* Right column — selection details */}
           <div className="p-5">
             {selected ? (
@@ -4481,6 +4561,12 @@ function WorkstationModal({
                 recipe={selected}
                 inventory={inventory}
                 inRange={inRange}
+                // Remaining queue room across nearby stations of this
+                // kind — server caps each station at 5 jobs.
+                queueSpace={Math.max(
+                  0,
+                  stationsOfKind.length * 5 - jobsAtStation.length
+                )}
                 onCraft={onCraft}
               />
             ) : (
@@ -5957,84 +6043,530 @@ function PartDropChip() {
   );
 }
 
-// Right-column recipe panel inside the workstation modal. Shows the
-// recipe name, output, the full ingredient list with have/need per row,
-// and a craft button that lights up only when everything is satisfied.
+// ---------------------------------------------------------------------
+// Crafting diagram — diagram-first recipe panel. Two layouts branched
+// by output shape: bulk outputs (ammo / consumable / material) get the
+// PRESS layout with a batch stepper; everything else (weapon,
+// placeable, upgrade, attachment) gets the single-shot ASSEMBLY
+// layout. Both share the same grammar: a large output artifact in the
+// center, typed input sockets arranged radially around it, thin
+// connector lines that brighten when the input is satisfied.
+
+// Map a recipe output to its texture lookup + display name + fallback
+// tile styling. Texture categories follow the static
+// /textures/<category>/<id>.png layout that textureOverrides serves;
+// kinds without authored art today (ammo, consumables, upgrades,
+// attachments) 404 the <img> and land on the styled-div fallback —
+// the DOM analog of the in-world labeled fallback boxes.
+type OutputVisual = {
+  category: string;
+  id: string;
+  name: string;
+  fallback: string;
+};
+
+function recipeOutputVisual(out: Recipe['output']): OutputVisual {
+  switch (out.kind) {
+    case 'material': {
+      const def = MATERIALS[out.materialId];
+      return {
+        category: 'material',
+        id: out.materialId,
+        name: def?.name ?? titleCaseId(out.materialId),
+        fallback: 'bg-emerald-950 border border-emerald-700 text-emerald-200',
+      };
+    }
+    case 'placeable':
+      return {
+        category: 'building',
+        id: out.buildingKind,
+        name: STATION_LABEL[out.buildingKind] ?? titleCaseId(out.buildingKind),
+        fallback: 'bg-violet-950 border border-violet-700 text-violet-200',
+      };
+    case 'ammo':
+      return {
+        category: 'ammo',
+        id: out.ammoId,
+        name: titleCaseId(out.ammoId),
+        fallback: 'bg-amber-950 border border-amber-700 text-amber-200',
+      };
+    case 'weapon':
+      return {
+        category: 'weapon_view',
+        id: out.weaponId,
+        name: titleCaseId(out.weaponId),
+        fallback: 'bg-sky-950 border border-sky-700 text-sky-200',
+      };
+    case 'consumable': {
+      const def = CONSUMABLES[out.consumableId];
+      return {
+        category: 'consumable',
+        id: out.consumableId,
+        name: def?.name ?? titleCaseId(out.consumableId),
+        fallback: 'bg-rose-950 border border-rose-700 text-rose-200',
+      };
+    }
+    case 'upgrade': {
+      const def = UPGRADES[out.upgradeId];
+      return {
+        category: 'upgrade',
+        id: out.upgradeId,
+        name: def?.name ?? titleCaseId(out.upgradeId),
+        fallback: 'bg-cyan-950 border border-cyan-700 text-cyan-200',
+      };
+    }
+    case 'attachment':
+      return {
+        category: 'attachment',
+        id: out.defId,
+        name: attachmentDisplayName(out.defId),
+        fallback: 'bg-fuchsia-950 border border-fuchsia-700 text-fuchsia-200',
+      };
+  }
+}
+
+// Re-render when the texture-override cache hydrates so icons swap
+// from fallback tiles to real art without a reload.
+function useTextureOverrideVersion(): number {
+  const [v, setV] = useState(0);
+  useEffect(() => subscribeTextureOverrides(() => setV((x) => x + 1)), []);
+  return v;
+}
+
+// Output icon: tries the real texture (override-cache URL first, then
+// the conventional static path), falls back on error to a rounded
+// square in the category color with the item name centered. Failed
+// URLs are remembered module-wide so remounts (the PRESS flash keys
+// the artifact) don't re-fetch and flash a broken image.
+const failedIconUrls = new Set<string>();
+
+function RecipeOutputIcon({
+  output,
+  size,
+}: {
+  output: Recipe['output'];
+  size: number;
+}) {
+  useTextureOverrideVersion();
+  const vis = recipeOutputVisual(output);
+  const url =
+    getOverride(vis.category, vis.id) ??
+    `/textures/${vis.category}/${vis.id}.png`;
+  const [, bumpFailed] = useState(0);
+  if (failedIconUrls.has(url)) {
+    // Tiny tiles can't fit a name — show word initials instead.
+    const label =
+      size >= 48
+        ? vis.name
+        : vis.name
+            .split(/\s+/)
+            .map((w) => w[0] ?? '')
+            .join('')
+            .slice(0, 3)
+            .toUpperCase();
+    return (
+      <span
+        className={`shrink-0 rounded flex items-center justify-center overflow-hidden text-center leading-tight font-semibold ${vis.fallback}`}
+        style={{
+          width: size,
+          height: size,
+          fontSize: Math.max(8, Math.round(size / 9)),
+          padding: size >= 48 ? 6 : 0,
+        }}
+      >
+        {label}
+      </span>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt={vis.name}
+      width={size}
+      height={size}
+      draggable={false}
+      onError={() => {
+        failedIconUrls.add(url);
+        bumpFailed((x) => x + 1);
+      }}
+      className="shrink-0 rounded object-cover"
+      style={{ width: size, height: size, imageRendering: 'pixelated' }}
+    />
+  );
+}
+
+// Radial socket placement, degrees, CSS y-down (0° = right, 90° =
+// below the artifact). 1 input = left, 2 = left/right, 3 adds bottom,
+// 4 = corners, 5 adds top. 6+ (shouldn't happen — recipes carry 2-5
+// inputs) spreads evenly starting at left.
+const SOCKET_ANGLES: Record<number, number[]> = {
+  1: [180],
+  2: [180, 0],
+  3: [180, 0, 90],
+  4: [225, 315, 135, 45],
+  5: [225, 315, 135, 45, 270],
+};
+
+// One typed input socket. Shape by input kind: material / ammo =
+// square chip with a fill bar, part = hexagonal amber chip (enemy
+// drops, per PartDropChip), weapon-as-component = wide chip with the
+// weapon name. Satisfied = filled look + ✓; missing = hollow border
+// with a slow amber pulse. `batch` scales the displayed need (need×N)
+// live; the need turns red when it exceeds have.
+function RecipeSocketChip({
+  input,
+  row,
+  batch,
+}: {
+  input: Recipe['inputs'][number];
+  row: RecipeInputRow;
+  batch: number;
+}) {
+  const need = row.need * batch;
+  const satisfied = row.have >= need;
+  const counts = (
+    <span className="tabular-nums text-[10px] leading-none">
+      <span className={satisfied ? 'text-emerald-300' : 'text-zinc-300'}>
+        {row.have}
+      </span>
+      <span className="text-zinc-600">/</span>
+      <span
+        className={satisfied ? 'text-emerald-300' : 'text-red-400 font-semibold'}
+      >
+        {need}
+      </span>
+    </span>
+  );
+  const check = satisfied && (
+    <span aria-hidden className="text-emerald-400 text-[10px] leading-none">
+      ✓
+    </span>
+  );
+  const pulse = satisfied ? '' : ' socket-missing-pulse';
+
+  if (input.kind === 'part') {
+    // Hexagon via clip-path; two layers fake the border since
+    // clip-path clips real borders away.
+    const HEX = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
+    return (
+      <div className={'relative' + pulse} style={{ width: 104, height: 58 }}>
+        <div
+          className="absolute inset-0"
+          style={{
+            clipPath: HEX,
+            background: satisfied ? '#f59e0b' : 'rgba(245,158,11,0.6)',
+          }}
+        />
+        <div
+          className="absolute flex flex-col items-center justify-center gap-0.5 text-center"
+          style={{
+            inset: 1.5,
+            clipPath: HEX,
+            background: satisfied ? 'rgba(69,26,3,0.92)' : '#0b0d10',
+          }}
+        >
+          <span className="px-4 text-[10px] leading-tight text-amber-300 capitalize">
+            {row.id.replace(/_/g, ' ')}
+          </span>
+          <span className="text-[8px] uppercase tracking-wider text-amber-400/80 leading-none">
+            enemy drop
+          </span>
+          <span className="flex items-center gap-1">
+            {check}
+            {counts}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (input.kind === 'weapon') {
+    return (
+      <div
+        className={
+          'flex items-center gap-2 px-3 py-2 rounded border min-w-[112px] justify-center ' +
+          (satisfied
+            ? 'bg-emerald-950/50 border-emerald-600'
+            : 'bg-transparent border-zinc-600') +
+          pulse
+        }
+      >
+        <span
+          className={
+            'text-[11px] capitalize leading-tight ' +
+            (satisfied ? 'text-emerald-200' : 'text-zinc-200')
+          }
+        >
+          {row.id.replace(/_/g, ' ')}
+        </span>
+        {check}
+        {counts}
+      </div>
+    );
+  }
+
+  // material / ammo — square chip with a fill bar tracking have/need.
+  const fillPct = Math.min(1, row.have / need) * 100;
+  return (
+    <div
+      className={
+        'flex flex-col items-center justify-between rounded border w-[76px] h-[64px] px-1.5 pt-1.5 pb-1 ' +
+        (satisfied
+          ? 'bg-emerald-950/50 border-emerald-600'
+          : 'bg-transparent border-zinc-600') +
+        pulse
+      }
+    >
+      <span
+        className={
+          'text-[10px] leading-tight text-center capitalize ' +
+          (satisfied ? 'text-emerald-200' : 'text-zinc-200')
+        }
+      >
+        {row.id.replace(/_/g, ' ')}
+      </span>
+      <span className="flex items-center gap-1">
+        {check}
+        {counts}
+      </span>
+      <div className="w-full h-1 rounded bg-black/50 overflow-hidden">
+        <div
+          className={
+            'h-full ' + (satisfied ? 'bg-emerald-500' : 'bg-amber-500')
+          }
+          style={{ width: `${fillPct.toFixed(1)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// The diagram itself: connectors under everything, artifact centered,
+// sockets at precomputed angle slots on an ellipse. `pressTick` keys
+// the artifact so each PRESS click replays the 150ms squash/flash.
+function RecipeDiagram({
+  recipe,
+  rows,
+  batch,
+  pressTick,
+  showYield,
+}: {
+  recipe: Recipe;
+  rows: RecipeInputRow[];
+  batch: number;
+  pressTick: number;
+  showYield: boolean;
+}) {
+  const n = rows.length;
+  const angles =
+    SOCKET_ANGLES[n] ?? rows.map((_, i) => 180 + (360 / Math.max(1, n)) * i);
+  const RX = 140;
+  const RY = 138;
+  const hasVertical = angles.some(
+    (a) => Math.abs(Math.sin((a * Math.PI) / 180)) > 0.5
+  );
+  const height = hasVertical ? 320 : 230;
+  const vis = recipeOutputVisual(recipe.output);
+  const out = recipe.output;
+  const yieldCount = 'count' in out ? out.count : 1;
+
+  return (
+    <div className="relative w-full" style={{ height }}>
+      {/* Connector lines — under the artifact and sockets. */}
+      {rows.map((r, i) => {
+        const a = (angles[i] * Math.PI) / 180;
+        const dx = RX * Math.cos(a);
+        const dy = RY * Math.sin(a);
+        const len = Math.sqrt(dx * dx + dy * dy);
+        const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
+        const satisfied = r.have >= r.need * batch;
+        return (
+          <div
+            key={`c-${i}-${r.id}`}
+            className="absolute h-px"
+            style={{
+              left: '50%',
+              top: '50%',
+              width: len,
+              transform: `rotate(${deg}deg)`,
+              transformOrigin: '0 50%',
+              background: satisfied ? '#047857' : '#3f3f46',
+            }}
+          />
+        );
+      })}
+
+      {/* Center artifact. */}
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-1">
+        <div
+          key={pressTick}
+          className={'relative' + (pressTick > 0 ? ' artifact-press' : '')}
+        >
+          <RecipeOutputIcon output={out} size={120} />
+          {showYield && yieldCount > 1 && (
+            <span className="absolute -bottom-1.5 -right-1.5 px-1.5 py-0.5 rounded bg-black/85 border border-[color:var(--panel-border)] text-zinc-100 text-xs font-semibold tabular-nums">
+              ×{yieldCount}
+            </span>
+          )}
+        </div>
+        <div className="text-sm font-semibold text-zinc-100 text-center max-w-[150px] leading-tight">
+          {vis.name}
+        </div>
+        {out.kind === 'weapon' && (
+          <div className="text-[10px] text-zinc-400 leading-none">
+            {WEAPON_TIER_LABEL[1]}
+          </div>
+        )}
+      </div>
+
+      {/* Input sockets. */}
+      {rows.map((r, i) => {
+        const a = (angles[i] * Math.PI) / 180;
+        const dx = RX * Math.cos(a);
+        const dy = RY * Math.sin(a);
+        return (
+          <div
+            key={`s-${i}-${r.id}`}
+            className="absolute -translate-x-1/2 -translate-y-1/2"
+            style={{
+              left: `calc(50% + ${dx.toFixed(1)}px)`,
+              top: `calc(50% + ${dy.toFixed(1)}px)`,
+            }}
+          >
+            <RecipeSocketChip input={recipe.inputs[i]} row={r} batch={batch} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Output kinds that read as bulk production → PRESS layout.
+const PRESS_OUTPUT_KINDS = new Set<Recipe['output']['kind']>([
+  'ammo',
+  'consumable',
+  'material',
+]);
+
+// Right-column recipe panel inside the workstation modal. Diagram-
+// first: artifact + sockets, then either the single Craft button
+// (ASSEMBLY) or the batch stepper + PRESS button (bulk outputs).
 function RecipeDetails({
   recipe,
   inventory,
   inRange,
+  queueSpace,
   onCraft,
 }: {
   recipe: Recipe;
   inventory: Inventory;
   inRange: boolean;
+  // Remaining queue capacity across nearby stations of this kind —
+  // the server caps each station at 5 jobs (MAX_QUEUE_PER_STATION),
+  // so the PRESS batch clamps to this. Omitted = unbounded (callers
+  // without station context).
+  queueSpace?: number;
   onCraft: (recipeId: string) => void;
 }) {
   const inputRows = recipeInputRows(recipe, inventory);
-  const allSatisfied = inputRows.every((r) => r.satisfied);
-  const enabled = inRange && allSatisfied;
+  const isPress = PRESS_OUTPUT_KINDS.has(recipe.output.kind);
+  const [batch, setBatch] = useState(1);
+  const [pressTick, setPressTick] = useState(0);
+  // Reset batch + flash when switching recipes.
+  useEffect(() => {
+    setBatch(1);
+    setPressTick(0);
+  }, [recipe.id]);
 
-  const outLabel = formatRecipeOutput(recipe.output);
+  const space = queueSpace ?? Number.MAX_SAFE_INTEGER;
+  // Max batch = min over inputs of floor(have/need), clamped to the
+  // remaining queue space. Never below 1 so the stepper has a floor;
+  // the button disables itself when even 1 isn't craftable.
+  const maxByInputs =
+    inputRows.length > 0
+      ? Math.min(...inputRows.map((r) => Math.floor(r.have / Math.max(1, r.need))))
+      : 0;
+  const maxBatch = Math.max(1, Math.min(maxByInputs, space));
+  const count = isPress ? Math.min(batch, maxBatch) : 1;
+
+  const allSatisfied = inputRows.every((r) => r.have >= r.need * count);
+  const queueOk = !isPress || count <= space;
+  const enabled = inRange && allSatisfied && queueOk;
+  const title = !inRange
+    ? 'Move closer to the station'
+    : !allSatisfied
+      ? missingInputsTitle(inputRows)
+      : !queueOk
+        ? 'Queue full'
+        : undefined;
+
+  const timeSec = Math.round((recipe.craftTimeMs ?? 0) / 1000);
 
   return (
     <div className="flex flex-col h-full">
       <h3 className="text-base font-semibold text-zinc-100">{recipe.name}</h3>
-      <div className="text-xs text-zinc-500 mt-1">→ {outLabel}</div>
 
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mt-4 mb-1">
-        Requirements
-      </div>
-      <ul className="space-y-1 text-xs">
-        {inputRows.map((r) => (
-          <li key={r.id} className="flex items-center justify-between gap-2">
-            <span
-              className={
-                'flex items-center gap-1.5 min-w-0 ' +
-                (r.satisfied ? 'text-zinc-400' : 'text-zinc-100 font-medium')
-              }
-            >
-              <span
-                aria-hidden
-                className={r.satisfied ? 'text-emerald-400' : 'text-red-400'}
-              >
-                {r.satisfied ? '✓' : '✗'}
-              </span>
-              <span className="capitalize truncate">
-                {r.id.replace(/_/g, ' ')}
-              </span>
-              {r.isPart && <PartDropChip />}
-            </span>
-            <span
-              className={
-                r.satisfied
-                  ? 'tabular-nums text-emerald-400'
-                  : 'tabular-nums text-red-400 font-semibold'
-              }
-            >
-              {r.have}
-              <span className="text-zinc-600">/</span>
-              {r.need}
-            </span>
-          </li>
-        ))}
-      </ul>
+      <RecipeDiagram
+        recipe={recipe}
+        rows={inputRows}
+        batch={count}
+        pressTick={pressTick}
+        showYield={isPress}
+      />
 
       <div className="grow" />
-      <button
-        onClick={() => onCraft(recipe.id)}
-        disabled={!enabled}
-        title={
-          !inRange
-            ? 'Move closer to the station'
-            : !allSatisfied
-              ? missingInputsTitle(inputRows)
-              : undefined
-        }
-        className={BTN_PRIMARY + ' mt-4 px-3 py-2 text-sm self-start'}
-      >
-        Craft
-      </button>
+
+      {isPress ? (
+        <div className="flex items-center gap-2 mt-3">
+          <button
+            onClick={() => setBatch((b) => Math.max(1, Math.min(b, maxBatch) - 1))}
+            disabled={count <= 1}
+            className={BTN_GHOST + ' w-7 h-7 text-sm leading-none'}
+            aria-label="Fewer"
+          >
+            −
+          </button>
+          <span className="w-10 text-center text-sm text-zinc-100 tabular-nums">
+            ×{count}
+          </span>
+          <button
+            onClick={() => setBatch((b) => Math.min(maxBatch, Math.min(b, maxBatch) + 1))}
+            disabled={count >= maxBatch}
+            className={BTN_GHOST + ' w-7 h-7 text-sm leading-none'}
+            aria-label="More"
+          >
+            +
+          </button>
+          <button
+            onClick={() => setBatch(maxBatch)}
+            disabled={count >= maxBatch}
+            className={BTN_GHOST + ' px-2 h-7 text-[11px] uppercase tracking-wider'}
+          >
+            max
+          </button>
+          <button
+            onClick={() => {
+              for (let i = 0; i < count; i++) onCraft(recipe.id);
+              setPressTick((t) => t + 1);
+            }}
+            disabled={!enabled}
+            title={title}
+            className={BTN_PRIMARY + ' ml-auto px-4 py-2 text-sm font-semibold'}
+          >
+            Press{timeSec > 0 ? ` · ${count} × ${timeSec}s` : ` ×${count}`}
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => onCraft(recipe.id)}
+          disabled={!enabled}
+          title={title}
+          className={BTN_PRIMARY + ' mt-3 w-full px-3 py-2.5 text-sm font-semibold'}
+        >
+          Craft{timeSec > 0 ? ` · ${timeSec}s` : ''}
+        </button>
+      )}
     </div>
   );
 }
@@ -6051,11 +6583,37 @@ function CraftPanel({
   knownBlueprints: Set<string>;
   onCraft: (recipeId: string) => void;
 }) {
-  const recipes = listRecipes().filter(
-    (r) =>
-      r.workstation === null &&
-      (r.blueprintId === null || knownBlueprints.has(r.blueprintId))
+  const recipes = useMemo(
+    () =>
+      listRecipes().filter(
+        (r) =>
+          r.workstation === null &&
+          (r.blueprintId === null || knownBlueprints.has(r.blueprintId))
+      ),
+    [knownBlueprints]
   );
+  // Category tabs kick in only once the field list is long enough to
+  // need them — short lists scan faster flat.
+  const showTabs = recipes.length > 6;
+  const categoryTabs = useMemo(
+    () =>
+      RECIPE_CATEGORY_TABS.filter((t) =>
+        recipes.some((r) => recipeCategory(r) === t.id)
+      ),
+    [recipes]
+  );
+  const [category, setCategory] = useState<RecipeCategory>(
+    categoryTabs[0]?.id ?? 'buildings'
+  );
+  useEffect(() => {
+    if (categoryTabs.length > 0 && !categoryTabs.some((t) => t.id === category)) {
+      setCategory(categoryTabs[0].id);
+    }
+  }, [categoryTabs, category]);
+  const visibleRecipes =
+    showTabs && categoryTabs.length > 1
+      ? recipes.filter((r) => recipeCategory(r) === category)
+      : recipes;
   if (recipes.length === 0) {
     return (
       <div className="pt-2 border-t border-[color:var(--panel-border)]">
@@ -6073,8 +6631,18 @@ function CraftPanel({
       <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
         Field Craft
       </div>
+      {showTabs && categoryTabs.length > 1 && (
+        <div className="mb-1.5">
+          <ModalTabs
+            compact
+            tabs={categoryTabs}
+            active={category}
+            onSelect={setCategory}
+          />
+        </div>
+      )}
       <ul className="space-y-1">
-        {recipes.map((r) => (
+        {visibleRecipes.map((r) => (
           <CraftRow
             key={r.id}
             recipe={r}
