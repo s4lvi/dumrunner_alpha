@@ -25,7 +25,8 @@ import {
   Sprite,
   Texture,
 } from 'pixi.js';
-import { convertLayoutToSectorMap } from './converter';
+import { biomeFallbackColors, convertLayoutToSectorMap } from './converter';
+import { makeLabeledFallbackTexture } from './labeledFallback';
 import {
   buildSectorGeometry,
   buildTexturedCeilingGeometry,
@@ -620,16 +621,19 @@ export function runFpsV2Game(
       return;
     }
     const animId = WEAPON_VIEW_ANIM[equippedWeapon];
-    const tex = getAnimationFrame(
+    const animTex = getAnimationFrame(
       animId,
       viewModelKey(equippedWeapon),
       performance.now(),
       'idle',
     );
-    if (!tex || tex.width <= 0 || tex.height <= 0) {
-      viewModel.visible = false;
-      return;
-    }
+    // Labeled fallback when the weapon's view animation isn't
+    // authored — surfaces the missing asset in-game instead of
+    // hiding the view-model entirely.
+    const tex =
+      animTex && animTex.width > 0 && animTex.height > 0
+        ? animTex
+        : makeLabeledFallbackTexture('weapon_view', equippedWeapon, 0x3f3f46);
     if (viewModel.texture !== tex) {
       viewModel.texture = tex;
     }
@@ -799,25 +803,49 @@ export function runFpsV2Game(
     const floorTex = lookupTexture('biome_floor', biomeId);
     const ceilingTex = lookupTexture('biome_ceiling', biomeId);
     const wallTex = lookupTexture('biome_wall', biomeId);
-    bindSurfaceTexture(texturedFloorMesh, floorTex);
-    bindSurfaceTexture(texturedCeilingMesh, ceilingTex);
-    bindSurfaceTexture(texturedWallMesh, wallTex);
+    const fallbackColors = biomeFallbackColors(biomeId);
+    bindSurfaceTexture(
+      texturedFloorMesh,
+      floorTex,
+      'biome_floor',
+      biomeId,
+      fallbackColors.floor,
+    );
+    bindSurfaceTexture(
+      texturedCeilingMesh,
+      ceilingTex,
+      'biome_ceiling',
+      biomeId,
+      fallbackColors.ceiling,
+    );
+    bindSurfaceTexture(
+      texturedWallMesh,
+      wallTex,
+      'biome_wall',
+      biomeId,
+      fallbackColors.wall,
+    );
   }
 
   function bindSurfaceTexture(
     m: Mesh<Geometry, import('pixi.js').Shader>,
     tex: import('pixi.js').Texture | null,
+    category: string,
+    biomeId: string,
+    fallbackColor: number,
   ): void {
     // Mesh.shader is typed as Shader | null because Pixi allows
     // creating a Mesh and assigning a shader later; ours is
     // always constructed with one, but TS doesn't know that.
     if (!m.shader) return;
-    // Bind a fallback white texture when no biome texture is
-    // uploaded — the shader multiplies texture × vertex color so
-    // a white sample reveals the colored-pass vertex color. Keeps
-    // walls / floors / ceilings visible regardless of asset state
-    // (critical for the editor's default biome).
-    const source = tex ? tex.source : Texture.WHITE.source;
+    // When no biome texture is uploaded, bind a labeled fallback:
+    // the colored-pass surface hue with "<category>: <biomeId>"
+    // drawn on it, so a developer sees in-game which override is
+    // missing. Keeps walls / floors / ceilings visible regardless
+    // of asset state (critical for the editor's default biome).
+    const source = tex
+      ? tex.source
+      : makeLabeledFallbackTexture(category, biomeId, fallbackColor).source;
     m.shader.resources.uTexture = source;
     m.visible = true;
   }
@@ -1016,12 +1044,22 @@ export function runFpsV2Game(
     // here. Animation key is kind-scoped (not per-instance) so
     // every instance of a kind animates in sync.
     const nowAnimMs = performance.now();
+    // Labeled fallback for unauthored building kinds — drawn in
+    // the biome wall hue the colored cube would have used, so the
+    // cube reads the same but names the missing override.
+    const buildingFallbackColor = biomeFallbackColors(
+      layout?.biome ?? 'default',
+    ).wall;
     const active = texturedBuildings.refreshTextures((kind) => {
       const animId = buildingVisualFor(kind).animationId;
       const animTex = animId
         ? getAnimationFrame(animId, `building::${kind}`, nowAnimMs, 'idle')
         : null;
-      return animTex ?? lookupTexture('building', kind);
+      return (
+        animTex ??
+        lookupTexture('building', kind) ??
+        makeLabeledFallbackTexture('building', kind, buildingFallbackColor)
+      );
     });
     // When the live-textured kind set changes (a texture
     // finishes loading, a building of a new kind spawns, etc.),
@@ -1109,35 +1147,32 @@ export function runFpsV2Game(
         'idle',
       );
       const staticTex = animTex ? null : lookupTexture('enemy', e.kind);
-      const tex = animTex ?? staticTex;
+      // Labeled fallback when neither an animation frame nor a
+      // static override exists — the old flat-color billboard in
+      // the enemy's fallback hue, with "enemy: <kind>" drawn on
+      // it so the missing override is identifiable in-game.
+      const tex =
+        animTex ??
+        staticTex ??
+        makeLabeledFallbackTexture('enemy', e.kind, v.color);
       const groundZ = entityFloorAt(e.x, e.y);
       // Hit flash: white tint for HIT_FLASH_MS after the server
       // reports an HP drop. setEnemyHp writes the timestamp.
       const flashAt = enemyHitFlashAt.get(e.id) ?? 0;
       const flashing = flashAt > 0 && nowAnim - flashAt < HIT_FLASH_MS;
-      if (tex) {
-        texturedSprites.push(
-          {
-            textureKey: tex.uid,
-            texture: tex,
-            x: e.x,
-            y: e.y,
-            anchorZ: groundZ,
-            height: v.size,
-            aspect: textureAspect(tex),
-            tint: flashing ? 0xffd0d0 : 0xffffff,
-          },
-          camera,
-        );
-      } else {
-        spriteScratch.push({
+      texturedSprites.push(
+        {
+          textureKey: tex.uid,
+          texture: tex,
           x: e.x,
           y: e.y,
           anchorZ: groundZ,
           height: v.size,
-          color: flashing ? 0xffffff : v.color,
-        });
-      }
+          aspect: textureAspect(tex),
+          tint: flashing ? 0xffd0d0 : 0xffffff,
+        },
+        camera,
+      );
     }
     for (const p of props.values()) {
       // Container props render as cubes via the sector pass;
@@ -1170,30 +1205,25 @@ export function runFpsV2Game(
         'idle',
       );
       const staticTex = animTex ? null : lookupTexture('prop', p.kind);
-      const tex = animTex ?? staticTex;
-      if (tex) {
-        texturedSprites.push(
-          {
-            textureKey: tex.uid,
-            texture: tex,
-            x: p.x,
-            y: p.y,
-            anchorZ,
-            height: h,
-            aspect: textureAspect(tex),
-            tint: 0xffffff,
-          },
-          camera,
-        );
-      } else {
-        spriteScratch.push({
+      // Labeled fallback in the prop's authored tint when no
+      // texture exists — names the missing `prop/<kind>` override.
+      const tex =
+        animTex ??
+        staticTex ??
+        makeLabeledFallbackTexture('prop', p.kind, tint);
+      texturedSprites.push(
+        {
+          textureKey: tex.uid,
+          texture: tex,
           x: p.x,
           y: p.y,
           anchorZ,
           height: h,
-          color: tint,
-        });
-      }
+          aspect: textureAspect(tex),
+          tint: 0xffffff,
+        },
+        camera,
+      );
     }
     const nowMs = performance.now();
     const tg = layout?.tileGrid;
@@ -1251,30 +1281,30 @@ export function runFpsV2Game(
           if (family) staticTex = lookupTexture('projectile', family);
         }
       }
-      const tex = animTex ?? staticTex;
-      if (tex) {
-        texturedSprites.push(
-          {
-            textureKey: tex.uid,
-            texture: tex,
-            x,
-            y,
-            anchorZ: z - h * 0.5,
-            height: h,
-            aspect: textureAspect(tex),
-            tint: 0xffffff,
-          },
-          camera,
+      // Labeled fallback in the projectile's wire color when no
+      // animation or static override resolves — names the missing
+      // `projectile/<weaponId>` override.
+      const tex =
+        animTex ??
+        staticTex ??
+        makeLabeledFallbackTexture(
+          'projectile',
+          pr.weaponId ?? 'unknown',
+          pr.color ?? PROJECTILE_DEFAULT_COLOR,
         );
-      } else {
-        spriteScratch.push({
+      texturedSprites.push(
+        {
+          textureKey: tex.uid,
+          texture: tex,
           x,
           y,
           anchorZ: z - h * 0.5,
           height: h,
-          color: pr.color ?? PROJECTILE_DEFAULT_COLOR,
-        });
-      }
+          aspect: textureAspect(tex),
+          tint: 0xffffff,
+        },
+        camera,
+      );
     }
     for (const l of loot.values()) {
       // Resolve a per-loot texture by content kind. Materials
@@ -1287,7 +1317,17 @@ export function runFpsV2Game(
       let color = PROJECTILE_DEFAULT_COLOR;
       if (l.content.kind === 'material') {
         color = materialTint(l.content.materialId);
-        staticTex = lookupTexture('material', l.content.materialId);
+        // Labeled fallback names the missing `material/<id>`
+        // override. Parts / generic pouches keep the colored
+        // billboard — they have no per-id texture category to
+        // upload against.
+        staticTex =
+          lookupTexture('material', l.content.materialId) ??
+          makeLabeledFallbackTexture(
+            'material',
+            l.content.materialId,
+            color,
+          );
       } else if (l.content.kind === 'part') {
         color = TIER_COLORS_NUM[l.content.part.tier] ?? PROJECTILE_DEFAULT_COLOR;
       }
@@ -1334,37 +1374,30 @@ export function runFpsV2Game(
     // already at our world position; rendering a sprite there
     // would just paint over the centre of our own screen.
     // Try the authored ('player', 'default') texture first; fall
-    // back to the solid blue billboard if nothing's uploaded.
-    const playerTex = lookupTexture('player', 'default');
+    // back to a labeled billboard in the old solid blue naming
+    // the missing `player/default` override.
+    const playerTex =
+      lookupTexture('player', 'default') ??
+      makeLabeledFallbackTexture('player', 'default', OTHER_PLAYER_COLOR);
     for (const p of players.values()) {
       if (p.characterId === init.self.characterId) continue;
       // Broadcast absolute feet z anchors the billboard so a
       // jumping teammate visibly leaves the ground; fall back to
       // the local floor mirror when z hasn't arrived yet.
       const groundZ = p.z ?? entityFloorAt(p.x, p.y);
-      if (playerTex) {
-        texturedSprites.push(
-          {
-            textureKey: playerTex.uid,
-            texture: playerTex,
-            x: p.x,
-            y: p.y,
-            anchorZ: groundZ,
-            height: OTHER_PLAYER_HEIGHT,
-            aspect: textureAspect(playerTex),
-            tint: 0xffffff,
-          },
-          camera,
-        );
-      } else {
-        spriteScratch.push({
+      texturedSprites.push(
+        {
+          textureKey: playerTex.uid,
+          texture: playerTex,
           x: p.x,
           y: p.y,
           anchorZ: groundZ,
           height: OTHER_PLAYER_HEIGHT,
-          color: OTHER_PLAYER_COLOR,
-        });
-      }
+          aspect: textureAspect(playerTex),
+          tint: 0xffffff,
+        },
+        camera,
+      );
     }
     sprites.update(spriteScratch, camera);
     texturedSprites.endFrame();

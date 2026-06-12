@@ -35,6 +35,20 @@ export function convertLayoutToSectorMap(
   return convertOpenLayout(layout, buildings);
 }
 
+// The flat fallback colors the colored sector pass uses for a
+// biome's floor / ceiling / wall. Exported so the renderer can
+// paint labeled fallback textures in the exact same hue the
+// colored pass would have shown.
+export function biomeFallbackColors(
+  biomeId: string | null | undefined,
+): { floor: number; ceiling: number; wall: number } {
+  const palette = biomePaletteFor(biomeId ?? 'default');
+  const floor = parseHex(palette.floor);
+  const wall = darkenColor(parseHex(palette.wall), 0.15);
+  const ceiling = darkenColor(floor, 0.45);
+  return { floor, ceiling, wall };
+}
+
 // Append a cap sector + 4 outward-facing walls for each building.
 // The cap sits flat at z=ceilingZ so its floor-fan paints the top
 // face; ceilingZ<floorZ skips the unwanted ceiling. The 4 side
@@ -111,10 +125,11 @@ function convertAuthoredMap(
   buildings: BuildingState[],
 ): ConverterResult {
   const biomeId = layout.biome ?? 'default';
-  const palette = biomePaletteFor(biomeId);
-  const floorColor = parseHex(palette.floor);
-  const wallColor = darkenColor(parseHex(palette.wall), 0.15);
-  const ceilingColor = darkenColor(floorColor, 0.45);
+  const {
+    floor: floorColor,
+    ceiling: ceilingColor,
+    wall: wallColor,
+  } = biomeFallbackColors(biomeId);
   const wallHeightTiles = biomeWallHeightTilesFor(biomeId);
   const ceilingZ = WALL_HEIGHT_WORLD * wallHeightTiles;
   const tileSize = layout.tileSize ?? 32;
@@ -155,10 +170,11 @@ function convertOpenLayout(
   const wb = layout.worldBounds;
   if (!wb) return null;
   const biomeId = layout.biome ?? 'default';
-  const palette = biomePaletteFor(biomeId);
-  const floorColor = parseHex(palette.floor);
-  const wallColor = darkenColor(parseHex(palette.wall), 0.15);
-  const ceilingColor = darkenColor(floorColor, 0.45);
+  const {
+    floor: floorColor,
+    ceiling: ceilingColor,
+    wall: wallColor,
+  } = biomeFallbackColors(biomeId);
   const sector: Sector = {
     id: 0,
     verts: [
