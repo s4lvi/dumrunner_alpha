@@ -553,6 +553,8 @@ buildings on it where slots allow. Layouts are authored in a
 dedicated editor (same content-pipeline pattern as room templates)
 and/or generated procedurally; both feed one `BaseLayoutDef` format.
 
+Engineering plan: `docs/base-layouts-plan.md`.
+
 ### Placement rules
 
 - **Grid-snapped tile placement** on the 32-pixel surface grid.

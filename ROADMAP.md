@@ -178,33 +178,22 @@ weighted 3x in the slot roll). Open: 5 (Forge salvage/reroll),
 
 ## Base layouts (NEW — requested 2026-06-10)
 
-Design in GDD §Base Building › Base Layouts: the surface base is a
-swappable designed platform (flat ground in hilly desolate
-overworld) with turret mounts, wall geometry, and
-workbench/storage capacity slots; built + swapped at the Power
-Link; starter = square with 4 corner mounts. Implementation
-slices:
+Full engineering plan: **`docs/base-layouts-plan.md`** (detailed
+2026-06-13, grounded in the surface/build/persist code). Design in
+GDD §Base Building › Base Layouts.
 
-1. **`BaseLayoutDef`** content type (footprint tile mask /
-   polygon, turret-mount sockets, wall pieces, bench + storage
-   slot counts) + the starter square layout as authored content.
-2. **Surface integration** — platform renders as flat sectors
-   standing over the terrain noise (per-sector noise machinery
-   already supports flat overrides); buildings constrain to the
-   platform; turrets only at mounts.
-3. **Swap flow at the Power Link** — uplink tab lists known layout
-   schematics; build consumes components (economy law); swapping
-   re-seats existing buildings into the new layout's slots,
-   spilling overflow to storage.
-4. **Authoring** — layout editor reusing the rooms-editor pattern
-   (tile paint + socket anchors), and/or a procgen generator for
-   per-cycle variety.
-
-Migration notes: PROTOCOL_VERSION bump; inventory-schema migration
-for any new slot kinds; existing recipe JSON rewritten in place
-(the editor suite makes this authoring, not engineering). Champions
-as component jackpots ride with Sprint C but the loot tables should
-anticipate them.
+Summary: the surface base becomes a swappable authored platform
+(reusing the `SectorScene` → `rasterizeSectorSceneToLayout` pipeline
+that deathmatch arenas + floor overrides already use) with fixed
+turret mounts and workbench/storage capacity slots; bought/swapped
+at the Power Link as a product under the economy law; starter = flat
+square with 4 corner mounts. Five phases (P1 layout data + surface
+built from it → P2 platform-constrained build + capacity → P3 turret
+mounts → P4 swap flow + economy → P5 procgen generator). One
+gameplay change to confirm first: turrets become mount-socketed
+instead of free-placed. Persistence adds `baseLayoutId` to the world
+snapshot (schema 5, additive); PROTOCOL_VERSION bump for
+`set_base_layout` + mount/capacity wire fields.
 
 ---
 
