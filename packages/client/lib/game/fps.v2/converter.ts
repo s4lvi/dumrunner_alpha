@@ -15,6 +15,7 @@ import {
   type TerrainConfig,
 } from '@dumrunner/shared';
 import type { SectorMap, Sector, Wall, Vec2 } from './types';
+import { buildingCubeScale } from './buildingCubeScale';
 
 const WALL_HEIGHT_WORLD = 32;
 
@@ -65,10 +66,16 @@ function emitBuildingCubes(
   terrain: TerrainConfig | null | undefined,
 ): void {
   for (const b of buildings) {
-    const x0 = b.tileX * tileSize;
-    const y0 = b.tileY * tileSize;
-    const x1 = x0 + b.width * tileSize;
-    const y1 = y0 + b.height * tileSize;
+    // Visual-only cube sizing — must match the textured-cube path
+    // (texturedBuildingLayer) exactly so the colored fallback and
+    // the textured shell share footprint + height and never z-fight.
+    // Collision + tile footprint stay full-tile (server-side).
+    const scale = buildingCubeScale(b.kind);
+    const insetPx = scale.inset * tileSize;
+    const x0 = b.tileX * tileSize + insetPx;
+    const y0 = b.tileY * tileSize + insetPx;
+    const x1 = (b.tileX + b.width) * tileSize - insetPx;
+    const y1 = (b.tileY + b.height) * tileSize - insetPx;
     const verts: Vec2[] = [
       { x: x0, y: y0 },
       { x: x1, y: y0 },
@@ -91,7 +98,7 @@ function emitBuildingCubes(
       const z01 = terrainHeightAt(terrain, x0, y1);
       baseZ = Math.min(z00, z10, z11, z01);
     }
-    const topZ = baseZ + ceilingZ;
+    const topZ = baseZ + ceilingZ * scale.heightFrac;
     const sectorId = sectors.length;
     sectors.push({
       id: sectorId,

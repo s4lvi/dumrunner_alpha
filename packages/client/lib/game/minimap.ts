@@ -275,6 +275,18 @@ export function paintMinimap(
   ctx.fillStyle = 'rgba(10, 12, 18, 0.85)';
   ctx.fillRect(0, 0, w, h);
 
+  // Rotate the whole map so the player always faces UP. R maps the
+  // player's world facing (snap.selfYaw, 0 = +X) onto screen-up
+  // (−Y). Without a yaw we fall back to the old north-up static
+  // map (R = 0). The transform is set BEFORE drawing world geometry
+  // and torn down before the self marker so the blob/heading stay
+  // screen-aligned (always pointing up).
+  const R =
+    typeof snap.selfYaw === 'number' ? -Math.PI / 2 - snap.selfYaw : 0;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(R);
+
   // Per-cell painter takes priority — corridors carved into the
   // tile grid show up at full fidelity. Fog of war respects the
   // seen[] bitmap; without it every walkable cell is drawn.
@@ -293,8 +305,8 @@ export function paintMinimap(
         const i = cyIdx * tg.width + cxIdx;
         if (seen && !seen[i]) continue;
         if (!isWalkableTileId(tiles[i])) continue;
-        const x = (ox + cxIdx * ts - snap.selfX) * scale + cx;
-        const y = (oy + cyIdx * ts - snap.selfY) * scale + cy;
+        const x = (ox + cxIdx * ts - snap.selfX) * scale;
+        const y = (oy + cyIdx * ts - snap.selfY) * scale;
         ctx.fillRect(x, y, sx + 0.5, sy + 0.5);
       }
     }
@@ -307,16 +319,16 @@ export function paintMinimap(
         const cat = snap.roomCategories[i] ?? 'hazard';
         if (cat === 'hazard' || cat === 'corridor') continue;
         ctx.fillStyle = ZONE_TINT[cat];
-        const x = (r.x - snap.selfX) * scale + cx;
-        const y = (r.y - snap.selfY) * scale + cy;
+        const x = (r.x - snap.selfX) * scale;
+        const y = (r.y - snap.selfY) * scale;
         ctx.fillRect(x, y, r.w * scale, r.h * scale);
       }
     }
   } else if (snap.walkables.length > 0) {
     ctx.fillStyle = 'rgba(82, 82, 91, 0.45)';
     for (const r of snap.walkables) {
-      const x = (r.x - snap.selfX) * scale + cx;
-      const y = (r.y - snap.selfY) * scale + cy;
+      const x = (r.x - snap.selfX) * scale;
+      const y = (r.y - snap.selfY) * scale;
       ctx.fillRect(x, y, r.w * scale, r.h * scale);
     }
     if (snap.rooms && snap.roomCategories) {
@@ -326,15 +338,17 @@ export function paintMinimap(
         const tint = ZONE_TINT[cat];
         if (cat === 'hazard') continue;
         ctx.fillStyle = tint;
-        const x = (r.x - snap.selfX) * scale + cx;
-        const y = (r.y - snap.selfY) * scale + cy;
+        const x = (r.x - snap.selfX) * scale;
+        const y = (r.y - snap.selfY) * scale;
         ctx.fillRect(x, y, r.w * scale, r.h * scale);
       }
     }
   } else {
+    // North-up fallback background disc. Drawn in local space; the
+    // rotation leaves a centered disc unchanged.
     ctx.fillStyle = 'rgba(82, 82, 91, 0.18)';
     ctx.beginPath();
-    ctx.arc(cx, cy, Math.min(w, h) / 2 - 2, 0, Math.PI * 2);
+    ctx.arc(0, 0, Math.min(w, h) / 2 - 2, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -376,8 +390,8 @@ export function paintMinimap(
       anySeen = true;
     }
     if (!anySeen) continue;
-    const x = (b.tileX * tileSize - snap.selfX) * scale + cx;
-    const y = (b.tileY * tileSize - snap.selfY) * scale + cy;
+    const x = (b.tileX * tileSize - snap.selfX) * scale;
+    const y = (b.tileY * tileSize - snap.selfY) * scale;
     const sw = Math.max(2, b.width * tileSize * scale);
     const sh = Math.max(2, b.height * tileSize * scale);
     ctx.fillStyle = buildingMinimapColor(b);
@@ -388,8 +402,8 @@ export function paintMinimap(
     if (p.characterId === snap.selfId) continue;
     if (!p.visible) continue;
     if (!isSeenWorld(p.x, p.y)) continue;
-    const x = (p.x - snap.selfX) * scale + cx;
-    const y = (p.y - snap.selfY) * scale + cy;
+    const x = (p.x - snap.selfX) * scale;
+    const y = (p.y - snap.selfY) * scale;
     ctx.fillStyle = '#34d399';
     ctx.beginPath();
     ctx.arc(x, y, 3, 0, Math.PI * 2);
@@ -398,13 +412,18 @@ export function paintMinimap(
   for (const e of snap.enemies) {
     if (!e.visible || e.hp <= 0) continue;
     if (!isSeenWorld(e.x, e.y)) continue;
-    const x = (e.x - snap.selfX) * scale + cx;
-    const y = (e.y - snap.selfY) * scale + cy;
+    const x = (e.x - snap.selfX) * scale;
+    const y = (e.y - snap.selfY) * scale;
     ctx.fillStyle = '#ef4444';
     ctx.beginPath();
     ctx.arc(x, y, 2.5, 0, Math.PI * 2);
     ctx.fill();
   }
+
+  // End the rotated world transform. The self marker + heading
+  // line below draw in screen space so the player blob sits at the
+  // center and its heading always points straight up.
+  ctx.restore();
 
   ctx.fillStyle = '#fde047';
   ctx.beginPath();
@@ -414,19 +433,19 @@ export function paintMinimap(
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Heading line — points the way the player is facing. Drawn
-  // after the blob so it sits on top. Length is fixed in pixels
-  // (not world units) so it stays legible at every zoom level.
+  // Heading line — now that the MAP rotates around the player, the
+  // player's facing is always screen-up, so the line points
+  // straight up. Length is fixed in pixels (not world units) so it
+  // stays legible at every zoom level. Drawn after the blob so it
+  // sits on top.
   if (typeof snap.selfYaw === 'number') {
     const HEADING_LEN_PX = 9;
-    const hx = cx + Math.cos(snap.selfYaw) * HEADING_LEN_PX;
-    const hy = cy + Math.sin(snap.selfYaw) * HEADING_LEN_PX;
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    ctx.lineTo(hx, hy);
+    ctx.lineTo(cx, cy - HEADING_LEN_PX);
     ctx.stroke();
   }
 

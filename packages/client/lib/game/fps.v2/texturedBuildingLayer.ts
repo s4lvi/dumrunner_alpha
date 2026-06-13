@@ -30,6 +30,7 @@ import {
   type BuildingState,
   type TerrainConfig,
 } from '@dumrunner/shared';
+import { buildingCubeScale } from './buildingCubeScale';
 import {
   createTexturedSectorCameraUniforms,
   createTexturedSectorShader,
@@ -230,10 +231,15 @@ function buildBuildingGeometry(
   const southBright = shade(0, 1, 0);
   const westBright = shade(-1, 0, 0);
   for (const b of buildings) {
-    const x0 = b.tileX * tileSize;
-    const y0 = b.tileY * tileSize;
-    const x1 = x0 + b.width * tileSize;
-    const y1 = y0 + b.height * tileSize;
+    // Visual-only cube sizing. Stations/chests shrink to a
+    // bench-sized object; everything else stays a full tile cube.
+    // Collision + tile footprint are unchanged (server-side).
+    const scale = buildingCubeScale(b.kind);
+    const insetPx = scale.inset * tileSize;
+    const x0 = b.tileX * tileSize + insetPx;
+    const y0 = b.tileY * tileSize + insetPx;
+    const x1 = (b.tileX + b.width) * tileSize - insetPx;
+    const y1 = (b.tileY + b.height) * tileSize - insetPx;
     // Per-CORNER diagonal displacement so adjacent walls share
     // their endpoints. Earlier per-face displacement left a
     // notch at every corner (the north wall's NE endpoint and
@@ -257,11 +263,14 @@ function buildBuildingGeometry(
       const z01 = terrainHeightAt(terrain, x0, y1);
       baseZ = Math.min(z00, z10, z11, z01);
     }
-    const topZ = baseZ + ceilingZ;
+    const cubeHeight = ceilingZ * scale.heightFrac;
+    const topZ = baseZ + cubeHeight;
     const capZ = topZ + FACE_NUDGE;
-    const widthTiles = b.width;
-    const depthTiles = b.height;
-    const wallTopV = ceilingZ / TEXTURE_TILE_PX;
+    // UV ranges follow the actual (inset) world span so the texture
+    // isn't stretched on shrunk cubes.
+    const widthTiles = (x1 - x0) / tileSize;
+    const depthTiles = (y1 - y0) / tileSize;
+    const wallTopV = cubeHeight / TEXTURE_TILE_PX;
     // Cap (top face) — extended to the displaced corners so
     // the cap meets the wall tops with no seam.
     const capBase = vCursor;
