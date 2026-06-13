@@ -287,3 +287,25 @@ const WALL_BARRIER_KINDS: ReadonlySet<BuildingKind> = new Set<BuildingKind>([
 export function isWallBarrierKind(kind: BuildingKind): boolean {
   return WALL_BARRIER_KINDS.has(kind);
 }
+
+// Per-kind cube sizing. Workstations + storage render AND collide as
+// bench-sized objects (half height, ~0.6-tile footprint) rather than
+// full-height wall cubes. Shared so the server collision geometry
+// (sectorBuild.emitBuildingCubes) and both client render paths
+// (texturedBuildingLayer + converter.emitBuildingCubes) agree — the
+// physical hitbox matches what's drawn. The TILE footprint
+// (tileX/width/height) is unchanged for placement/occupancy/minimap;
+// this only shrinks the solid cube within that tile.
+export type BuildingCubeScale = {
+  // Fraction of the full cube height (1 = full wall).
+  heightFrac: number;
+  // Inset per side as a fraction of ONE tile (0 = full footprint).
+  inset: number;
+};
+
+const FULL_CUBE: BuildingCubeScale = { heightFrac: 1, inset: 0 };
+const BENCH_CUBE: BuildingCubeScale = { heightFrac: 0.5, inset: 0.2 };
+
+export function buildingCubeScale(kind: BuildingKind): BuildingCubeScale {
+  return isStationKind(kind) ? BENCH_CUBE : FULL_CUBE;
+}

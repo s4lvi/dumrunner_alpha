@@ -6,6 +6,7 @@
 // rewrite makes both call-sites obsolete.
 
 import {
+  buildingCubeScale,
   decodeTileGrid,
   isWalkableTileId,
   terrainHeightAt,
@@ -212,10 +213,17 @@ export function emitBuildingCubes(
     // buildings emit normally. Matches the legacy collision
     // path's `isPointInAnyBuilding` open-door bypass.
     if (b.kind === 'wall_door' && b.open === true) continue;
-    const x0 = b.tileX * tileSize;
-    const y0 = b.tileY * tileSize;
-    const x1 = x0 + b.width * tileSize;
-    const y1 = y0 + b.height * tileSize;
+    // Bench-sized buildings collide as a smaller cube than their tile
+    // footprint (matches the visual shrink in the client render paths
+    // via the shared buildingCubeScale). The tile footprint stays full
+    // for placement/occupancy; only the solid extent shrinks so the
+    // player can brush past a bench instead of a full wall.
+    const scale = buildingCubeScale(b.kind);
+    const insetPx = scale.inset * tileSize;
+    const x0 = b.tileX * tileSize + insetPx;
+    const y0 = b.tileY * tileSize + insetPx;
+    const x1 = (b.tileX + b.width) * tileSize - insetPx;
+    const y1 = (b.tileY + b.height) * tileSize - insetPx;
     const verts: Vec2[] = [
       { x: x0, y: y0 },
       { x: x1, y: y0 },
@@ -238,7 +246,7 @@ export function emitBuildingCubes(
       const z01 = terrainHeightAt(terrain, x0, y1);
       baseZ = Math.min(z00, z10, z11, z01);
     }
-    const topZ = baseZ + ceilingZ;
+    const topZ = baseZ + ceilingZ * scale.heightFrac;
     const sectorId = sectors.length;
     sectors.push({
       id: sectorId,

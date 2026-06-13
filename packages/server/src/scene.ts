@@ -40,6 +40,7 @@ import {
   addPlaceable,
   addWeapon,
   BUILDING_REGISTRY,
+  buildingCubeScale,
   buildingHordePriority,
   buildingMaxHp,
   computeWeaponImbues,
@@ -4539,11 +4540,16 @@ export class Scene {
       // Open player-built doors are walk-through. Same check
       // doubles for projectile collision (LoS goes through too).
       if (b.kind === 'wall_door' && b.open === true) continue;
-      const px = b.tileX * tileSize;
-      const py = b.tileY * tileSize;
-      const pw = b.width * tileSize;
-      const ph = b.height * tileSize;
-      if (x >= px && x <= px + pw && y >= py && y <= py + ph) return true;
+      // Bench-sized buildings have a smaller solid footprint than
+      // their tile (matches the visual + the sector-wall collision
+      // via the shared buildingCubeScale). Inset the AABB so enemy
+      // collision / projectile blocking / build-overlap all agree.
+      const inset = buildingCubeScale(b.kind).inset * tileSize;
+      const px = b.tileX * tileSize + inset;
+      const py = b.tileY * tileSize + inset;
+      const px1 = (b.tileX + b.width) * tileSize - inset;
+      const py1 = (b.tileY + b.height) * tileSize - inset;
+      if (x >= px && x <= px1 && y >= py && y <= py1) return true;
     }
     return false;
   }
