@@ -1963,7 +1963,10 @@ export function Game({
             inventory={inventory}
             knownBlueprints={knownBlueprints}
             activeLayoutId={baseLayoutId}
-            nearUplink={nearWorkstations.has('artifact_uplink')}
+            // The uplink is folded into the Power Link — this modal
+            // only opens when the player is AT the Power Link, so the
+            // blueprint/key trade is always in range here.
+            nearUplink={true}
             onClose={() => setShowPowerLink(false)}
             onDescend={() => {
               setShowPowerLink(false);
