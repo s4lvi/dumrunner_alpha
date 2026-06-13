@@ -25,10 +25,11 @@ import type { SceneLayout } from './protocol';
 // kicks in around floor 5+ where the ramp has compounded.
 const BASE_DPS_AT_FLOOR_0 = 2.5;
 
-// Multiplier applied per 5-floor band. With 1.4×, a band-2 floor
-// is ~2× a surface floor, band-4 is ~4× — matches the GDD's "deep
-// pushes have a brutal damage clock" without exponential blowup.
-const DEPTH_RAMP_PER_5_FLOORS = 1.4;
+// Multiplier applied per 5-floor band. With 1.25×, a band-2 floor
+// is ~1.6× a surface floor, band-4 is ~2.4× — softened from 1.4 so
+// band 2 isn't an RNG-gated wall, while deep pushes still carry a
+// compounding damage clock without exponential blowup.
+const DEPTH_RAMP_PER_5_FLOORS = 1.25;
 
 // Resist cap during damage application. Even maxed-out specialty
 // life support can't fully negate a hazard — there's always some

@@ -48,11 +48,13 @@ function nextDropId(): string {
 
 // Frames are the gun chassis — with weapon recipes consuming a
 // class-pinned frame (economy law), they have to be the common
-// part drop or weapon crafting starves. ~3x weight on frames;
-// everything else uniform.
+// part drop or weapon crafting starves. 4x weight on frames so the
+// new-weapon chase keeps pace; life_support gets 2x so the hazard-gear
+// gate (matching specialty) isn't a ~1/200-kill lottery. Everything
+// else uniform.
 const SLOT_WEIGHTS: Array<[PartSlot, number]> = ALL_SLOTS.map((s) => [
   s,
-  s === 'frame' ? 3 : 1,
+  s === 'frame' ? 4 : s === 'life_support' ? 2 : 1,
 ]);
 const SLOT_WEIGHT_TOTAL = SLOT_WEIGHTS.reduce((t, [, w]) => t + w, 0);
 

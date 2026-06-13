@@ -6,7 +6,7 @@
   "description": "Fast, high-damage, narrow arc. Pairs well with imbue mods.",
   "craftingStation": "workbench",
   "melee": {
-    "damage": 95,
+    "damage": 60,
     "swingIntervalMs": 380,
     "range": 80,
     "arcRad": 0.8,

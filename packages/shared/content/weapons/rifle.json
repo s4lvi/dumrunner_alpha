@@ -6,7 +6,7 @@
   "description": "High-damage long-range slug. Slow rate of fire.",
   "craftingStation": "workbench",
   "ranged": {
-    "damage": 60,
+    "damage": 74,
     "fireIntervalMs": 700,
     "projectileSpeed": 2800,
     "projectileTtlMs": 1200,

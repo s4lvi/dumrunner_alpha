@@ -52,6 +52,20 @@ export function buildStarterInventory(): Inventory {
   inv[10] = { kind: 'material', materialId: 'wire', count: 15 };
   inv[11] = { kind: 'material', materialId: 'circuit', count: 15 };
   inv[12] = { kind: 'material', materialId: 'crystal', count: 2 };
+  // A single Mk1 rifle frame so a new player can immediately craft a
+  // second weapon and learn the frame→weapon loop with a concrete
+  // example. Shape matches the loot roller's CarriedPart output.
+  inv[13] = {
+    kind: 'part',
+    part: {
+      id: 'starter_frame_rifle',
+      slot: 'frame',
+      tier: 'Mk1',
+      weaponClass: 'rifle',
+      affixCount: 0,
+      affixes: [],
+    },
+  };
   return inv;
 }
 

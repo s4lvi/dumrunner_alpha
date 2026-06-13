@@ -6,7 +6,7 @@
   "description": "High-cadence laser. Lower per-hit damage but blinding projectile speed.",
   "craftingStation": "workbench",
   "ranged": {
-    "damage": 16,
+    "damage": 13,
     "fireIntervalMs": 110,
     "projectileSpeed": 3200,
     "projectileTtlMs": 800,
