@@ -1783,6 +1783,27 @@ export function Game({
             />
           )}
         {!isDeathmatch && <PowerHud state={powerState} />}
+        {(() => {
+          // Build-mode capacity readout: mirrors the build-mode
+          // effect's gate (surface scene + selected placeable with
+          // stock) so the HUD shows exactly when the ghost cube is
+          // live.
+          const slot = inventory[hotbarSelection];
+          const buildKind =
+            sceneId === 'surface' &&
+            slot?.kind === 'placeable' &&
+            slot.count > 0
+              ? (slot.buildingKind as PlaceableBuildingKind)
+              : null;
+          if (!buildKind) return null;
+          return (
+            <BaseCapacityHud
+              kind={buildKind}
+              buildings={buildings}
+              layout={currentLayout}
+            />
+          );
+        })()}
         <ActiveEffectsHud effects={activeEffects} />
         {dmRound && (
           <DmHud
@@ -2842,6 +2863,61 @@ function PowerHud({
         {!state.online && (
           <span className="text-[9px] uppercase tracking-wider">offline</span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Base-capacity readout shown while build mode is active. Mirrors the
+// server's baseBuildCategory: storage_chest counts against storage,
+// any other station building against workstations, everything else
+// (walls/turrets/power_link) is uncapped and shows nothing. Goes red
+// when the category is full so the player sees the server's silent
+// cap before clicking. No clearing/baseCapacity → nothing renders.
+function baseBuildCategoryClient(
+  kind: BuildingKind,
+): 'workstation' | 'storage' | 'uncapped' {
+  if (kind === 'storage_chest') return 'storage';
+  return BUILDING_REGISTRY[kind]?.isStation ? 'workstation' : 'uncapped';
+}
+
+function BaseCapacityHud({
+  kind,
+  buildings,
+  layout,
+}: {
+  kind: PlaceableBuildingKind;
+  buildings: Map<string, BuildingState>;
+  layout: import('@dumrunner/shared').SceneLayout | null;
+}) {
+  const cap = layout?.baseCapacity;
+  if (!cap) return null;
+  const category = baseBuildCategoryClient(kind);
+  if (category === 'uncapped') return null;
+  const max = category === 'storage' ? cap.storage : cap.workstations;
+  let used = 0;
+  for (const b of buildings.values()) {
+    if (baseBuildCategoryClient(b.kind) === category) used++;
+  }
+  const full = used >= max;
+  const label = category === 'storage' ? 'Storage' : 'Workstations';
+  return (
+    <div className="absolute top-20 left-1/2 -translate-x-1/2 pointer-events-none select-none">
+      <div
+        className={`px-2.5 py-1 rounded-full border text-[11px] flex items-center gap-2 ${
+          full
+            ? 'bg-red-950/90 border-red-500 text-red-100'
+            : 'bg-[color:var(--panel)]/90 border-[color:var(--panel-border)] text-cyan-200'
+        }`}
+      >
+        <span className="text-zinc-400 uppercase tracking-wider text-[9px]">
+          {label}
+        </span>
+        <span className="tabular-nums">
+          {used}
+          <span className="text-zinc-500">/</span>
+          {max}
+        </span>
       </div>
     </div>
   );

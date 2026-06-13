@@ -70,6 +70,7 @@ import {
   buildingVisualFor,
   decodeTileGrid,
   enemyVisualFor,
+  insideClearingPad,
   isWalkableTileId,
   materialTint,
   propVisualFor,
@@ -1602,7 +1603,19 @@ export function runFpsV2Game(
     const dx = tx - selfTx;
     const dy = ty - selfTy;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const inRange = dist <= 3 + buildRadiusBonusTiles;
+    const withinRadius = dist <= 3 + buildRadiusBonusTiles;
+    // Off-pad check: when the surface has a clearing, the target
+    // tile centre must lie on the flat buildable pad. The server
+    // rejects off-pad builds silently; this mirrors that so the
+    // ghost reads red on the apron/hills. No clearing → no pad
+    // constraint (behaves as before).
+    let onPad = true;
+    if (layout.terrain?.clearing) {
+      const tileCenterX = tx * tileSize + tileSize * 0.5;
+      const tileCenterY = ty * tileSize + tileSize * 0.5;
+      onPad = insideClearingPad(layout.terrain, tileCenterX, tileCenterY);
+    }
+    const inRange = withinRadius && onPad;
     return { tileX: tx, tileY: ty, inRange };
   }
 
