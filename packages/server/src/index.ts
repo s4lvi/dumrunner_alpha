@@ -302,10 +302,14 @@ wss.on('connection', (ws: WebSocket) => {
     }
     const msg = parsed.data;
 
-    // Non-input messages draw from the tight bucket too. Input is
-    // exempt (legitimately ~frame-rate); everything else has no
-    // business exceeding tens per second.
-    if (msg.type !== 'input') {
+    // Non-input messages draw from the tight bucket too. `input` AND
+    // `fire` are exempt: both are legitimately sent at ~frame rate
+    // (hold-to-fire pulses every frame; the server gates the actual
+    // shot by the weapon's fire interval), so the tight 25/s bucket
+    // would starve them — the bug where the pistol stops firing after
+    // ~10 shots. They're still covered by the wide bucket. Everything
+    // else has no business exceeding tens per second.
+    if (msg.type !== 'input' && msg.type !== 'fire') {
       if (tightBudget < 1) {
         if (++rateDrops > RATE_DROPS_BEFORE_CLOSE) {
           ws.close(4008, 'rate_limited');
