@@ -194,12 +194,21 @@ wss.on('listening', () => {
 // dead and we tear them down.
 type HeartbeatWS = WebSocket & { isAlive?: boolean };
 const HEARTBEAT_INTERVAL_MS = 25_000;
-// Rate-limit tuning. Wide bucket: all messages — sized for the 60Hz
-// input stream plus bursts (hotbar scrolling, chat, UI). Tight
-// bucket: everything except input — 25/s sustained with a 60 burst
-// covers every legitimate UI interaction with a wide margin.
-const RATE_WIDE_CAP = 240;
-const RATE_WIDE_PER_SEC = 120;
+// Rate-limit tuning. Wide bucket: ALL messages — must clear the
+// client's TWO frame-rate streams (input + fire are both sent every
+// frame; the server gates the real shot by fire interval). A 144Hz
+// client = ~288 msg/s, a 240Hz one ~480; the old 120/s refill
+// drained the bucket mid-magazine and dropped fire (~10 shots then
+// dead). Sized to 600/s sustain (covers ~300fps dual-stream) with a
+// 1200 burst; a genuine flood still trips RATE_DROPS_BEFORE_CLOSE.
+// The expensive discrete handlers (build/craft/inventory) are
+// protected by the tight bucket below, so the wide one is just a
+// flood backstop and can be generous.
+const RATE_WIDE_CAP = 1200;
+const RATE_WIDE_PER_SEC = 600;
+// Tight bucket: everything EXCEPT the input/fire frame-rate streams
+// — 25/s sustained with a 60 burst covers every legitimate UI /
+// action interaction with a wide margin.
 const RATE_TIGHT_CAP = 60;
 const RATE_TIGHT_PER_SEC = 25;
 const RATE_DROPS_BEFORE_CLOSE = 600;
