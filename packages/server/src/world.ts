@@ -733,7 +733,6 @@ export class World {
           { kind: 'weapon_bench', tileX: 6, tileY: 2 },
           { kind: 'suit_bench', tileX: 8, tileY: 2 },
           { kind: 'precision_mill', tileX: 10, tileY: 2 },
-          { kind: 'artifact_uplink', tileX: 12, tileY: 2 },
           { kind: 'storage_chest', tileX: 14, tileY: 2 },
         ]);
       }
@@ -2444,7 +2443,7 @@ export class World {
       !surface?.hasBuildingNearby(
         conn.x,
         conn.y,
-        'artifact_uplink',
+        'power_link',
         COMBAT.CRAFT_STATION_RANGE_PX
       )
     ) {
@@ -3251,7 +3250,7 @@ export class World {
       !surface?.hasBuildingNearby(
         conn.x,
         conn.y,
-        'artifact_uplink',
+        'power_link',
         COMBAT.CRAFT_STATION_RANGE_PX
       )
     ) {

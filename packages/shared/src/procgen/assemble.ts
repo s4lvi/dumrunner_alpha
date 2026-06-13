@@ -307,35 +307,10 @@ export function assembleSceneLayout(
 
   const spawnRoom = rooms[regionSet.spawnRegionIndex];
   const interactables: Interactable[] = [];
-  // Push the extract_pad to the north wall of the spawn room and
-  // the player spawn to the south wall, so the 1-tile portal cube
-  // doesn't intersect with the player's body radius at scene
-  // load. Previously extract_pad sat 1 tile north of dead-centre
-  // and the player spawned ON dead-centre, leaving the player's
-  // hitbox clipping into the portal's south face — "stuck in the
-  // stairs/extract cube, jump to get out".
-  if (spawnRoom) {
-    interactables.push({
-      id: 'extract_pad',
-      kind: 'extract_pad',
-      x: spawnRoom.x + spawnRoom.w / 2,
-      y: spawnRoom.y + tileSize * 1.5,
-      label: 'Extract to base',
-    });
-  }
-  if (regionSet.stairsRegionIndex !== null) {
-    const stairsRoom = rooms[regionSet.stairsRegionIndex];
-    if (stairsRoom) {
-      interactables.push({
-        id: 'stairs_down',
-        kind: 'stairs_down',
-        x: stairsRoom.x + stairsRoom.w / 2,
-        y: stairsRoom.y + stairsRoom.h / 2,
-        label: `Descend to floor ${opts.floorIndex + 1}`,
-      });
-    }
-  }
 
+  // The player spawn must be resolved BEFORE the portals so the
+  // portal snap can guarantee spawn-reachability. (Spawn tile is
+  // never a portal cube, so it's our BFS root.)
   const spawn = spawnRoom
     ? {
         x: spawnRoom.x + spawnRoom.w / 2,
@@ -353,6 +328,82 @@ export function assembleSceneLayout(
         ),
       }
     : { x: 0, y: 0 };
+
+  // Each portal (stairs_down / extract_pad) becomes a SOLID 1-tile
+  // building cube at its interactable position (Scene.ensurePortal
+  // Buildings). The player can never stand ON the cube; they must
+  // stand on an ADJACENT walkable cell within INTERACTABLE_RADIUS to
+  // E-press it. The natural placement (room-rect centre / 1.5 tiles
+  // from the spawn wall) is normally fine, but a chamfered or
+  // template-stamped room can round the centre onto a wall/void cell,
+  // or ring the cube with non-floor cells, leaving the portal cube
+  // physically unreachable from spawn even though the tile under it
+  // reads "floor". `snapPortalToReachableCell` snaps the position to
+  // the nearest cell in the room that (a) is floor, (b) is reachable
+  // from spawn with BOTH portal cubes treated as solid, and (c) has
+  // a floor, non-portal, spawn-reachable orthogonal neighbour to
+  // stand on. The natural centre is checked first, so well-behaved
+  // floors are unchanged.
+  const spawnTileX = Math.floor(spawn.x / tileSize);
+  const spawnTileY = Math.floor(spawn.y / tileSize);
+  const portalTiles: PortalTileSet = { tiles: new Set() };
+
+  // Push the extract_pad ~1.5 tiles north of the spawn-room centre so
+  // the 1-tile portal cube doesn't intersect the player's body radius
+  // at scene load (player spawns 2 tiles south). Snap to a reachable
+  // floor cell if the natural spot lands on non-floor / orphaned
+  // geometry.
+  if (spawnRoom) {
+    const desired = {
+      x: spawnRoom.x + spawnRoom.w / 2,
+      y: spawnRoom.y + tileSize * 1.5,
+    };
+    const pos = snapPortalToReachableCell(
+      tileGrid,
+      spawnRoom,
+      desired,
+      spawnTileX,
+      spawnTileY,
+      portalTiles,
+    );
+    portalTiles.tiles.add(
+      `${Math.floor(pos.x / tileSize)}:${Math.floor(pos.y / tileSize)}`,
+    );
+    interactables.push({
+      id: 'extract_pad',
+      kind: 'extract_pad',
+      x: pos.x,
+      y: pos.y,
+      label: 'Extract to base',
+    });
+  }
+  if (regionSet.stairsRegionIndex !== null) {
+    const stairsRoom = rooms[regionSet.stairsRegionIndex];
+    if (stairsRoom) {
+      const desired = {
+        x: stairsRoom.x + stairsRoom.w / 2,
+        y: stairsRoom.y + stairsRoom.h / 2,
+      };
+      const pos = snapPortalToReachableCell(
+        tileGrid,
+        stairsRoom,
+        desired,
+        spawnTileX,
+        spawnTileY,
+        portalTiles,
+      );
+      portalTiles.tiles.add(
+        `${Math.floor(pos.x / tileSize)}:${Math.floor(pos.y / tileSize)}`,
+      );
+      interactables.push({
+        id: 'stairs_down',
+        kind: 'stairs_down',
+        x: pos.x,
+        y: pos.y,
+        label: `Descend to floor ${opts.floorIndex + 1}`,
+      });
+    }
+  }
 
   return {
     worldBounds: bounds,
@@ -450,6 +501,157 @@ function rasterize(
     h: r.tileH * tileSize,
   }));
   return { tileGrid, walkables: rooms, rooms };
+}
+
+// Portal cube tiles accumulated as portals are placed, so each
+// subsequent snap treats already-placed cubes as solid.
+type PortalTileSet = { tiles: Set<string> };
+
+function decodeTiles(tilesB64: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') {
+    return Uint8Array.from(Buffer.from(tilesB64, 'base64'));
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bin = (globalThis as any).atob(tilesB64) as string;
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// Snap a portal's interactable position to a cell that is reachable
+// and standable-adjacent from the spawn, with the portal cubes
+// treated as SOLID. Returns a world position centred on the chosen
+// tile. The desired (natural) cell is tried first; if it qualifies
+// it's returned unchanged. Otherwise we search the portal's room in
+// rings of increasing Chebyshev distance for the nearest qualifying
+// cell. Falls back to the desired position if nothing qualifies (a
+// fully sealed room — the connectivity diag will flag the seed).
+//
+// A cell qualifies as a portal site iff:
+//   1. it is DEFAULT_FLOOR_TILE_ID (walkable floor),
+//   2. at least one orthogonal neighbour is floor, not a portal
+//      cube, and reachable from the spawn tile, and
+//   3. that neighbour is the cell the player stands on to interact,
+//      so the portal cube on (1) is approachable.
+function snapPortalToReachableCell(
+  grid: TileGrid,
+  room: Rect,
+  desired: Vec2,
+  spawnTileX: number,
+  spawnTileY: number,
+  placedPortals: PortalTileSet,
+): Vec2 {
+  const ts = grid.tileSize;
+  const W = grid.width;
+  const H = grid.height;
+  const tiles = decodeTiles(grid.tilesB64);
+  const idAt = (tx: number, ty: number): number => {
+    const lx = tx - grid.originTileX;
+    const ly = ty - grid.originTileY;
+    if (lx < 0 || ly < 0 || lx >= W || ly >= H) return 0;
+    return tiles[ly * W + lx];
+  };
+  const isFloor = (tx: number, ty: number) =>
+    idAt(tx, ty) === DEFAULT_FLOOR_TILE_ID;
+  const isPortal = (tx: number, ty: number) =>
+    placedPortals.tiles.has(`${tx}:${ty}`);
+  // Reachability over the floor grid from the spawn tile, with the
+  // candidate cube tile + already-placed portal cubes treated as
+  // solid. Diagonal moves allowed (continuous player movement can
+  // round chamfered corners), gated so the diagonal doesn't cut
+  // through a wall on either side.
+  const reachableFrom = (
+    rootX: number,
+    rootY: number,
+    blockedX: number,
+    blockedY: number,
+    targets: Set<string>,
+  ): boolean => {
+    const walkable = (tx: number, ty: number) =>
+      isFloor(tx, ty) &&
+      !isPortal(tx, ty) &&
+      !(tx === blockedX && ty === blockedY);
+    if (!walkable(rootX, rootY)) return false;
+    const seen = new Set<string>([`${rootX}:${rootY}`]);
+    const queue: Array<[number, number]> = [[rootX, rootY]];
+    const dirs: Array<[number, number]> = [
+      [1, 0], [-1, 0], [0, 1], [0, -1],
+      [1, 1], [1, -1], [-1, 1], [-1, -1],
+    ];
+    while (queue.length > 0) {
+      const [cx, cy] = queue.shift()!;
+      if (targets.has(`${cx}:${cy}`)) return true;
+      for (const [dx, dy] of dirs) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        const key = `${nx}:${ny}`;
+        if (seen.has(key)) continue;
+        if (!walkable(nx, ny)) continue;
+        // Diagonal: require both orthogonal shoulders walkable so we
+        // don't slip through a corner formed by two walls.
+        if (dx !== 0 && dy !== 0) {
+          if (!walkable(cx + dx, cy) || !walkable(cx, cy + dy)) continue;
+        }
+        seen.add(key);
+        queue.push([nx, ny]);
+      }
+    }
+    return false;
+  };
+  // Does a portal cube on (tx,ty) have a spawn-reachable, floor,
+  // non-portal neighbour the player can stand on to interact?
+  const qualifies = (tx: number, ty: number): boolean => {
+    if (!isFloor(tx, ty)) return false;
+    if (isPortal(tx, ty)) return false;
+    const neighbours: Array<[number, number]> = [
+      [tx + 1, ty], [tx - 1, ty], [tx, ty + 1], [tx, ty - 1],
+    ];
+    const standTargets = new Set<string>();
+    for (const [nx, ny] of neighbours) {
+      if (isFloor(nx, ny) && !isPortal(nx, ny)) standTargets.add(`${nx}:${ny}`);
+    }
+    if (standTargets.size === 0) return false;
+    // BFS from spawn with THIS cube treated as solid; succeed if any
+    // qualifying neighbour is reached.
+    return reachableFrom(spawnTileX, spawnTileY, tx, ty, standTargets);
+  };
+  const centre = (tx: number, ty: number): Vec2 => ({
+    x: (tx + 0.5) * ts,
+    y: (ty + 0.5) * ts,
+  });
+  const desiredTx = Math.floor(desired.x / ts);
+  const desiredTy = Math.floor(desired.y / ts);
+  if (qualifies(desiredTx, desiredTy)) return desired;
+  // Ring search outward within the room's tile bounds.
+  const roomTx0 = Math.floor(room.x / ts);
+  const roomTy0 = Math.floor(room.y / ts);
+  const roomTx1 = Math.ceil((room.x + room.w) / ts) - 1;
+  const roomTy1 = Math.ceil((room.y + room.h) / ts) - 1;
+  const maxR =
+    Math.max(roomTx1 - roomTx0, roomTy1 - roomTy0, 1) + 1;
+  for (let r = 1; r <= maxR; r++) {
+    let best: { tx: number; ty: number; d2: number } | null = null;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const tx = desiredTx + dx;
+        const ty = desiredTy + dy;
+        if (tx < roomTx0 || tx > roomTx1 || ty < roomTy0 || ty > roomTy1) {
+          continue;
+        }
+        if (!qualifies(tx, ty)) continue;
+        const c = centre(tx, ty);
+        const d2 =
+          (c.x - desired.x) * (c.x - desired.x) +
+          (c.y - desired.y) * (c.y - desired.y);
+        if (!best || d2 < best.d2) best = { tx, ty, d2 };
+      }
+    }
+    if (best) return centre(best.tx, best.ty);
+  }
+  // No qualifying cell anywhere in the room. Leave the desired
+  // position; the connectivity diagnostic surfaces the seed.
+  return desired;
 }
 
 function encodeTiles(tiles: Uint8Array): string {
