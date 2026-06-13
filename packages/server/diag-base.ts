@@ -18,6 +18,8 @@ import {
 import {
   terrainHeightAt,
   insideClearingPad,
+  emptyInventory,
+  addPlaceable,
   type SceneLayout,
 } from '@dumrunner/shared';
 
@@ -86,6 +88,9 @@ function surfaceLayout(): SceneLayout {
     tileSize: 32,
     biome: 'default',
     terrain: TERRAIN,
+    // P2: caps from the starter layout so the build-enforcement test
+    // exercises the real wire path world.ts uses.
+    baseCapacity: STARTER!.capacity,
   };
 }
 
@@ -177,6 +182,58 @@ function main(): void {
       ` airborneTicks=${airborneTicks} finalZ=${conn.z.toFixed(2)} (expect reached, ~0 blocked, 0 airborne)`,
   );
   if (!reachedPad || airborneTicks > 0 || blockedTicks > 3) fail++;
+
+  // 5. Build enforcement (P2) — end-to-end through handleBuildRequest
+  // on a fresh surface scene, player standing on the pad centre with
+  // a generous placeable stock.
+  const bScene = new Scene('surface', 'surface', bindings, surfaceLayout());
+  bScene.addMember('diag');
+  conn = makeConn(c.cx, c.cy, 0);
+  conn.inventory = emptyInventory();
+  addPlaceable(conn.inventory, 'workbench', 20);
+  addPlaceable(conn.inventory, 'storage_chest', 20);
+  addPlaceable(conn.inventory, 'wall', 20);
+  const cap = STARTER!.capacity;
+  const countKind = (k: string): number => {
+    let n = 0;
+    for (const b of (bScene as unknown as { buildings: Map<string, { kind: string }> }).buildings.values()) {
+      if (b.kind === k) n++;
+    }
+    return n;
+  };
+  const build = (k: 'workbench' | 'storage_chest' | 'wall', tx: number, ty: number) =>
+    (bScene as unknown as { handleBuildRequest: (id: string, k: string, tx: number, ty: number) => void }).handleBuildRequest('diag', k, tx, ty);
+  // Pad-centre tile + nearby tiles, all within build range (radius 3).
+  const ct = Math.round(c.cx / 32);
+  // 5a. Workstation cap: try cap+3 workbenches on distinct on-pad tiles.
+  for (let i = 0; i < cap.workstations + 3; i++) {
+    build('workbench', ct - 3 + i, 0);
+  }
+  const wbCount = countKind('workbench');
+  console.log(`5a. workstation cap: built=${wbCount} (limit ${cap.workstations})`);
+  if (wbCount !== cap.workstations) fail++;
+  // 5b. Storage cap.
+  for (let i = 0; i < cap.storage + 3; i++) {
+    build('storage_chest', ct - 3 + i, 2);
+  }
+  const stCount = countKind('storage_chest');
+  console.log(`5b. storage cap: built=${stCount} (limit ${cap.storage})`);
+  if (stCount !== cap.storage) fail++;
+  // 5c. Walls uncapped: 6 on distinct on-pad tiles all succeed.
+  for (let i = 0; i < 6; i++) build('wall', ct - 3 + i, -2);
+  const wallCount = countKind('wall');
+  console.log(`5c. walls uncapped: built=${wallCount} (expect 6)`);
+  if (wallCount !== 6) fail++;
+  // 5d. Off-pad rejected: a wall far outside the pad, but in range of
+  // a player standing at the pad edge.
+  const edgeTile = Math.round((c.cx + c.radius + c.apron + 64) / 32);
+  conn.x = (edgeTile - 1) * 32 + 16;
+  conn.y = 0;
+  const wallsBefore = countKind('wall');
+  build('wall', edgeTile, 0); // off-pad tile within build range
+  const offPadBuilt = countKind('wall') > wallsBefore;
+  console.log(`5d. off-pad build: placed=${offPadBuilt} (expect false)`);
+  if (offPadBuilt) fail++;
 
   console.log(fail === 0 ? 'PASS' : `FAIL (${fail})`);
   if (fail !== 0) process.exit(1);

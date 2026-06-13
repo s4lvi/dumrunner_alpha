@@ -426,6 +426,11 @@ export type SceneLayout = {
   // the floor mesh and displaces vertices.
   // See @dumrunner/shared/terrain for the noise impl + tuning.
   terrain?: import('./terrain').TerrainConfig;
+  // Base-layout free-build capacity (surface only). Caps how many
+  // workstation / storage buildings the player can place on the pad;
+  // turrets are mount-gated (not counted here), walls are uncapped.
+  // Server enforces; client uses it for the build HUD used/max.
+  baseCapacity?: { workstations: number; storage: number };
   // Hand-authored sector geometry. When present, server polygon
   // collision + v2 renderer both consume this DIRECTLY instead
   // of rebuilding a SectorMap from `tileGrid`. Authored scenes

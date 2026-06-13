@@ -39,6 +39,7 @@ import {
   addPart,
   addPlaceable,
   addWeapon,
+  BUILDING_REGISTRY,
   buildingHordePriority,
   buildingMaxHp,
   computeWeaponImbues,
@@ -85,6 +86,7 @@ import {
   pointSegmentDistance,
   riserifyWalls,
   splitOverlappingWalls,
+  insideClearingPad,
   segmentInsideWalkables,
   segmentSegmentIntersect,
   sectorNoiseOffsetAt,
@@ -123,6 +125,18 @@ import {
 // set POLY_COLLISION=0 to revert to the legacy tile path while
 // the swap is bedding in.
 const POLY_COLLISION = process.env.POLY_COLLISION !== '0';
+
+// Base-layout build category for capacity gating (P2). 'storage' =
+// chests, 'workstation' = every other station (benches/forge/mill/
+// uplink — anything isStation that isn't a chest). Turrets, walls,
+// doors, and the Power Link are uncapped here (turrets get
+// mount-gated in P3). Drives the per-category caps on the pad.
+function baseBuildCategory(
+  kind: BuildingKind,
+): 'workstation' | 'storage' | 'uncapped' {
+  if (kind === 'storage_chest') return 'storage';
+  return BUILDING_REGISTRY[kind]?.isStation ? 'workstation' : 'uncapped';
+}
 
 // Resolve a wall's endpoints. Inner-loop walls (around carved
 // sub-sectors) carry explicit ax/ay/bx/by coords because their
@@ -918,6 +932,37 @@ export class Scene {
     const dxc = tileCenterX - conn.x;
     const dyc = tileCenterY - conn.y;
     if (dxc * dxc + dyc * dyc > reach * reach) return;
+
+    // Base-footprint constraint (P2): on a surface with a base
+    // clearing, building is confined to the flat pad. Off-pad tiles
+    // (the apron + the hilly overworld backdrop) are not buildable.
+    // Surfaces without a clearing (none today, but defensive) skip
+    // the check and build freely as before.
+    // Returns silently like the other build rejections (out-of-range,
+    // occupied, no-item); the player-facing feedback — red ghost cube
+    // off-pad, greyed full categories — is the client build-HUD pass.
+    const terrain = this.layout?.terrain;
+    if (terrain?.clearing && !insideClearingPad(terrain, tileCenterX, tileCenterY)) {
+      return;
+    }
+
+    // Capacity caps (P2): the active layout limits how many
+    // workstation / storage buildings fit on the pad. Turrets are
+    // mount-gated (P3) not capacity-gated; walls + power_link are
+    // uncapped. Counted by category against layout.baseCapacity.
+    const cap = this.layout?.baseCapacity;
+    if (cap) {
+      const category = baseBuildCategory(kind);
+      if (category === 'workstation' || category === 'storage') {
+        const limit =
+          category === 'workstation' ? cap.workstations : cap.storage;
+        let count = 0;
+        for (const b of this.buildings.values()) {
+          if (baseBuildCategory(b.kind) === category) count++;
+        }
+        if (count >= limit) return;
+      }
+    }
 
     // Tile already occupied?
     for (const b of this.buildings.values()) {

@@ -220,6 +220,9 @@ function surfaceLayout(layout: BaseLayoutDef | null): SceneLayout {
         padZ: shape.padZ,
       },
     },
+    // Free-build caps from the active layout (P2). Fallback shape
+    // carries no caps → undefined leaves building unconstrained.
+    baseCapacity: layout?.capacity,
   };
 }
 
