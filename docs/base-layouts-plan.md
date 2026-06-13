@@ -1,8 +1,17 @@
 # Base Layouts — implementation plan
 
 Design intent: GDD §Base Building › Base Layouts. This doc is the
-engineering plan. Status: **planned, not started.** File:line
-anchors are from the 2026-06-13 code survey.
+engineering plan. File:line anchors are from the 2026-06-13 code
+survey.
+
+**Status: P0–P4 shipped 2026-06-13** (terrain-clearing mechanism,
+data-driven `BaseLayoutDef` + persistence/migration, pad-constrained
+build + capacity caps, turret mounts, swap flow + economy). The one
+deferred piece is the `/editor/base-layouts` authoring form (P4 item
+5) — layouts are authored as JSON for now. Remaining: the in-game
+playtest pass (renderer apron/pad, live horde on the base, swap
+mid-session with 2+ players). All phases verified server-side via
+diag-base / diag-base-swap / diag-dungeon-persistence.
 
 ## Goal
 

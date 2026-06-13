@@ -176,24 +176,29 @@ weighted 3x in the slot roll). Open: 5 (Forge salvage/reroll),
 
 ---
 
-## Base layouts (NEW — requested 2026-06-10)
+## Base layouts — P0–P4 SHIPPED 2026-06-13
 
-Full engineering plan: **`docs/base-layouts-plan.md`** (detailed
-2026-06-13, grounded in the surface/build/persist code). Design in
-GDD §Base Building › Base Layouts.
+Full plan + status: **`docs/base-layouts-plan.md`**. Design in GDD
+§Base Building › Base Layouts.
 
-Summary: the surface base becomes a swappable authored platform
-(reusing the `SectorScene` → `rasterizeSectorSceneToLayout` pipeline
-that deathmatch arenas + floor overrides already use) with fixed
-turret mounts and workbench/storage capacity slots; bought/swapped
-at the Power Link as a product under the economy law; starter = flat
-square with 4 corner mounts. Five phases (P1 layout data + surface
-built from it → P2 platform-constrained build + capacity → P3 turret
-mounts → P4 swap flow + economy → P5 procgen generator). One
-gameplay change to confirm first: turrets become mount-socketed
-instead of free-placed. Persistence adds `baseLayoutId` to the world
-snapshot (schema 5, additive); PROTOCOL_VERSION bump for
-`set_base_layout` + mount/capacity wire fields.
+The surface base is a swappable layout: a flat clearing carved into
+the terrain height field (NOT an authored sector pad — the heightfield
+approach has no solid walls to block the 2D horde and no riser/hole
+seam, which is what the review flagged), data-driven from
+`BaseLayoutDef`, bought/swapped at the Power Link as a product under
+the economy law. Shipped: P0 clearing mechanism, P1 data + persistence
+(snapshot schema 5 + pre-v5 surface reset migration), P2
+pad-constrained build + workstation/storage capacity caps, P3 turrets
+socket to fixed mounts, P4 swap flow (clone-validate-commit
+re-seating + refund, second `base_bastion_mk1` layout + `bp_base_bastion`
+schematic). PROTOCOL_VERSION 50. All verified server-side
+(diag-base / diag-base-swap / diag-dungeon-persistence).
+
+Deferred: `/editor/base-layouts` authoring form (layouts authored as
+JSON for now); raised pads + maze/kill-lane geometry (hard-blocked on
+Sprint G enemy floorZ pathing — at-grade only until then). Pending:
+in-game playtest (renderer apron/pad, live horde on the base,
+mid-session swap with 2+ players).
 
 ---
 
