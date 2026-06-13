@@ -7,6 +7,12 @@ export type Region = {
   tileW: number;
   tileH: number;
   category: HazardZoneCategory;
+  // Per-region ceiling height in world units. Rolled by the
+  // ceiling-variation pass (rooms {48,64,80,96} weighted toward
+  // 64; corridors {40,48}); absent = the assembler's default 64.
+  // Pillars span floor→this ceiling; vertical sub-sectors (pits /
+  // platforms) inherit it so they never poke through their room.
+  ceilingZ?: number;
   // Defaults to 'room'. Corridors are skinny connectors carved
   // between adjacent inset rooms; they don't accept room template
   // stamps, don't spawn enemies, and don't get hazard categories

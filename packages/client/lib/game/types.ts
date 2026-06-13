@@ -23,6 +23,10 @@ export type GameInit = {
   // previously-visited scene can restore prior data instead of
   // wiping it on every transition.
   sceneId: string;
+  // Live-game server id — namespaces persisted per-client state
+  // (minimap fog) so saves from different servers don't collide.
+  // Absent (sandbox / editor previews) disables persistence.
+  serverId?: string;
   self: Player;
   others: Player[];
   enemies: EnemyState[];
@@ -154,6 +158,11 @@ export type GameHandle = {
   setEquippedWeapon(weaponId: WeaponKind | null): void;
   notifyReloadStarted(durationMs: number): void;
   setHordeActive(active: boolean): void;
+  // Current world cycle from the world_clock / horde broadcasts.
+  // The renderer uses it to tag persisted minimap fog and to
+  // invalidate fog explored in a previous cycle (dungeon floors
+  // regenerate on the cycle bump).
+  setWorldCycle(cycle: number): void;
   swapScene(state: SceneState): void;
   currentSceneState(): SceneState;
   nearbyPlayers(radiusPx: number): {

@@ -68,7 +68,11 @@ export function assembleSceneLayout(
       id: idx,
       verts,
       floorZ: FLOOR_Z,
-      ceilingZ: CEILING_Z,
+      // Per-region ceiling rolled by the pipeline's ceiling pass
+      // (rooms {48,64,80,96}, corridors {40,48}); the linedef
+      // round trip expresses the deltas between adjacent sectors
+      // as upper "lintel" wall bands.
+      ceilingZ: r.ceilingZ ?? CEILING_Z,
       floorTextureId: null,
       ceilingTextureId: null,
       ambient: AMBIENT,
@@ -95,6 +99,9 @@ export function assembleSceneLayout(
   // these are static procgen geometry, not destructibles.
   for (const r of regions) {
     if (!r.pillars) continue;
+    // Pillars span floor → the OWNING ROOM's ceiling so they stay
+    // flush under varied ceiling heights.
+    const roomCeiling = r.ceilingZ ?? CEILING_Z;
     for (const p of r.pillars) {
       const px = p.tileX * tileSize;
       const py = p.tileY * tileSize;
@@ -109,7 +116,7 @@ export function assembleSceneLayout(
           { x: px + pw, y: py + ph },
           { x: px, y: py + ph },
         ],
-        floorZ: CEILING_Z,
+        floorZ: roomCeiling,
         ceilingZ: -1,
         floorTextureId: null,
         ceilingTextureId: null,
@@ -125,7 +132,7 @@ export function assembleSceneLayout(
           textureId: null,
           solid: true,
           floorZOverride: FLOOR_Z,
-          ceilingZOverride: CEILING_Z,
+          ceilingZOverride: roomCeiling,
           buildingKind: 'pillar',
         });
       }
@@ -154,6 +161,11 @@ export function assembleSceneLayout(
     const r = regions[regionIdx];
     if (!r.verticalSubSectors) continue;
     const parentSector = sectors[regionIdx];
+    // Pits and platforms inherit the PARENT room's ceiling — a
+    // pit must not punch its own lower ceiling into the room, and
+    // a platform's airspace tops out at the same lid as the room
+    // around it.
+    const parentCeiling = r.ceilingZ ?? CEILING_Z;
     for (const v of r.verticalSubSectors) {
       const px = v.tileX * tileSize;
       const py = v.tileY * tileSize;
@@ -169,7 +181,7 @@ export function assembleSceneLayout(
           { x: px, y: py + ph },
         ],
         floorZ: v.floorZ,
-        ceilingZ: CEILING_Z,
+        ceilingZ: parentCeiling,
         floorTextureId: null,
         ceilingTextureId: null,
         ambient: AMBIENT,
@@ -245,6 +257,24 @@ export function assembleSceneLayout(
   // vertex interning so cousin-region partial overlaps still
   // resolve to shared two-sided linedefs.
   const doorways = insertDoorways(rawMap, regions, opts.roomGraph, tileSize);
+  // Connectivity backstop. The roomGraph can claim adjacencies
+  // that never produced a punched doorway (shared edge under the
+  // min-shared thresholds, punch failures on chamfered polygons).
+  // Everything downstream must trust the PUNCHED graph — the
+  // DoorwaySpec list above — not roomGraph. If the punched graph
+  // leaves the stairs unreachable from the spawn room, force-punch
+  // the widest available shared edge between the reachable and
+  // unreachable sets (relaxing the min-shared rule for that punch)
+  // until the route exists.
+  ensureRouteConnectivity(
+    rawMap,
+    regions,
+    opts.roomGraph,
+    doorways,
+    regionSet.spawnRegionIndex,
+    regionSet.stairsRegionIndex,
+    tileSize,
+  );
   // Split partial-overlap walls between cousin regions (BSP
   // cousins commonly share only part of an edge). MUST run
   // BEFORE polygon→linedef so the resulting sub-walls bucket
@@ -311,8 +341,16 @@ export function assembleSceneLayout(
         x: spawnRoom.x + spawnRoom.w / 2,
         // 2 tiles south of room centre so the player's body
         // radius (~10wu) stays clear of the extract_pad cube
-        // sitting at 1.5 tiles from the north wall.
-        y: spawnRoom.y + spawnRoom.h / 2 + tileSize * 2,
+        // sitting at 1.5 tiles from the north wall — CLAMPED to
+        // the last tile row inside the room. In small spawn rooms
+        // (4 tiles tall) h/2 + 2 tiles lands exactly ON the south
+        // wall; world spawn placement uses this point verbatim, so
+        // the player spawned embedded in (or through) the wall
+        // with no way to traverse the floor.
+        y: Math.min(
+          spawnRoom.y + spawnRoom.h / 2 + tileSize * 2,
+          spawnRoom.y + spawnRoom.h - tileSize / 2,
+        ),
       }
     : { x: 0, y: 0 };
 
@@ -503,83 +541,263 @@ function insertDoorways(
       const a = regions[i];
       const b = regions[j];
       if (!a || !b) continue;
-      // For L-shaped corridors (Region with subRects) the
-      // bounding rect overshoots the actual footprint, so the
-      // bounding-rect shared edge with a neighbour can claim
-      // extent that the polygon doesn't actually have. Match
-      // sub-rect to sub-rect to get the true contact patch.
-      const aRects = a.subRects ?? [
-        { tileX: a.tileX, tileY: a.tileY, tileW: a.tileW, tileH: a.tileH },
-      ];
-      const bRects = b.subRects ?? [
-        { tileX: b.tileX, tileY: b.tileY, tileW: b.tileW, tileH: b.tileH },
-      ];
       const isCorridor = a.kind === 'corridor' || b.kind === 'corridor';
       const minShared = isCorridor ? minCorridorShared : minRoomShared;
-      // Collect every sub-rect contact patch FIRST, then merge
-      // overlapping/touching spans on the same boundary line. An
-      // L-shaped corridor whose two stub rects both touch the same
-      // room edge yields two OVERLAPPING shared edges; punching
-      // both broke silently — the second `punchDoor` can't find a
-      // single polygon edge containing its endpoints once the
-      // first punch split the edge, so the opening stayed at the
-      // first punch's extent while the recorded DoorwaySpec (and
-      // the locked-room doors placed from it) claimed the wider
-      // span. Result: door tiles embedded in solid wall beside the
-      // real opening.
-      const contactEdges: SharedEdge[] = [];
-      for (const aRect of aRects) {
-        for (const bRect of bRects) {
-          const edge = sharedEdgeRects(aRect, bRect, tileSize);
-          if (edge) contactEdges.push(edge);
-        }
-      }
-      {
-        for (const edge of mergeSharedEdges(contactEdges)) {
-          if (edge.hi - edge.lo < minShared) continue;
-          // Corridor adjacencies: the entire shared edge is the
-          // portal so the corridor's full cross-section opens
-          // into the room (no 0-thickness wall stubs around the
-          // entrance). Room-to-room: centred 3-tile door.
-          let doorLo: number;
-          let doorHi: number;
-          if (isCorridor) {
-            doorLo = edge.lo;
-            doorHi = edge.hi;
-          } else {
-            const mid = (edge.lo + edge.hi) / 2;
-            doorLo = mid - doorWidth / 2;
-            doorHi = mid + doorWidth / 2;
-          }
-          let p: Vec2;
-          let q: Vec2;
-          if (edge.axis === 'vertical') {
-            p = { x: edge.coord, y: doorLo };
-            q = { x: edge.coord, y: doorHi };
-          } else {
-            p = { x: doorLo, y: edge.coord };
-            q = { x: doorHi, y: edge.coord };
-          }
-          punchDoor(map, i, p, q);
-          punchDoor(map, j, p, q);
-          // Record the punched portal so downstream consumers
-          // (locked-room door placement) can put door buildings
-          // exactly in the opening instead of re-deriving edges.
-          doorways.push({
-            axis: edge.axis,
-            coord: edge.coord,
-            lo: doorLo,
-            hi: doorHi,
-            a: i,
-            b: j,
-            aIsCorridor: a.kind === 'corridor',
-            bIsCorridor: b.kind === 'corridor',
-          });
-        }
+      // mergedContactEdges collects every sub-rect contact patch
+      // FIRST, then merges overlapping/touching spans on the same
+      // boundary line. An L-shaped corridor whose two stub rects
+      // both touch the same room edge yields two OVERLAPPING
+      // shared edges; punching both broke silently — the second
+      // `punchDoor` can't find a single polygon edge containing
+      // its endpoints once the first punch split the edge, so the
+      // opening stayed at the first punch's extent while the
+      // recorded DoorwaySpec (and the locked-room doors placed
+      // from it) claimed the wider span. Result: door tiles
+      // embedded in solid wall beside the real opening.
+      for (const edge of mergedContactEdges(a, b, tileSize)) {
+        if (edge.hi - edge.lo < minShared) continue;
+        const spec = punchPortal(map, i, j, a, b, edge, doorWidth, tileSize);
+        // Record ONLY portals that actually punched — downstream
+        // consumers (locked-room door placement, the punched-
+        // doorway connectivity graph) treat each DoorwaySpec as a
+        // real traversable opening. Recording a failed punch used
+        // to make the graph claim paths that had no opening.
+        if (spec) doorways.push(spec);
       }
     }
   }
   return doorways;
+}
+
+// All merged contact patches between two regions (sub-rect aware
+// for L-shaped corridors).
+function mergedContactEdges(
+  a: Region,
+  b: Region,
+  tileSize: number,
+): SharedEdge[] {
+  const aRects = a.subRects ?? [
+    { tileX: a.tileX, tileY: a.tileY, tileW: a.tileW, tileH: a.tileH },
+  ];
+  const bRects = b.subRects ?? [
+    { tileX: b.tileX, tileY: b.tileY, tileW: b.tileW, tileH: b.tileH },
+  ];
+  const contactEdges: SharedEdge[] = [];
+  for (const aRect of aRects) {
+    for (const bRect of bRects) {
+      const edge = sharedEdgeRects(aRect, bRect, tileSize);
+      if (edge) contactEdges.push(edge);
+    }
+  }
+  if (contactEdges.length === 0) return [];
+  return mergeSharedEdges(contactEdges);
+}
+
+// Punch one portal between regions i and j along the given merged
+// contact edge. Corridor adjacencies open the FULL shared edge;
+// room-to-room get a centred `doorWidth` door. If the punch fails
+// on BOTH sides (the span isn't contained in a single straight
+// polygon edge — chamfered corners, L-corridor elbows), retry with
+// the span clamped to the widest straight sub-span common to both
+// polygons. Returns the DoorwaySpec actually punched, or null when
+// no opening could be made.
+function punchPortal(
+  map: SectorMap,
+  i: number,
+  j: number,
+  a: Region,
+  b: Region,
+  edge: SharedEdge,
+  doorWidth: number,
+  tileSize: number,
+): DoorwaySpec | null {
+  const isCorridor = a.kind === 'corridor' || b.kind === 'corridor';
+  let doorLo: number;
+  let doorHi: number;
+  if (isCorridor || edge.hi - edge.lo <= doorWidth) {
+    doorLo = edge.lo;
+    doorHi = edge.hi;
+  } else {
+    const mid = (edge.lo + edge.hi) / 2;
+    doorLo = mid - doorWidth / 2;
+    doorHi = mid + doorWidth / 2;
+  }
+  const attempt = (lo: number, hi: number): boolean => {
+    let p: Vec2;
+    let q: Vec2;
+    if (edge.axis === 'vertical') {
+      p = { x: edge.coord, y: lo };
+      q = { x: edge.coord, y: hi };
+    } else {
+      p = { x: lo, y: edge.coord };
+      q = { x: hi, y: edge.coord };
+    }
+    const okA = punchDoor(map, i, p, q);
+    const okB = punchDoor(map, j, p, q);
+    // One-sided success still yields a passable portal: the
+    // punched side's solid:false sub-wall partially overlaps the
+    // other polygon's straight edge, splitOverlappingWalls splits
+    // it, and the two-sided linedef's impassable is the AND of
+    // both sides' solid flags.
+    return okA || okB;
+  };
+  if (attempt(doorLo, doorHi)) {
+    return {
+      axis: edge.axis,
+      coord: edge.coord,
+      lo: doorLo,
+      hi: doorHi,
+      a: i,
+      b: j,
+      aIsCorridor: a.kind === 'corridor',
+      bIsCorridor: b.kind === 'corridor',
+    };
+  }
+  // Both sides failed — clamp the span to the widest straight
+  // sub-span both polygons actually have on this boundary line.
+  const spanA = straightSpanOnLine(map.sectors[i], edge, doorLo, doorHi);
+  const spanB = straightSpanOnLine(map.sectors[j], edge, doorLo, doorHi);
+  if (!spanA || !spanB) return null;
+  const lo = Math.max(spanA[0], spanB[0]);
+  const hi = Math.min(spanA[1], spanB[1]);
+  // Need at least one tile of clear opening for the player's
+  // body radius.
+  if (hi - lo < tileSize) return null;
+  if (!attempt(lo, hi)) return null;
+  return {
+    axis: edge.axis,
+    coord: edge.coord,
+    lo,
+    hi,
+    a: i,
+    b: j,
+    aIsCorridor: a.kind === 'corridor',
+    bIsCorridor: b.kind === 'corridor',
+  };
+}
+
+// Widest sub-interval of [lo, hi] covered by a SINGLE straight
+// polygon edge of `sector` collinear with the boundary line.
+function straightSpanOnLine(
+  sector: Sector | undefined,
+  edge: SharedEdge,
+  lo: number,
+  hi: number,
+): [number, number] | null {
+  if (!sector) return null;
+  const EPS = 0.5;
+  let best: [number, number] | null = null;
+  const N = sector.verts.length;
+  for (let k = 0; k < N; k++) {
+    const va = sector.verts[k];
+    const vb = sector.verts[(k + 1) % N];
+    let elo: number;
+    let ehi: number;
+    if (edge.axis === 'vertical') {
+      if (Math.abs(va.x - edge.coord) > EPS || Math.abs(vb.x - edge.coord) > EPS) continue;
+      elo = Math.max(lo, Math.min(va.y, vb.y));
+      ehi = Math.min(hi, Math.max(va.y, vb.y));
+    } else {
+      if (Math.abs(va.y - edge.coord) > EPS || Math.abs(vb.y - edge.coord) > EPS) continue;
+      elo = Math.max(lo, Math.min(va.x, vb.x));
+      ehi = Math.min(hi, Math.max(va.x, vb.x));
+    }
+    if (ehi - elo > (best ? best[1] - best[0] : 0)) best = [elo, ehi];
+  }
+  return best;
+}
+
+// Assert the spawn room can reach the stairs room over the PUNCHED
+// doorway graph; when it can't, force-punch shared edges between
+// the reachable and unreachable sets (widest contact first, min-
+// shared relaxed to a single tile) until it can. Operates on the
+// raw pre-round-trip map so the punches flow through the same
+// linedef conversion as regular doorways.
+function ensureRouteConnectivity(
+  map: SectorMap,
+  regions: ReadonlyArray<Region>,
+  roomGraph: number[][] | undefined,
+  doorways: DoorwaySpec[],
+  spawnIndex: number,
+  stairsIndex: number | null,
+  tileSize: number,
+): void {
+  if (!roomGraph || stairsIndex === null || stairsIndex === spawnIndex) return;
+  const doorWidth = DOOR_WIDTH_TILES * tileSize;
+  const reachable = (): Set<number> => {
+    const adj: number[][] = regions.map(() => []);
+    for (const dw of doorways) {
+      adj[dw.a].push(dw.b);
+      adj[dw.b].push(dw.a);
+    }
+    const seen = new Set<number>([spawnIndex]);
+    const queue = [spawnIndex];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      for (const nxt of adj[cur] ?? []) {
+        if (seen.has(nxt)) continue;
+        seen.add(nxt);
+        queue.push(nxt);
+      }
+    }
+    return seen;
+  };
+  // Each iteration punches one frontier portal, which strictly
+  // grows the reachable set — bounded by the region count.
+  for (let guard = 0; guard < regions.length; guard++) {
+    const seen = reachable();
+    if (seen.has(stairsIndex)) return;
+    // Candidate frontier edges: roomGraph adjacencies from the
+    // reachable set into the unreachable set, widest contact
+    // patch first.
+    let best: { i: number; j: number; edge: SharedEdge } | null = null;
+    for (const i of seen) {
+      for (const j of roomGraph[i] ?? []) {
+        if (seen.has(j)) continue;
+        const a = regions[i];
+        const b = regions[j];
+        if (!a || !b) continue;
+        for (const edge of mergedContactEdges(a, b, tileSize)) {
+          if (edge.hi - edge.lo < tileSize) continue;
+          if (!best || edge.hi - edge.lo > best.edge.hi - best.edge.lo) {
+            best = { i, j, edge };
+          }
+        }
+      }
+    }
+    if (!best) {
+      // No frontier contact at all — region topology itself is
+      // disconnected. Nothing to punch; surface loudly so the
+      // diag sweep flags the seed.
+      console.warn(
+        `procgen/assemble: stairs room ${stairsIndex} unreachable from spawn ` +
+          `room ${spawnIndex} and no shared edge available to force-punch`,
+      );
+      return;
+    }
+    const spec = punchPortal(
+      map,
+      best.i,
+      best.j,
+      regions[best.i],
+      regions[best.j],
+      best.edge,
+      doorWidth,
+      tileSize,
+    );
+    if (spec) {
+      doorways.push(spec);
+    } else {
+      // Punch failed even with the clamp retry — remove this pair
+      // from contention by treating it as visited won't work
+      // (we recompute each pass); instead warn and stop to avoid
+      // an infinite loop on degenerate geometry.
+      console.warn(
+        `procgen/assemble: force-punch failed between regions ${best.i} and ${best.j}`,
+      );
+      return;
+    }
+  }
 }
 
 type RectLike = {
@@ -634,14 +852,18 @@ function sharedEdgeRects(
 // Insert (p,q) into the sector polygon along whichever existing
 // edge contains both — then locate the freshly-emitted sub-wall
 // spanning (p,q) (in either direction) and flip it to solid:false.
+// Returns true when a sub-wall was actually flipped — callers use
+// this to decide whether the portal really opened (a punch can
+// fail when no single straight edge contains both endpoints, e.g.
+// the span crosses a chamfer cut or an L-corridor elbow vertex).
 function punchDoor(
   map: SectorMap,
   sectorId: number,
   p: Vec2,
   q: Vec2,
-): void {
+): boolean {
   const sector = map.sectors[sectorId];
-  if (!sector) return;
+  if (!sector) return false;
   const EPS = 0.5;
   const N = sector.verts.length;
   for (let i = 0; i < N; i++) {
@@ -660,15 +882,18 @@ function punchDoor(
       const ab = vecNear(a, p, EPS) && vecNear(b, q, EPS);
       const ba = vecNear(a, q, EPS) && vecNear(b, p, EPS);
       if (!ab && !ba) continue;
+      let flipped = false;
       for (const w of map.walls) {
         if (w.sectorId === sectorId && w.vertIdx === k) {
           w.solid = false;
+          flipped = true;
         }
       }
-      return;
+      return flipped;
     }
-    return;
+    return false;
   }
+  return false;
 }
 
 // Whether point `p` lies on segment a→b within `eps` (collinear +

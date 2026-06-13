@@ -86,7 +86,13 @@ import {
   type PropState,
   type SceneLayout,
 } from '@dumrunner/shared';
-import { buildingsToMinimapList, type MinimapSnapshot } from '../minimap';
+import {
+  buildingsToMinimapList,
+  loadFogState,
+  pruneFogStateForCycle,
+  saveFogState,
+  type MinimapSnapshot,
+} from '../minimap';
 
 import { Camera } from './camera';
 import { createSectorShader } from './sectorShader';
@@ -261,11 +267,97 @@ export function runFpsV2Game(
   // Cached by sceneId so re-entering a scene (surface → dungeon
   // floor 2 → surface) restores prior exploration instead of
   // re-blacking the whole map. Same model as v1.
+  //
+  // On top of the in-memory cache, fog persists to localStorage
+  // per (serverId, sceneId) so a page refresh restores explored
+  // state. fogStoreId gates the whole feature — sandbox / editor
+  // previews don't pass a serverId and get session-only fog.
+  const fogStoreId = init.serverId ?? null;
   const fogBySceneId = new Map<string, Uint8Array>();
-  let seenTiles: Uint8Array | null = init.layout?.tileGrid
-    ? new Uint8Array(init.layout.tileGrid.width * init.layout.tileGrid.height)
-    : null;
-  if (seenTiles) fogBySceneId.set(init.sceneId, seenTiles);
+  // Cycle each cached bitmap belongs to. null = explored (or
+  // restored from a save taken) before the first world_clock of
+  // the session; tagged with the live cycle once it arrives.
+  const fogCycleBySceneId = new Map<string, number | null>();
+  // Current world cycle, fed by setWorldCycle from the
+  // world_clock / horde broadcasts. null until the first one.
+  let worldCycle: number | null = null;
+  // Set when revealAroundSelf uncovers a new cell; cleared on
+  // save. Gates the throttled persistence writes.
+  let fogDirty = false;
+  let lastFogSaveAt = 0;
+  const FOG_SAVE_INTERVAL_MS = 5000;
+
+  // Allocate the seen bitmap for a scene, preferring (in order)
+  // the in-memory cache, a localStorage save, and a fresh zeroed
+  // array. Cache entries / saves whose dimensions no longer match
+  // the live grid (cycle regen) are dropped and rebuilt.
+  function fogForScene(
+    sceneId: string,
+    lay: SceneLayout | null,
+  ): Uint8Array | null {
+    const tg = lay?.tileGrid;
+    if (!tg) return null;
+    const cellCount = tg.width * tg.height;
+    const cached = fogBySceneId.get(sceneId);
+    if (cached && cached.length === cellCount) return cached;
+    // Restored bitmaps keep the cycle their save recorded (which
+    // may differ from worldCycle when the save predates the first
+    // world_clock of this session) so setWorldCycle can invalidate
+    // them once the live cycle number lands.
+    let fresh: Uint8Array | null = null;
+    let freshCycle: number | null = worldCycle;
+    if (fogStoreId) {
+      const restored = loadFogState(
+        fogStoreId,
+        sceneId,
+        tg.width,
+        tg.height,
+        worldCycle,
+        lay?.variantSeed,
+      );
+      if (restored) {
+        fresh = restored.seen;
+        freshCycle = restored.cycle ?? worldCycle;
+      }
+    }
+    fresh ??= new Uint8Array(cellCount);
+    fogBySceneId.set(sceneId, fresh);
+    fogCycleBySceneId.set(sceneId, freshCycle);
+    return fresh;
+  }
+
+  // Persist the active scene's fog. No-op without a serverId or
+  // when nothing changed since the last write (unless forced —
+  // scene swaps and teardown always flush).
+  function saveCurrentFog(force = false): void {
+    if (!fogStoreId || !seenTiles || !layout?.tileGrid) return;
+    if (!fogDirty && !force) return;
+    saveFogState(
+      fogStoreId,
+      currentSceneId,
+      seenTiles,
+      layout.tileGrid.width,
+      layout.tileGrid.height,
+      // Prefer the bitmap's own cycle tag — a restore that landed
+      // before the first world_clock carries its save's cycle,
+      // which must not be downgraded to null on rewrite.
+      fogCycleBySceneId.get(currentSceneId) ?? worldCycle,
+      layout.variantSeed,
+    );
+    fogDirty = false;
+    lastFogSaveAt = performance.now();
+  }
+
+  // beforeunload catches the refresh / tab-close path that
+  // destroy() never sees. Removed in destroy().
+  function onBeforeUnload(): void {
+    saveCurrentFog();
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', onBeforeUnload);
+  }
+
+  let seenTiles: Uint8Array | null = fogForScene(init.sceneId, init.layout);
   // Reveal radius around the player, in tiles. Same default v1
   // uses; tuned so an entire small room reveals on entry without
   // exposing what's behind a corner.
@@ -983,6 +1075,11 @@ export function runFpsV2Game(
     tickInput();
     tickSelfSmoothing();
     revealAroundSelf();
+    // Throttled fog persistence — only when exploration actually
+    // uncovered new cells since the last write.
+    if (fogDirty && performance.now() - lastFogSaveAt >= FOG_SAVE_INTERVAL_MS) {
+      saveCurrentFog();
+    }
     updateNearInteractable();
     updateNearWorkstations();
     if (canvasEl.width !== lastCanvasW || canvasEl.height !== lastCanvasH) {
@@ -1770,7 +1867,11 @@ export function runFpsV2Game(
         const lx = cx + dx;
         const ly = cy + dy;
         if (lx < 0 || ly < 0 || lx >= tg.width || ly >= tg.height) continue;
-        seenTiles[ly * tg.width + lx] = 1;
+        const idx = ly * tg.width + lx;
+        if (!seenTiles[idx]) {
+          seenTiles[idx] = 1;
+          fogDirty = true;
+        }
       }
     }
   }
@@ -2291,26 +2392,49 @@ export function runFpsV2Game(
     setHordeActive: (active: boolean) => {
       hordeActive = active;
     },
+    setWorldCycle: (cycle: number) => {
+      if (worldCycle === cycle) return;
+      worldCycle = cycle;
+      // Invalidate in-memory fog explored in a previous cycle —
+      // dungeon floors regenerate on the cycle bump, so old
+      // exploration is meaningless. Bitmaps tagged null were
+      // explored (or restored) this session before the first
+      // world_clock landed; they belong to the live cycle, so
+      // adopt them.
+      for (const [sceneId, taggedCycle] of fogCycleBySceneId) {
+        if (taggedCycle === null) {
+          fogCycleBySceneId.set(sceneId, cycle);
+          continue;
+        }
+        if (taggedCycle === cycle) continue;
+        if (sceneId === currentSceneId && seenTiles) {
+          // Keep the live array (the painter holds no reference,
+          // but swapScene's cache does) — just re-black it.
+          seenTiles.fill(0);
+          fogCycleBySceneId.set(sceneId, cycle);
+          fogDirty = true;
+        } else {
+          fogBySceneId.delete(sceneId);
+          fogCycleBySceneId.delete(sceneId);
+        }
+      }
+      // Drop persisted saves from other cycles so stale keys
+      // don't accumulate in localStorage.
+      if (fogStoreId) pruneFogStateForCycle(fogStoreId, cycle);
+    },
     swapScene: (state: SceneState) => {
+      // Flush the outgoing scene's fog before the layout pointer
+      // moves — a refresh right after a stairs transition should
+      // still remember the floor we just left.
+      saveCurrentFog(true);
       layout = state.layout;
       currentSceneId = state.sceneId;
       // Restore (or freshly allocate) the fog bitmap for this
-      // scene. Dimensions are tied to the tileGrid; a cached
-      // entry whose dimensions no longer match (cycle regen)
-      // is dropped and rebuilt.
-      if (layout?.tileGrid) {
-        const w = layout.tileGrid.width;
-        const h = layout.tileGrid.height;
-        const cached = fogBySceneId.get(currentSceneId);
-        if (cached && cached.length === w * h) {
-          seenTiles = cached;
-        } else {
-          seenTiles = new Uint8Array(w * h);
-          fogBySceneId.set(currentSceneId, seenTiles);
-        }
-      } else {
-        seenTiles = null;
-      }
+      // scene: in-memory cache first, then the localStorage save,
+      // then a fresh zeroed array. Dimensions are tied to the
+      // tileGrid; a cached entry whose dimensions no longer match
+      // (cycle regen) is dropped and rebuilt.
+      seenTiles = fogForScene(currentSceneId, layout);
       players.clear();
       enemies.clear();
       loot.clear();
@@ -2465,6 +2589,13 @@ export function runFpsV2Game(
     },
     destroy() {
       destroyed = true;
+      // Flush fog before teardown — covers SPA navigation away
+      // from the play page (beforeunload only fires on real
+      // unloads).
+      saveCurrentFog();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', onBeforeUnload);
+      }
       sprites.destroy();
       texturedSprites.destroy();
       texturedBuildings.destroy();

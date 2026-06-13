@@ -690,13 +690,36 @@ export function generateLockedRoomMeta(
     0.33 + Math.max(0, floorIndex - 1) * 0.04
   );
   const doors: InitialDoor[] = [];
-  const graph = layout.roomGraph;
+  // The reachability check must run over the PUNCHED doorway
+  // graph — the portals the assembler actually opened — not the
+  // roomGraph. roomGraph is raw rect adjacency and lists edges
+  // whose shared wall never got a doorway punched (contact patch
+  // under the min-shared threshold), so it claims phantom
+  // alternate routes; locking a room "covered" by such a route
+  // sealed the only real entrance→stairs path behind key-doors.
+  // A locked room seals ALL its portals, so removing the room's
+  // node from the punched graph models the lock exactly.
+  const doorwaySpecs = layout.doorways ?? [];
+  let graph: number[][] | null = null;
+  if (doorwaySpecs.length > 0) {
+    graph = layout.rooms.map(() => [] as number[]);
+    for (const dw of doorwaySpecs) {
+      if (graph[dw.a] && graph[dw.b]) {
+        graph[dw.a].push(dw.b);
+        graph[dw.b].push(dw.a);
+      }
+    }
+  } else if (layout.roomGraph) {
+    // Pre-doorway-spec layouts (corridor-rect floors, old
+    // snapshots): roomGraph is the only connectivity we have.
+    graph = layout.roomGraph;
+  }
   // layout.rooms is region-indexed and includes corridor regions;
   // locking a corridor puts key-doors across a hallway with no
   // loot behind them. The doorway specs flag which side of each
   // portal is a corridor — exclude those indices from locking.
   const corridorIndices = new Set<number>();
-  for (const dw of layout.doorways ?? []) {
+  for (const dw of doorwaySpecs) {
     if (dw.aIsCorridor) corridorIndices.add(dw.a);
     if (dw.bIsCorridor) corridorIndices.add(dw.b);
   }
@@ -705,11 +728,13 @@ export function generateLockedRoomMeta(
     if (corridorIndices.has(i)) continue;
     if (rng() > lockChance) continue;
     if (graph) {
-      // Skip if locking room i disconnects entrance (room 0)
-      // from the stairs room.
+      // Skip if locking room i — TOGETHER with the rooms already
+      // locked this floor — disconnects entrance (room 0) from
+      // the stairs room. Checking the candidate in isolation let
+      // two individually-safe locks jointly sever the route.
       if (
         stairsRoomIndex >= 0 &&
-        !reachableInGraph(graph, 0, stairsRoomIndex, i)
+        !reachableInGraph(graph, 0, stairsRoomIndex, new Set([...lockedSet, i]))
       ) {
         continue;
       }
@@ -856,19 +881,19 @@ function pickDoorTilesViaGraph(
   return bestRun;
 }
 
-// BFS from `from` to `to` in `graph`, treating `excluded` as
-// removed. Returns true if `to` is reachable. Used by lock
-// placement to verify a candidate doesn't sever the entrance →
-// stairs path.
+// BFS from `from` to `to` in `graph`, treating every node in
+// `excluded` as removed. Returns true if `to` is reachable. Used
+// by lock placement to verify a candidate (plus the rooms already
+// locked this floor) doesn't sever the entrance → stairs path.
 function reachableInGraph(
   graph: number[][],
   from: number,
   to: number,
-  excluded: number,
+  excluded: ReadonlySet<number>,
 ): boolean {
-  if (from === excluded || to === excluded) return false;
+  if (excluded.has(from) || excluded.has(to)) return false;
   if (from === to) return true;
-  const visited = new Set<number>([from, excluded]);
+  const visited = new Set<number>([from, ...excluded]);
   const queue: number[] = [from];
   while (queue.length > 0) {
     const cur = queue.shift()!;

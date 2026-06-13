@@ -753,21 +753,41 @@ export function riserifyWalls(map: SectorMap): void {
       // same edge with the lintel's vertical span. The collision
       // path treats it like any other tall wall (head-bonk + LOS
       // already use the override range).
+      //
+      // The wall's own `solid` flag is respected verbatim — a
+      // ceiling delta does NOT imply a doorway below. Procgen
+      // rooms and corridors now roll different ceiling heights,
+      // so most SEALED dividing walls sit between sectors of
+      // unequal ceilingZ; the old `solid = false` here turned
+      // every one of those dividers into an open portal. Authors
+      // who want a passable opening under a lintel set
+      // solid:false on the shared walls, exactly as they already
+      // must for equal-height portals (see the comment below).
       if (isCeilingLintel) {
-        map.walls.push({
-          sectorId: wall.sectorId,
-          vertIdx: wall.vertIdx,
-          backSectorId: wall.backSectorId,
-          textureId: wall.textureId,
-          solid: true,
-          floorZOverride: neighbourCeil,
-          ceilingZOverride: ownerCeil,
-          buildingKind: wall.buildingKind,
-        });
-        // The space below the lintel is the doorway — needs to be
-        // passable. Only clear solid here if we didn't already
-        // claim it for the riser above.
-        if (!isFloorRiser) wall.solid = false;
+        // Skip the push when an identical lintel band already
+        // exists on this edge — the linedef→polygon reverse
+        // converter emits upper walls for two-sided ceiling
+        // deltas, and re-running riserifyWalls on such a map
+        // would stack a duplicate quad (z-fighting).
+        const exists = map.walls.some(
+          (w) =>
+            w.sectorId === wall.sectorId &&
+            w.vertIdx === wall.vertIdx &&
+            w.floorZOverride === neighbourCeil &&
+            w.ceilingZOverride === ownerCeil,
+        );
+        if (!exists) {
+          map.walls.push({
+            sectorId: wall.sectorId,
+            vertIdx: wall.vertIdx,
+            backSectorId: wall.backSectorId,
+            textureId: wall.textureId,
+            solid: true,
+            floorZOverride: neighbourCeil,
+            ceilingZOverride: ownerCeil,
+            buildingKind: wall.buildingKind,
+          });
+        }
       }
       // No geometric delta (floors + ceilings match): respect the
       // author's solid flag verbatim. Procgen-emitted sealed walls

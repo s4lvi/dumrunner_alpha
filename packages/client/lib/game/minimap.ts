@@ -60,6 +60,177 @@ export type MinimapSnapshot = {
   }>;
 };
 
+// ---- Fog persistence -------------------------------------------------
+// Explored-tile (fog-of-war) state survives a client refresh by
+// living in localStorage, one key per (serverId, sceneId). The
+// payload is a bit-packed copy of the renderer's seen[] bitmap
+// (1 bit/cell, base64) plus enough metadata to invalidate stale
+// saves: grid dimensions, the world cycle the save belongs to,
+// and the layout's variantSeed (which the server derives from
+// (worldSeed, cycle, floorIndex), so a regenerated floor never
+// matches a stale save even before the cycle number is known).
+
+const FOG_KEY_PREFIX = 'dr:fog:';
+
+function fogKey(serverId: string, sceneId: string): string {
+  return `${FOG_KEY_PREFIX}${serverId}:${sceneId}`;
+}
+
+type StoredFog = {
+  // World cycle the save was taken in. null when the save landed
+  // before the first world_clock broadcast of the session.
+  cycle: number | null;
+  w: number;
+  h: number;
+  // layout.variantSeed at save time; undefined when the layout
+  // didn't carry one.
+  seed?: number;
+  // Bit-packed seen[] (8 cells/byte, row-major), base64.
+  bits: string;
+};
+
+// Pack the 1-byte-per-cell seen bitmap into 1 bit per cell and
+// base64 it. ~40k cells → ~6.7 KB of text, well under quota.
+function packSeenBits(seen: Uint8Array): string {
+  const packed = new Uint8Array(Math.ceil(seen.length / 8));
+  for (let i = 0; i < seen.length; i++) {
+    if (seen[i]) packed[i >> 3] |= 1 << (i & 7);
+  }
+  // Chunked fromCharCode — a single spread overflows the arg
+  // limit on large grids.
+  let bin = '';
+  const CHUNK = 0x2000;
+  for (let i = 0; i < packed.length; i += CHUNK) {
+    bin += String.fromCharCode(...packed.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function unpackSeenBits(bits: string, cellCount: number): Uint8Array | null {
+  let bin: string;
+  try {
+    bin = atob(bits);
+  } catch {
+    return null;
+  }
+  if (bin.length !== Math.ceil(cellCount / 8)) return null;
+  const seen = new Uint8Array(cellCount);
+  for (let i = 0; i < cellCount; i++) {
+    if (bin.charCodeAt(i >> 3) & (1 << (i & 7))) seen[i] = 1;
+  }
+  return seen;
+}
+
+// Persist the current seen[] bitmap. Best-effort — storage may be
+// unavailable (SSR, private mode quota) and fog is a nicety, not
+// game state.
+export function saveFogState(
+  serverId: string,
+  sceneId: string,
+  seen: Uint8Array,
+  w: number,
+  h: number,
+  cycle: number | null,
+  variantSeed?: number,
+): void {
+  if (typeof window === 'undefined') return;
+  if (seen.length !== w * h) return;
+  const rec: StoredFog = {
+    cycle,
+    w,
+    h,
+    seed: variantSeed,
+    bits: packSeenBits(seen),
+  };
+  try {
+    window.localStorage.setItem(fogKey(serverId, sceneId), JSON.stringify(rec));
+  } catch {
+    /* quota / disabled storage — skip */
+  }
+}
+
+// Restore a previously-saved bitmap. Returns null (and drops the
+// stale key) when dimensions, cycle, or variantSeed disagree with
+// the live layout. A null `cycle` on either side skips the cycle
+// check — the seed check still catches regenerated floors. The
+// record's stored cycle rides along so the caller can re-check
+// once the live cycle number arrives.
+export function loadFogState(
+  serverId: string,
+  sceneId: string,
+  w: number,
+  h: number,
+  cycle: number | null,
+  variantSeed?: number,
+): { seen: Uint8Array; cycle: number | null } | null {
+  if (typeof window === 'undefined') return null;
+  const key = fogKey(serverId, sceneId);
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  let rec: StoredFog | null = null;
+  try {
+    rec = JSON.parse(raw) as StoredFog;
+  } catch {
+    rec = null;
+  }
+  const drop = (): null => {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+    return null;
+  };
+  if (!rec || typeof rec.bits !== 'string') return drop();
+  if (rec.w !== w || rec.h !== h) return drop();
+  if (rec.cycle !== null && cycle !== null && rec.cycle !== cycle) {
+    return drop();
+  }
+  if (
+    rec.seed !== undefined &&
+    variantSeed !== undefined &&
+    rec.seed !== variantSeed
+  ) {
+    return drop();
+  }
+  const seen = unpackSeenBits(rec.bits, w * h);
+  if (!seen) return drop();
+  return { seen, cycle: rec.cycle ?? null };
+}
+
+// Drop every saved fog key for this server whose recorded cycle
+// differs from the current one. Called when the cycle number first
+// arrives / bumps so old-cycle exploration doesn't accumulate.
+export function pruneFogStateForCycle(serverId: string, cycle: number): void {
+  if (typeof window === 'undefined') return;
+  const prefix = `${FOG_KEY_PREFIX}${serverId}:`;
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (!key || !key.startsWith(prefix)) continue;
+      try {
+        const rec = JSON.parse(
+          window.localStorage.getItem(key) ?? 'null',
+        ) as StoredFog | null;
+        if (!rec || (rec.cycle !== null && rec.cycle !== cycle)) {
+          stale.push(key);
+        }
+      } catch {
+        stale.push(key);
+      }
+    }
+    for (const key of stale) window.localStorage.removeItem(key);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 // Per-zone tint used on the minimap. Subtle; the room outline
 // (default fillStyle) reads through where alpha is low.
 const ZONE_TINT: Record<HazardZoneCategory, string> = {

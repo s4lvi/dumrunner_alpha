@@ -11,7 +11,7 @@
 import type { RoomTemplate } from '../content/types';
 import type { SceneLayout } from '../protocol';
 import { assembleSceneLayout } from './assemble';
-import { decorateRegions } from './decorate';
+import { decorateRegions, rollCeilings } from './decorate';
 import { finalizeRegions, type FinalizeBiomeConfig } from './finalize';
 import { generateBspRegions } from './generators/bsp';
 import { generateTunnelerRegions } from './generators/tunneler';
@@ -51,6 +51,15 @@ export function generateFloorLayoutPipeline(
       (cycle * 0x85ebca77) ^
       (floorIndex * 0xc2b2ae3d)) >>> 0,
   );
+  // Dedicated sub-stream for ceiling rolls. Keeping it separate
+  // from genRng / finalizeRng means the ceiling pass consumes no
+  // draws from the existing streams — room shapes, decoration,
+  // and template stamps stay identical for existing seeds.
+  const ceilingRng = mulberry32(
+    ((worldSeed * 0x27d4eb2f) ^
+      (cycle * 0x165667b1) ^
+      (floorIndex * 0x9e3779b1)) >>> 0,
+  );
 
   const regionSet =
     opts.generator === 'tunneler'
@@ -66,6 +75,10 @@ export function generateFloorLayoutPipeline(
   // on some rooms. Runs after the topology pass so it sees the
   // final inset room shapes.
   decorateRegions(regionSet, finalizeRng);
+  // Ceiling variation AFTER decoration so the roll can see each
+  // room's platforms (the ceiling must clear the tallest platform
+  // top by the jump headroom).
+  rollCeilings(regionSet, ceilingRng);
   const { roomGraph, anchors, stamps } = finalizeRegions(
     regionSet,
     biome,

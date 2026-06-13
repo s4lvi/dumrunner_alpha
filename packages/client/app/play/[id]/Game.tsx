@@ -814,6 +814,9 @@ export function Game({
           const cb = rendererCallbacksRef.current!;
           gameRef.current = runFpsV2Game(host, {
             sceneId: msg.sceneId,
+            // Namespaces persisted minimap fog per server. Sandbox
+            // sessions omit it so playtests never write fog keys.
+            serverId: mode === 'live' ? serverId : undefined,
             self: msg.self,
             others: msg.players.filter((p) => p.characterId !== msg.self.characterId),
             enemies: msg.enemies,
@@ -1134,6 +1137,9 @@ export function Game({
           secondsToPerihelion: msg.secondsToPerihelion,
           hordeActive: msg.hordeActive,
         });
+        // Feed the renderer so persisted minimap fog gets tagged
+        // with (and invalidated by) the current cycle.
+        gameRef.current?.setWorldCycle(msg.cycle);
         break;
       case 'power_state':
         setPowerState({
@@ -1196,6 +1202,7 @@ export function Game({
           secondsToPerihelion: Math.ceil(msg.durationMs / 1000),
           hordeActive: true,
         });
+        gameRef.current?.setWorldCycle(msg.cycle);
         // Alarm stinger so the moment reads as a hostile shift —
         // the HUD-only red pulse on its own undersold the horde
         // start. robot-detect is the closest existing alert SFX.
@@ -1207,6 +1214,9 @@ export function Game({
             ? { ...prev, cycle: msg.newCycle, hordeActive: false }
             : prev
         );
+        // Cycle bump regenerates dungeon floors — the renderer
+        // drops fog explored in the prior cycle.
+        gameRef.current?.setWorldCycle(msg.newCycle);
         break;
       case 'inventory_changed': {
         // Diff the new inventory against the previous snapshot to fire

@@ -134,6 +134,92 @@ export function decorateRegions(
   }
 }
 
+// ---------- Ceiling variation ----------
+//
+// Deterministic per-region ceiling heights. Runs on its OWN rng
+// sub-stream (see pipeline.ts) so adding/removing ceiling rolls
+// never shifts the decoration or finalize streams — existing
+// seeds keep their room shapes, platforms, and locked rooms.
+//
+// Rooms roll from {48, 64, 80, 96} weighted toward 64; large
+// rooms bias high (hall-like), small rooms can go low. Corridors
+// roll {40, 48} — tighter, reads as ducts between chambers.
+//
+// Invariant: ceilingZ must clear the tallest contained platform
+// top by ≥ JUMP_HEADROOM (player stand height 24 + jump apex
+// margin) so jumping onto a platform never head-bonks into the
+// ceiling. Platforms cap at 24wu, so the worst case needs 64 —
+// choices below the bound are filtered out before the roll.
+const ROOM_CEILING_CHOICES = [48, 64, 80, 96] as const;
+const CORRIDOR_CEILING_CHOICES = [40, 48] as const;
+const JUMP_HEADROOM = 40;
+
+export function rollCeilings(
+  regionSet: RegionSet,
+  rng: () => number,
+): void {
+  for (const r of regionSet.regions) {
+    if (r.kind === 'corridor') {
+      r.ceilingZ = pickWeightedHeight(
+        rng,
+        CORRIDOR_CEILING_CHOICES,
+        [1, 1],
+        0,
+      );
+      continue;
+    }
+    // Tallest platform top inside the room (pits are negative and
+    // don't constrain the ceiling).
+    let maxPlatformTop = 0;
+    for (const v of r.verticalSubSectors ?? []) {
+      if (v.floorZ > maxPlatformTop) maxPlatformTop = v.floorZ;
+    }
+    const minCeiling = maxPlatformTop + JUMP_HEADROOM;
+    const minDim = Math.min(r.tileW, r.tileH);
+    // Base weights lean on 64; large rooms shift the mass upward,
+    // small rooms allow the low 48 to dominate more often.
+    let weights: number[];
+    if (minDim >= 10) {
+      weights = [0, 3, 3, 2];
+    } else if (minDim <= 5) {
+      weights = [2, 4, 1, 0];
+    } else {
+      weights = [1, 4, 2, 1];
+    }
+    r.ceilingZ = pickWeightedHeight(
+      rng,
+      ROOM_CEILING_CHOICES,
+      weights,
+      minCeiling,
+    );
+  }
+}
+
+// Weighted pick from `choices`, dropping entries below
+// `minAllowed`. Falls back to the highest choice if the filter
+// empties the pool (can't happen with current platform caps, but
+// stay safe against config drift).
+function pickWeightedHeight(
+  rng: () => number,
+  choices: readonly number[],
+  weights: readonly number[],
+  minAllowed: number,
+): number {
+  let total = 0;
+  for (let i = 0; i < choices.length; i++) {
+    if (choices[i] < minAllowed) continue;
+    total += weights[i];
+  }
+  if (total <= 0) return choices[choices.length - 1];
+  let roll = rng() * total;
+  for (let i = 0; i < choices.length; i++) {
+    if (choices[i] < minAllowed) continue;
+    roll -= weights[i];
+    if (roll <= 0) return choices[i];
+  }
+  return choices[choices.length - 1];
+}
+
 // Drop a raised platform in one corner of the room. Platforms are
 // climbable (≤12 wu = step-up) or jumpable (≤24 wu = jump apex);
 // the floorZ is picked per-room so each platform reads as a
