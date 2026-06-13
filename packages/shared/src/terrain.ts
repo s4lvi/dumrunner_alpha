@@ -5,6 +5,28 @@
 // fbm stacking. Same input (seed, x, y) → same output bit-for-bit.
 // Tunables live on TerrainConfig and ship in the SceneLayout.
 
+// A leveled clearing carved into the noise field: terrain is flat at
+// `padZ` within `radius` of (cx, cy), then ramps smoothly back to the
+// natural height across an `apron` ring. This is how the surface base
+// "platform" is expressed — NOT as an authored sector map with solid
+// riser walls (which the 2D floorZ-agnostic enemy AI can't besiege and
+// the renderer clips up), but as one continuous height field that's
+// simply flat in the middle. Nothing to block enemies, nothing to clip;
+// the apron slope is bounded under STEP_UP_MAX so the player walks on/off
+// without a ledge-fall and the renderer draws no cliff. See
+// docs/base-layouts-plan.md.
+export type TerrainClearing = {
+  cx: number;
+  cy: number;
+  // Flat radius (wu): terrain is exactly padZ within this.
+  radius: number;
+  // Apron width (wu): terrain lerps padZ → natural across this ring.
+  // Size it so the slope stays under STEP_UP_MAX per move-step.
+  apron: number;
+  // Flat pad height (≈ terrain mean, usually 0 → at-grade clearing).
+  padZ: number;
+};
+
 export type TerrainConfig = {
   // Peak-to-trough height in world units. 0 = flat.
   amplitude: number;
@@ -17,6 +39,8 @@ export type TerrainConfig = {
   // Per-scene seed mixed with cell coords so different scenes
   // (or different cycles) produce different terrain.
   seed: number;
+  // Optional leveled base pad carved into the field (surface only).
+  clearing?: TerrainClearing;
 };
 
 // Value-noise lookup. Returns a deterministic [-1, 1] value
@@ -77,7 +101,33 @@ export function terrainHeightAt(
   }
   // Normalise so the final amplitude matches cfg.amplitude
   // regardless of octave count.
-  return (sum / ampAccum) * cfg.amplitude;
+  const raw = (sum / ampAccum) * cfg.amplitude;
+  if (!cfg.clearing) return raw;
+  // Leveled clearing: flat pad inside `radius`, smooth ramp to the
+  // natural height across the `apron` ring, untouched beyond.
+  const c = cfg.clearing;
+  const dx = x - c.cx;
+  const dy = y - c.cy;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d <= c.radius) return c.padZ;
+  if (d >= c.radius + c.apron) return raw;
+  const t = (d - c.radius) / c.apron; // 0 at pad edge → 1 at natural
+  const s = t * t * (3 - 2 * t); // smoothstep
+  return c.padZ + (raw - c.padZ) * s;
+}
+
+// Whether (x, y) lies on the flat pad of a terrain clearing — the
+// buildable base footprint. False when there's no clearing.
+export function insideClearingPad(
+  cfg: TerrainConfig | null | undefined,
+  x: number,
+  y: number,
+): boolean {
+  const c = cfg?.clearing;
+  if (!c) return false;
+  const dx = x - c.cx;
+  const dy = y - c.cy;
+  return dx * dx + dy * dy <= c.radius * c.radius;
 }
 
 // Perimeter-distance falloff used by per-sector noise. Returns a

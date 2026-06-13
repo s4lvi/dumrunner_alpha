@@ -187,6 +187,20 @@ function surfaceLayout(): SceneLayout {
       frequency: 1 / 384,
       octaves: 2,
       seed: 0x5e7117ed,
+      // Base layout v1: a flat at-grade clearing carved into the
+      // hills (see docs/base-layouts-plan.md). Centred on the Power
+      // Link, large enough to contain the spawn (80,0) and Link
+      // (208,-16) with build room; padZ 0 = at grade. Apron 192wu
+      // (6 tiles) keeps the ramp slope well under STEP_UP_MAX so the
+      // player walks on/off without a ledge-fall and the horde
+      // crosses on continuous ground.
+      clearing: {
+        cx: linkX,
+        cy: 0,
+        radius: 352, // 11 tiles flat
+        apron: 192, // 6 tiles of gentle ramp to natural grade
+        padZ: 0,
+      },
     },
   };
 }
