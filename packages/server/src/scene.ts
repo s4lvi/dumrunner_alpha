@@ -1891,14 +1891,26 @@ export class Scene {
             conn.vz = 0;
           }
         } else {
-          // Grounded: normal step-up cap; feet snap to the floor
-          // (step-up and step-down alike).
-          conn.floorZ = this.floorAt(
+          // Grounded: resolve the floor under the new position with
+          // the normal step-up cap.
+          const stepFloor = this.floorAt(
             proposedX,
             proposedY,
             conn.floorZ + COMBAT.STEP_UP_MAX,
           );
-          conn.z = conn.floorZ;
+          const drop = conn.z - stepFloor;
+          conn.floorZ = stepFloor;
+          if (drop <= COMBAT.STEP_UP_MAX) {
+            // Small step down (stairs, curbs, pit lips, terrain
+            // ripples) — stay glued so walking doesn't bounce.
+            // Symmetric with the step-up budget: anything you could
+            // step UP onto, you can step DOWN off without falling.
+            conn.z = stepFloor;
+          }
+          // else: a real ledge. Leave z at the higher position —
+          // the player is now airborne (z > floorZ) and the
+          // vertical block integrates the fall under gravity on the
+          // next tick, so walking off reads as a fall, not a snap.
         }
       }
 

@@ -12,6 +12,9 @@
 import { Scene, type SceneBindings, type SceneConnection } from './src/scene.js';
 import { COMBAT } from './src/combat.js';
 import { terrainHeightAt, type SceneLayout } from '@dumrunner/shared';
+import { initBiomes } from './src/biomes.js';
+import { initRooms } from './src/rooms.js';
+import { generateFloorLayout } from './src/procgen.js';
 
 const TERRAIN = {
   amplitude: 64,
@@ -203,6 +206,49 @@ function runWalk(
   return { maxDev, airborneTicks };
 }
 
+// Walk off a raised platform edge in a real dungeon floor. Pre-fix
+// the grounded re-anchor snapped the feet straight to the lower
+// floor in one tick (airborne never set, z drops in a single
+// step). Post-fix a real ledge becomes a fall: the player goes
+// airborne and z descends over MULTIPLE ticks under gravity, then
+// lands once at the lower floor — never below it.
+function runLedge(
+  scene: Scene,
+  conn: SceneConnection,
+  platformTop: number,
+  lowerFloor: number,
+  dirX: number,
+  dirY: number,
+): { airborneTicks: number; descendTicks: number; landedZ: number; belowFloor: number; maxStepDown: number } {
+  const dt = COMBAT.TICK_MS / 1000;
+  let now = Date.now();
+  conn.inputX = dirX;
+  conn.inputY = dirY;
+  conn.inputJump = false;
+  let airborneTicks = 0;
+  let descendTicks = 0;
+  let belowFloor = 0;
+  let maxStepDown = 0;
+  let prevZ = conn.z;
+  for (let tick = 0; tick < 60; tick++) {
+    now += COMBAT.TICK_MS;
+    (scene as any).simulatePlayerMovement(dt, now);
+    if (conn.z > conn.floorZ + 1e-6 || conn.vz !== 0) airborneTicks++;
+    const stepDown = prevZ - conn.z;
+    if (stepDown > 1e-6) descendTicks++;
+    if (stepDown > maxStepDown) maxStepDown = stepDown;
+    if (conn.z < conn.floorZ - 1e-6) belowFloor++;
+    prevZ = conn.z;
+  }
+  return {
+    airborneTicks,
+    descendTicks,
+    landedZ: conn.z,
+    belowFloor,
+    maxStepDown,
+  };
+}
+
 async function main() {
   const start = findUphillStart();
   console.log(
@@ -311,7 +357,70 @@ async function main() {
     80,
   );
 
+  // Ledge walk-off (real dungeon floor with platforms). Find a
+  // platform, stand on top, walk toward each cardinal direction
+  // until one carries the player off the edge over a real drop.
+  await initBiomes();
+  await initRooms();
+  let ledge = {
+    found: false,
+    airborneTicks: 0,
+    descendTicks: 0,
+    maxStepDown: 0,
+    belowFloor: 0,
+    landedZ: 0,
+    platformTop: 0,
+  };
+  outerLedge: for (const [seed, floor] of [[101, 3], [303, 3], [202, 3]] as const) {
+    const dl = generateFloorLayout(seed, 1, floor, 'default');
+    const map = (dl as unknown as { authoredSectorMap?: { sectors: Array<{ floorZ: number; verts: { x: number; y: number }[] }> } }).authoredSectorMap;
+    if (!map) continue;
+    const plat = map.sectors.find((s) => s.floorZ >= 16 && s.floorZ <= 28);
+    if (!plat) continue;
+    const cx = plat.verts.reduce((t, v) => t + v.x, 0) / plat.verts.length;
+    const cy = plat.verts.reduce((t, v) => t + v.y, 0) / plat.verts.length;
+    const lScene = new Scene(`dungeon:${floor}`, 'dungeon_floor', bindings, dl);
+    lScene.addMember('diag');
+    const top = (lScene as any).floorAt(cx, cy, plat.floorZ + COMBAT.STEP_UP_MAX);
+    if (Math.abs(top - plat.floorZ) > 0.5) continue; // not actually standing on it
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      conn = makeConn(cx, cy, plat.floorZ);
+      conn.z = plat.floorZ;
+      conn.floorZ = plat.floorZ;
+      const r = runLedge(lScene, conn, plat.floorZ, 0, dx, dy);
+      // A successful walk-off: ended meaningfully below the platform
+      // top, fell over multiple ticks, never a single-tick teleport
+      // larger than one gravity step, never below the floor.
+      if (r.landedZ < plat.floorZ - COMBAT.STEP_UP_MAX && r.descendTicks >= 2) {
+        ledge = { found: true, platformTop: plat.floorZ, ...r };
+        break outerLedge;
+      }
+    }
+  }
+  if (ledge.found) {
+    const maxGravityStep =
+      (COMBAT.JUMP_VZ_INIT * 3 + COMBAT.GRAVITY * (COMBAT.TICK_MS / 1000)) *
+      (COMBAT.TICK_MS / 1000);
+    console.log(
+      `-- ledge walk-off -- platformTop=${ledge.platformTop} landedZ=${ledge.landedZ.toFixed(1)}` +
+        ` airborneTicks=${ledge.airborneTicks} descendTicks=${ledge.descendTicks}` +
+        ` maxStepDown=${ledge.maxStepDown.toFixed(2)} belowFloor=${ledge.belowFloor}` +
+        ` (expected: airborne>=2, descend>=2, no single-tick teleport > ${maxGravityStep.toFixed(1)})`,
+    );
+  } else {
+    console.log('-- ledge walk-off -- no suitable platform edge found, skipping');
+  }
+  const ledgeMaxStep =
+    (COMBAT.JUMP_VZ_INIT * 3) * (COMBAT.TICK_MS / 1000) + 1;
+  const ledgePass =
+    !ledge.found ||
+    (ledge.airborneTicks >= 2 &&
+      ledge.descendTicks >= 2 &&
+      ledge.belowFloor === 0 &&
+      ledge.maxStepDown <= ledgeMaxStep);
+
   const pass =
+    ledgePass &&
     walkUp.maxDev === 0 &&
     walkDown.maxDev === 0 &&
     walkUp.airborneTicks === 0 &&
