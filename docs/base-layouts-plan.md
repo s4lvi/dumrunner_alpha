@@ -114,31 +114,37 @@ don't hover above it).** The raised-platform aesthetic is deferred
 until enemy AI gains floorZ/step-up pathing (Sprint G); see
 "Raised pads, later" below.
 
-At-grade mechanics:
+At-grade mechanics (**implemented in P0**, `shared/src/terrain.ts`):
 
-- **Footprint clamp.** Inside the layout footprint the surface floor
-  is flat authored geometry at `padZ` (≈ the terrain's local mean,
-  near 0). The terrain sampler returns `padZ` for any xy inside the
-  footprint so noise can't pierce the pad. Implement as a footprint
-  mask consulted by the surface `floorAt`/terrain sampler.
-- **Apron ramp.** In a ring of width `apronTiles` around the
-  footprint, the sampler lerps from `padZ` at the inner edge to the
-  natural `terrainHeight` at the outer edge — a smooth, fully
-  walkable slope whose per-step delta stays under `STEP_UP_MAX`, so
-  the horde walks onto the pad on continuous ground with no riser to
-  climb and the renderer shows no cliff. The apron is the seam, and
-  it's a gentle slope, not a wall.
-- **Beyond the apron**, terrain is untouched — the hilly desolate
-  overworld as backdrop. It stays non-buildable (build requires a
-  pad-footprint tile, P2).
-- **No ledge-fall on the base** in v1 — the apron means there is no
-  drop-off edge to fall from. Ledge-fall stays a dungeon/raised-pad
-  concern.
+- **The clearing is carved into the terrain height field itself, not
+  an authored sector map.** `terrainHeightAt(cfg, x, y)` is the single
+  chokepoint both server collision and client rendering sample, so a
+  `TerrainConfig.clearing { cx, cy, radius, apron, padZ }` field makes
+  the pad appear everywhere at once from one implementation. There is
+  **no authored sector map on the surface, no solid riser walls** —
+  which is exactly what dodges the review's killer: nothing solid to
+  block the 2D floorZ-agnostic horde, nothing for it to clip up. The
+  base is one continuous surface that's simply flat in the middle.
+- **Footprint clamp:** inside `radius`, `terrainHeightAt` returns
+  `padZ` (≈ terrain mean, 0 → at grade). `insideClearingPad()` is the
+  buildable-footprint test (P2 uses it).
+- **Apron ramp:** across the `apron` ring the height smoothsteps from
+  `padZ` to the natural noise — a fully walkable slope whose per-step
+  delta is bounded under `STEP_UP_MAX` (measured 2.18wu/step at
+  radius 352 / apron 192, vs the 12 limit). No riser to climb, no
+  cliff to draw.
+- **Beyond the apron**, terrain is the untouched hilly overworld
+  backdrop; non-buildable (build requires a pad-footprint tile, P2).
+- **No ledge-fall on the base** — the apron is a gentle slope, not a
+  drop-off; verified by a real player walk onto the pad (0 airborne
+  ticks). Ledge-fall stays a dungeon concern.
 
-This keeps the genre-true picture (a leveled walled compound in the
-hills) while staying inside what the 2D AI can navigate, and confines
-terrain interaction to a gentle walkable apron instead of an
-AI-hostile cliff.
+This keeps the genre-true picture (a leveled compound in the hills),
+stays inside what the 2D AI navigates, and — by living in the height
+field rather than an authored-pad-over-terrain hybrid — avoids the
+riser/hole machinery and the authored+terrain seam **entirely**. The
+hybrid scene type the earlier draft worried about never gets created;
+that whole risk class is designed out, not mitigated.
 
 ### Raised pads, later
 
@@ -406,15 +412,20 @@ v1 UI copy — sell them on capacity + mounts + size.
 
 ## Phased plan
 
-**P0 — Pad+apron spike (throwaway, gate on it).** See the P0 section
-above. The gate is the **enemy seam**: a flat pad + walkable apron on
-the live surface where a horde wave crosses from the spawn ring and
-attacks the Power Link, plus the player seam (stable pad, no
-stutter-fall on the apron) and the diag invariants (terrain clamp,
-apron step ≤ STEP_UP_MAX, ring→Power-Link BFS reachable). **Do not
-start P1 until the horde-reaches-base criterion is green** — a clean
-player seam alone does not clear the gate. The working pad+apron
-becomes P1's starter content.
+**P0 — Pad+apron spike. ✅ DONE (server-side) 2026-06-13.** Carved the
+clearing into `terrainHeightAt` (`TerrainConfig.clearing` +
+`insideClearingPad`) — see the at-grade mechanics above; this turned
+out cleaner than an authored pad (no sector map, no riser/hole
+machinery, no enemy-blocking solid walls). Surface gets an at-grade
+clearing on the Power Link. `diag-base.ts` proves it on the real
+surface Scene: flat pad (dev 0), apron 2.18wu/step (≪ 12), natural
+terrain beyond, player walks onto the pad with 0 blocked / 0 airborne.
+Because the clearing is a smooth heightfield with no solid risers,
+the 2D horde walks onto it for free — the enemy seam is satisfied by
+construction, not by a BFS gate. **Remaining P0 = the in-game
+playtest check** (renderer draws the apron/pad without z-fighting; a
+live horde wave reads right). Do that before P1 hardens anything on
+top.
 
 **P1 — Layout data + starter, surface built from it (no behavior change yet).**
 - `BaseLayoutDef` type + Zod (`shared/src/content/types.ts`), loader
