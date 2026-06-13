@@ -452,12 +452,28 @@ function rasterize(
     const rects = r.subRects ?? [
       { tileX: r.tileX, tileY: r.tileY, tileW: r.tileW, tileH: r.tileH },
     ];
+    // When the region carries an authored polygon (chamfered corners
+    // etc.), the SECTOR geometry the player sees + collides with is
+    // that polygon — NOT the bounding rect. Carve the tile grid to
+    // match: only mark a cell whose centre is inside the polygon as
+    // floor. Without this the tile grid claims the chamfered corner
+    // cells are floor while the polygon walls them off, so anything
+    // that places via the tile grid (enemy spawns, the stairs/extract
+    // portal snap, AI pathing) lands inside what's actually a wall.
+    const poly =
+      r.polygonVerts && r.polygonVerts.length >= 3 ? r.polygonVerts : null;
     for (const rect of rects) {
       for (let ty = rect.tileY; ty < rect.tileY + rect.tileH; ty++) {
         for (let tx = rect.tileX; tx < rect.tileX + rect.tileW; tx++) {
           const lx = tx - originTileX;
           const ly = ty - originTileY;
           if (lx < 0 || ly < 0 || lx >= width || ly >= height) continue;
+          if (
+            poly &&
+            !pointInPolygon(poly, (tx + 0.5) * tileSize, (ty + 0.5) * tileSize)
+          ) {
+            continue;
+          }
           tiles[ly * width + lx] = DEFAULT_FLOOR_TILE_ID;
         }
       }
