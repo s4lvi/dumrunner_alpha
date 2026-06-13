@@ -4380,6 +4380,21 @@ export class Scene {
     return building;
   }
 
+  // Drop EVERY building on this scene and return how many were
+  // removed. Used by the base-layouts schema-5 migration to reset a
+  // pre-v5 surface (buildings persisted at old terrain-plane coords
+  // don't fit the data-driven clearing). Runs on hydrate before any
+  // client is connected, so it skips per-building broadcasts; the
+  // (re-created) Power Link is re-broadcast when ensurePowerLink runs
+  // after. Collision env is refreshed via notifyBuildingsChanged.
+  dropAllBuildings(): number {
+    const n = this.buildings.size;
+    if (n === 0) return 0;
+    this.buildings.clear();
+    this.notifyBuildingsChanged();
+    return n;
+  }
+
   // Spawn the portal cubes (stairs_down + extract_pad) at the
   // matching interactables' tile positions. Same role as
   // ensurePowerLink on the surface: gives each portal a physical,

@@ -13,6 +13,7 @@
 
 import type { WebSocket } from 'ws';
 import type {
+  BaseLayoutDef,
   BuildingKind,
   Equipment,
   Inventory,
@@ -108,6 +109,10 @@ import {
 import { getPropVisualsForWire } from './props.js';
 import { getBuildingVisualsForWire } from './buildingOverrides.js';
 import { getBlueprintsForWire } from './blueprints.js';
+import {
+  getBaseLayout,
+  STARTER_BASE_LAYOUT_ID,
+} from './baseLayouts.js';
 import { getWeaponsForWire } from './weapons.js';
 import { getRecipesForWire } from './recipes.js';
 import { getAttachmentsForWire } from './attachments.js';
@@ -144,12 +149,23 @@ const POWER_LINK_TILE_Y = -1; // straddles y=0 cleanly with a 1×2 footprint
 const POWER_LINK_TILE_W = 1;
 const POWER_LINK_TILE_H = 1;
 
-function surfaceLayout(): SceneLayout {
+// Built-in fallback clearing shape, used only when the starter base
+// layout JSON is missing (loader logs a warning). Mirrors the proven
+// P0 starter geometry so the surface is never shapeless.
+const FALLBACK_CLEARING = { radius: 352, apron: 192, padZ: 0 };
+
+// Build the surface SceneLayout. The flat base "clearing" carved into
+// the terrain height field comes from the active BaseLayoutDef's
+// radius/apron/padZ, centred on the Power Link world position
+// (linkX, cy:0) — the layout carries only the shape, world.ts owns
+// where it sits. `layout` null → fallback geometry.
+function surfaceLayout(layout: BaseLayoutDef | null): SceneLayout {
   // Power Link sits at tile (6, -1). World-space centre = tile centre at
   // 32px tiles → (6.5*32, -0.5*32) = (208, -16). Use that as the
   // interactable's anchor so the prompt fires when the player is near.
   const linkX = (POWER_LINK_TILE_X + POWER_LINK_TILE_W / 2) * 32;
   const linkY = (POWER_LINK_TILE_Y + POWER_LINK_TILE_H / 2) * 32;
+  const shape = layout ?? FALLBACK_CLEARING;
   return {
     worldBounds: { x: -2000, y: -2000, w: 4000, h: 4000 },
     walkables: [],
@@ -188,18 +204,20 @@ function surfaceLayout(): SceneLayout {
       octaves: 2,
       seed: 0x5e7117ed,
       // Base layout v1: a flat at-grade clearing carved into the
-      // hills (see docs/base-layouts-plan.md). Centred on the Power
-      // Link, large enough to contain the spawn (80,0) and Link
-      // (208,-16) with build room; padZ 0 = at grade. Apron 192wu
-      // (6 tiles) keeps the ramp slope well under STEP_UP_MAX so the
-      // player walks on/off without a ledge-fall and the horde
-      // crosses on continuous ground.
+      // hills (see docs/base-layouts-plan.md). The SHAPE
+      // (radius/apron/padZ) is data-driven from the active
+      // BaseLayoutDef; the clearing is centred on the Power Link
+      // (linkX, 0) here in world.ts. The starter pad is large enough
+      // to contain the spawn (80,0) and Link (208,-16) with build
+      // room; padZ 0 = at grade. The apron keeps the ramp slope well
+      // under STEP_UP_MAX so the player walks on/off without a
+      // ledge-fall and the horde crosses on continuous ground.
       clearing: {
         cx: linkX,
         cy: 0,
-        radius: 352, // 11 tiles flat
-        apron: 192, // 6 tiles of gentle ramp to natural grade
-        padZ: 0,
+        radius: shape.radius,
+        apron: shape.apron,
+        padZ: shape.padZ,
       },
     },
   };
@@ -212,7 +230,11 @@ function surfaceLayout(): SceneLayout {
 //   2 — slot-based inventory (corpse.inventory is Inventory).
 //   3 — adds cycle + cycleStartedAt for the perihelion clock.
 //   4 — adds craftJobs (additive; v3 snapshots still load).
-const WORLD_STATE_SCHEMA = 4;
+//   5 — adds baseLayoutId (active surface base layout). Additive, but
+//       a snapshot LACKING it (pre-v5: schema 3/4) triggers the
+//       surface-base migration on hydrate (drop surface buildings +
+//       assign the starter layout). v3/v4/v5 all parse.
+const WORLD_STATE_SCHEMA = 5;
 type WorldSnapshot = {
   schema: number;
   scenes: Record<string, SceneSnapshot>;
@@ -222,6 +244,9 @@ type WorldSnapshot = {
   // so dropping these on restart eats player materials — they must
   // survive (craft durability). Optional: v3 snapshots lack it.
   craftJobs?: import('@dumrunner/shared').CraftJobState[];
+  // Active surface base layout id (schema 5). Optional: pre-v5
+  // snapshots lack it and migrate to the starter on hydrate.
+  baseLayoutId?: string;
 };
 
 // Connection — the per-ws record stored on the World. Implements SceneConnection
@@ -361,6 +386,20 @@ export class World {
   // surface Power Link's descent target and (Phase 3) the power capacity.
   // Resets to 1 on cycle reset OR Power Link destruction.
   private deepestFloorReached = 1;
+  // Active surface base layout id. Defaults to the starter; set from
+  // the persisted snapshot on hydrate (schema 5). Drives the surface
+  // clearing shape (radius/apron/padZ) via surfaceLayout(). Layout
+  // SWAP (P4) reassigns this; P1 only ever holds the starter.
+  private baseLayoutId: string = STARTER_BASE_LAYOUT_ID;
+  // Resolve the active layout def. Falls back to the starter if the
+  // active id is unknown (deleted content), then to null (built-in
+  // fallback geometry) if even the starter is missing.
+  private activeBaseLayout(): BaseLayoutDef | null {
+    return (
+      getBaseLayout(this.baseLayoutId) ??
+      getBaseLayout(STARTER_BASE_LAYOUT_ID)
+    );
+  }
   // Powered defences (auto-turrets) require an alive Power Link. When the
   // Link is destroyed mid-cycle this flips false; cycle reset rebuilds it.
   private powerOnline = true;
@@ -496,7 +535,7 @@ export class World {
         SURFACE_SCENE_ID,
         'surface',
         this.bindings,
-        surfaceLayout()
+        surfaceLayout(this.activeBaseLayout())
       );
       this.scenes.set(SURFACE_SCENE_ID, surface);
       surface.ensurePowerLink(
@@ -638,6 +677,11 @@ export class World {
       scene.hydrate(sceneSnap);
     }
 
+    // Base-layout resolution + pre-v5 surface migration. Runs after
+    // scenes hydrate (so it can drop the just-restored surface
+    // buildings) and before craftJobs restore.
+    this.applyBaseLayoutFromSnapshot(snap);
+
     // Restore craft jobs AFTER scenes/buildings hydrate so completed
     // jobs can deposit into their station's (restored) output buffer.
     // Jobs whose completesAt elapsed during downtime finish on the
@@ -693,7 +737,44 @@ export class World {
       cycle: this.cycle,
       cycleStartedAt: this.cycleStartedAt,
       craftJobs: [...this.activeCraftJobs.values()],
+      baseLayoutId: this.baseLayoutId,
     };
+  }
+
+  // Resolve the active base layout from a loaded snapshot, applying
+  // the schema-5 surface migration for pre-v5 saves.
+  //
+  // schema-5 snapshots carry `baseLayoutId`; restore it (validated
+  // against the loaded registry, else fall back to the starter) and
+  // KEEP the hydrated surface buildings. A snapshot LACKING
+  // baseLayoutId is pre-v5 (schema 3/4): the surface flipped from a
+  // free-build terrain plane to a data-driven clearing, so persisted
+  // buildings no longer fit. Reset the SURFACE scene's buildings only
+  // (dungeon scenes, cycle, craftJobs, characters untouched), assign
+  // the starter layout, and re-create the Power Link the reset
+  // removed (the existing ensurePowerLink path).
+  private applyBaseLayoutFromSnapshot(snap: WorldSnapshot): void {
+    if (typeof snap.baseLayoutId === 'string' && snap.baseLayoutId) {
+      this.baseLayoutId = getBaseLayout(snap.baseLayoutId)
+        ? snap.baseLayoutId
+        : STARTER_BASE_LAYOUT_ID;
+      return;
+    }
+    // Pre-v5 migration.
+    this.baseLayoutId = STARTER_BASE_LAYOUT_ID;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    const dropped = surface ? surface.dropAllBuildings() : 0;
+    console.log(
+      `[world ${this.serverId}] surface base reset for base-layouts migration — dropped ${dropped} buildings`,
+    );
+    if (surface) {
+      surface.ensurePowerLink(
+        POWER_LINK_TILE_X,
+        POWER_LINK_TILE_Y,
+        POWER_LINK_TILE_W,
+        POWER_LINK_TILE_H,
+      );
+    }
   }
 
   private async flushSnapshot(): Promise<void> {
@@ -3854,7 +3935,7 @@ export class World {
     if (existing) return existing;
 
     if (sceneId === SURFACE_SCENE_ID) {
-      const scene = new Scene(SURFACE_SCENE_ID, 'surface', this.bindings, surfaceLayout());
+      const scene = new Scene(SURFACE_SCENE_ID, 'surface', this.bindings, surfaceLayout(this.activeBaseLayout()));
       this.scenes.set(sceneId, scene);
       return scene;
     }
@@ -4091,7 +4172,10 @@ function toPlayer(conn: Connection): Player {
 function parseWorldSnapshot(raw: unknown): WorldSnapshot | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as { schema?: unknown; scenes?: unknown };
-  if (r.schema !== WORLD_STATE_SCHEMA && r.schema !== 3) return null;
+  // Accept schema 3, 4, AND 5. Pre-v5 (3/4) snapshots lack
+  // baseLayoutId and migrate the surface base on hydrate; don't reject
+  // them.
+  if (r.schema !== 5 && r.schema !== 4 && r.schema !== 3) return null;
   if (!r.scenes || typeof r.scenes !== 'object') return null;
   // Trust the rest — we wrote it ourselves in flushSnapshot.
   return raw as WorldSnapshot;

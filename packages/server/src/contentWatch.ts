@@ -28,6 +28,7 @@ const AREAS = [
   'attachments',
   'buildings',
   'scenes',
+  'base-layouts',
 ] as const;
 const DEBOUNCE_MS = 250;
 
@@ -51,6 +52,9 @@ export type ContentReloader = {
   // pinned scene's geometry may have changed so the cached
   // PolygonSectorScene needs refreshing.
   scenes(): Promise<void>;
+  // Base-layout JSON saves re-init the layout registry so a hand-edit
+  // (no editor form until P4) lands without a restart.
+  'base-layouts'(): Promise<void>;
 };
 
 export function startContentWatch(reloader: ContentReloader): () => void {

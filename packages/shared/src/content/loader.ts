@@ -20,6 +20,7 @@ import { z } from 'zod';
 import {
   AnimationDefSchema,
   AttachmentDefSchema,
+  BaseLayoutDefSchema,
   BiomeDefSchema,
   BlueprintDefSchema,
   EnemyDefSchema,
@@ -36,6 +37,7 @@ import {
   BuildingOverrideSchema,
   type AnimationDef,
   type AttachmentDefData,
+  type BaseLayoutDef,
   type BiomeDef,
   type BlueprintDef,
   type BuildingOverride,
@@ -151,6 +153,10 @@ export const loadBuildingOverrides = (): Promise<BuildingOverride[]> =>
   loadArea('buildings', BuildingOverrideSchema);
 export const loadScenes = (): Promise<SceneDef[]> =>
   loadArea('scenes', SceneDefSchema);
+// Base layouts (P1). Not an EDITOR_AREA yet (no editor form until
+// P4) — loaded at server boot only. Lives under content/base-layouts.
+export const loadBaseLayouts = (): Promise<BaseLayoutDef[]> =>
+  loadArea('base-layouts', BaseLayoutDefSchema);
 
 // Single-entity helpers. The editor's API route writes one file
 // at a time; the GET endpoint may want to fetch one without
@@ -206,6 +212,8 @@ export const loadBuildingOverride = (id: string) =>
   loadEntity('buildings', id, BuildingOverrideSchema);
 export const loadScene = (id: string) =>
   loadEntity('scenes', id, SceneDefSchema);
+export const loadBaseLayoutEntity = (id: string) =>
+  loadEntity('base-layouts', id, BaseLayoutDefSchema);
 
 // Save validates BEFORE writing — a malformed payload from the
 // editor's POST handler can never make it onto disk. The schema

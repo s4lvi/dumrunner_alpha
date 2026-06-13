@@ -30,6 +30,7 @@ import { initWeapons } from './src/weapons.js';
 import { initRecipes } from './src/recipes.js';
 import { initAttachments } from './src/attachments.js';
 import { initFloorOverrides } from './src/floorOverrides.js';
+import { initBaseLayouts, STARTER_BASE_LAYOUT_ID } from './src/baseLayouts.js';
 import { buildStarterInventory } from './src/starter.js';
 import { World } from './src/world.js';
 import { emptyEquipment, type Player } from '@dumrunner/shared';
@@ -45,6 +46,7 @@ await initWeapons();
 await initRecipes();
 await initAttachments();
 await initFloorOverrides();
+await initBaseLayouts();
 
 const CID = 'diag-character';
 const SEED = 1234;
@@ -272,6 +274,110 @@ check(
   sceneIdD === 'dungeon:1' && dungeonD2 !== dungeonA && targetD?.alive === true,
   `sceneId=${sceneIdD} freshScene=${dungeonD2 !== dungeonA} firstEnemyAlive=${targetD?.alive}`
 );
+
+// ---------- Flow E: base-layouts schema-5 migration ----------
+//
+// Two snapshots are run through the REAL World hydrate path
+// (scene-restore loop + applyBaseLayoutFromSnapshot):
+//   E1 — a pre-v5 snapshot (schema 4, NO baseLayoutId) with surface
+//        buildings → surface buildings dropped (Power Link survives,
+//        re-created), active layout = starter.
+//   E2 — a v5 snapshot WITH baseLayoutId → layout preserved, surface
+//        buildings kept.
+
+// Build a source surface snapshot carrying several surface buildings.
+const srcWorld = new World('diag-migration-src');
+priv(srcWorld).worldSeed = SEED;
+priv(srcWorld).hydrated = true;
+const srcSurface = priv(srcWorld).scenes.get('surface');
+srcSurface.ensurePlaytestStations([
+  { kind: 'workbench', tileX: 0, tileY: 2 },
+  { kind: 'forge', tileX: 2, tileY: 2 },
+  { kind: 'storage_chest', tileX: 4, tileY: 2 },
+]);
+const srcSnap = priv(srcWorld).buildSnapshot();
+const surfaceBuildingCount = srcSnap.scenes['surface'].buildings.length;
+check(
+  'E: source surface snapshot carries buildings (incl. Power Link)',
+  surfaceBuildingCount >= 4,
+  `buildings=${surfaceBuildingCount}`,
+);
+
+// Replays World.hydrate's scene-restore loop + the real
+// applyBaseLayoutFromSnapshot (the migration code under test),
+// skipping only the Supabase fetch.
+function hydrateInto(world: World, snap: any): void {
+  priv(world).cycle = snap.cycle;
+  priv(world).cycleStartedAt = snap.cycleStartedAt;
+  for (const [sceneId, sceneSnap] of Object.entries(snap.scenes) as Array<
+    [string, any]
+  >) {
+    let scene = priv(world).scenes.get(sceneId);
+    if (!scene) {
+      const m = /^dungeon:(\d+)$/.exec(sceneId);
+      if (!m) continue;
+      scene = priv(world).createDungeonScene(Number(m[1]));
+    }
+    scene.hydrate(sceneSnap);
+  }
+  priv(world).applyBaseLayoutFromSnapshot(snap);
+}
+
+function countSurfaceBuildings(world: World): number {
+  return priv(priv(world).scenes.get('surface')).buildings.size as number;
+}
+function hasPowerLink(world: World): boolean {
+  for (const b of priv(priv(world).scenes.get('surface')).buildings.values()) {
+    if (b.kind === 'power_link') return true;
+  }
+  return false;
+}
+
+// E1 — pre-v5 (schema 4, no baseLayoutId).
+const preV5: any = JSON.parse(JSON.stringify(srcSnap));
+preV5.schema = 4;
+delete preV5.baseLayoutId;
+
+const worldE1 = new World('diag-migration-prev5');
+priv(worldE1).worldSeed = SEED;
+priv(worldE1).hydrated = true;
+hydrateInto(worldE1, preV5);
+
+check(
+  'FLOW E1: pre-v5 surface buildings dropped (only re-created Power Link remains)',
+  countSurfaceBuildings(worldE1) === 1 && hasPowerLink(worldE1),
+  `surfaceBuildings=${countSurfaceBuildings(worldE1)} powerLink=${hasPowerLink(worldE1)}`,
+);
+check(
+  'FLOW E1: pre-v5 snapshot assigned the starter layout',
+  priv(worldE1).baseLayoutId === STARTER_BASE_LAYOUT_ID,
+  `baseLayoutId=${priv(worldE1).baseLayoutId}`,
+);
+
+// E2 — v5 with baseLayoutId set to the starter.
+const v5: any = JSON.parse(JSON.stringify(srcSnap));
+v5.schema = 5;
+v5.baseLayoutId = STARTER_BASE_LAYOUT_ID;
+
+const worldE2 = new World('diag-migration-v5');
+priv(worldE2).worldSeed = SEED;
+priv(worldE2).hydrated = true;
+hydrateInto(worldE2, v5);
+
+check(
+  'FLOW E2: v5 snapshot preserves the active layout',
+  priv(worldE2).baseLayoutId === STARTER_BASE_LAYOUT_ID,
+  `baseLayoutId=${priv(worldE2).baseLayoutId}`,
+);
+check(
+  'FLOW E2: v5 snapshot keeps all surface buildings',
+  countSurfaceBuildings(worldE2) === surfaceBuildingCount,
+  `surfaceBuildings=${countSurfaceBuildings(worldE2)} (expected ${surfaceBuildingCount})`,
+);
+
+priv(srcWorld).stopTimers();
+priv(worldE1).stopTimers();
+priv(worldE2).stopTimers();
 
 // ---------- cleanup ----------
 worldA.remove(CID, ws4);

@@ -31,6 +31,7 @@ import { initWeapons } from './weapons.js';
 import { initRecipes } from './recipes.js';
 import { initAttachments } from './attachments.js';
 import { initFloorOverrides } from './floorOverrides.js';
+import { initBaseLayouts } from './baseLayouts.js';
 import { startContentWatch } from './contentWatch.js';
 import { World } from './world.js';
 
@@ -48,6 +49,7 @@ await initWeapons();
 await initRecipes();
 await initAttachments();
 await initFloorOverrides();
+await initBaseLayouts();
 
 // Hot-reload content registries on file changes so editor saves
 // land in the running sandbox without a server restart. Reload is
@@ -64,6 +66,7 @@ startContentWatch({
   attachments: initAttachments,
   buildings: initBuildingOverrides,
   scenes: initFloorOverrides,
+  'base-layouts': initBaseLayouts,
 });
 
 // Typed dispatch map for inbound client messages. Each key is a

@@ -11,20 +11,43 @@
 import { Scene, type SceneBindings, type SceneConnection } from './src/scene.js';
 import { COMBAT } from './src/combat.js';
 import {
+  initBaseLayouts,
+  getBaseLayout,
+  STARTER_BASE_LAYOUT_ID,
+} from './src/baseLayouts.js';
+import {
   terrainHeightAt,
   insideClearingPad,
   type SceneLayout,
 } from '@dumrunner/shared';
 
-// Mirror of world.ts surfaceLayout()'s terrain (incl. clearing) so
-// the diag tests the same field the live surface uses.
+// Load the real base-layout registry so the diag's terrain clearing
+// is derived from the authored starter BaseLayoutDef the exact way
+// world.ts builds it — radius/apron/padZ from the layout, centred on
+// the Power Link world position. Proves the data drives the geometry.
+await initBaseLayouts();
 const LINK_X = (6 + 0.5) * 32;
+const STARTER = getBaseLayout(STARTER_BASE_LAYOUT_ID);
+if (!STARTER) {
+  console.error(
+    `FAIL — starter base layout "${STARTER_BASE_LAYOUT_ID}" not loaded; expected content/base-layouts/${STARTER_BASE_LAYOUT_ID}.json`,
+  );
+  process.exit(1);
+}
 const TERRAIN = {
   amplitude: 64,
   frequency: 1 / 384,
   octaves: 2,
   seed: 0x5e7117ed,
-  clearing: { cx: LINK_X, cy: 0, radius: 352, apron: 192, padZ: 0 },
+  // Same construction as world.ts surfaceLayout(): shape from the
+  // layout, centre on the Power Link (LINK_X, 0).
+  clearing: {
+    cx: LINK_X,
+    cy: 0,
+    radius: STARTER.radius,
+    apron: STARTER.apron,
+    padZ: STARTER.padZ,
+  },
 };
 
 function makeConn(x: number, y: number, floorZ: number): SceneConnection {

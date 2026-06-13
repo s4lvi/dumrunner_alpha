@@ -1,0 +1,16 @@
+{
+  "id": "base_square_mk1",
+  "label": "Square Compound Mk1",
+  "radius": 352,
+  "apron": 192,
+  "padZ": 0,
+  "turretMounts": [
+    { "dx": 248, "dy": 248 },
+    { "dx": -248, "dy": 248 },
+    { "dx": 248, "dy": -248 },
+    { "dx": -248, "dy": -248 }
+  ],
+  "capacity": { "workstations": 4, "storage": 2 },
+  "blueprintId": null,
+  "cost": []
+}

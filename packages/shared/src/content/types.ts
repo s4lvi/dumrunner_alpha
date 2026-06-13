@@ -1551,3 +1551,70 @@ export const FloorOverridesSchema = z
   })
   .strict();
 export type FloorOverrides = z.infer<typeof FloorOverridesSchema>;
+
+// ---------------- BaseLayoutDef ----------------
+//
+// The surface base "platform" is a flat clearing carved into the
+// terrain height field (shared/src/terrain.ts TerrainClearing), NOT
+// an authored SectorScene. A BaseLayoutDef carries only the SHAPE of
+// that clearing plus the base-specific metadata — the geometry is the
+// heightfield clearing built in world.ts from these numbers. cx/cy
+// are NOT stored here: the clearing always centres on the Power Link
+// world position, computed in world.ts. See docs/base-layouts-plan.md.
+//
+// Field staging (one schema now, no churn later):
+//   radius/apron/padZ   — used in P1 (drives the live clearing).
+//   turretMounts        — defined now, consumed in P3 (turret sockets).
+//   capacity            — defined now, enforced in P2 (build caps).
+//   blueprintId/cost    — defined now, used in P4 (economy / swap).
+
+// Turret socket as an offset from the clearing centre (world units).
+// Resolved to a world position in world.ts (centre + {dx, dy}). Kept
+// inside the flat pad so the mounted turret sits on level ground.
+export const TurretMountSchema = z
+  .object({
+    dx: z.number(),
+    dy: z.number(),
+  })
+  .strict();
+export type TurretMount = z.infer<typeof TurretMountSchema>;
+
+// Free-build caps per category (P2). Turrets are NOT counted here —
+// they're bounded by turretMounts. Walls are uncapped.
+const baseLayoutCapacitySchema = z
+  .object({
+    workstations: z.number().int().nonnegative(),
+    storage: z.number().int().nonnegative(),
+  })
+  .strict();
+
+// Economy cost (P4). RecipeInput[]-shaped, but kept loose here: the
+// authored cost references material/part/ammo/weapon ids the same way
+// recipes do, and importing the closed RecipeInput union into this
+// schema would couple base layouts to recipe internals. The save-time
+// API layer cross-validates ids against the live registries (same as
+// recipes). Each entry must carry a `kind` discriminator.
+const baseLayoutCostEntrySchema = z
+  .object({ kind: z.string().min(1) })
+  .passthrough();
+
+export const BaseLayoutDefSchema = z
+  .object({
+    id: idSchema,
+    label: z.string().min(1),
+    // Flat pad radius (wu): terrain is exactly padZ within this.
+    radius: z.number().positive(),
+    // Apron ring width (wu): ramps padZ → natural terrain. Size so the
+    // per-move-step slope stays under STEP_UP_MAX (verified in diag-base).
+    apron: z.number().positive(),
+    // Flat pad height (≈ terrain mean, 0 = at-grade clearing).
+    padZ: z.number(),
+    turretMounts: z.array(TurretMountSchema),
+    capacity: baseLayoutCapacitySchema,
+    // Schematic gating the build (P4). null = always owned (starter).
+    blueprintId: idSchema.nullable(),
+    // Component cost to assemble (P4). [] = free (starter).
+    cost: z.array(baseLayoutCostEntrySchema),
+  })
+  .strict();
+export type BaseLayoutDef = z.infer<typeof BaseLayoutDefSchema>;
