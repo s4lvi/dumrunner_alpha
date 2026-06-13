@@ -1454,10 +1454,11 @@ export function Game({
   // leaves it released — browsers don't allow programmatic re-lock without
   // a fresh user gesture, so the player clicks the canvas to re-engage FPS.
   useEffect(() => {
-    if (!showInventory && !showTradeModal && !stationModalKind) return;
+    if (!showInventory && !showTradeModal && !stationModalKind && !showPowerLink)
+      return;
     if (typeof document === 'undefined') return;
     if (document.pointerLockElement) document.exitPointerLock?.();
-  }, [showInventory, showTradeModal, stationModalKind]);
+  }, [showInventory, showTradeModal, stationModalKind, showPowerLink]);
 
   // Editor live-reload: the editor bumps `sandboxReloadTick` on
   // save. Each bump (after the initial mount, which the welcome
