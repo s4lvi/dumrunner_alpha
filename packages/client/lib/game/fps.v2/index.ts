@@ -441,6 +441,10 @@ export function runFpsV2Game(
   let lastSelfMaxHp = init.self.maxHp;
   let lastHpDropAt = 0;
   let lastBigHpDropAt = 0;
+  // Shield damage gets its own (cyan) flash so soaking a hit on
+  // shields reads differently from taking it on HP.
+  let lastSelfShield = init.self.shield ?? 0;
+  let lastShieldDropAt = 0;
   let selfDead = false;
   // Per-entity hit-flash timestamps. The render passes (enemies,
   // building cubes, props) read these to apply a brief white tint
@@ -625,25 +629,46 @@ export function runFpsV2Game(
     if (!canvasEl) return;
     const now = performance.now();
     let alpha = 0;
+    let color = 0x9b0000; // red = HP / death
+    // Shield flash (cyan) — shown when it's the most recent hit and
+    // no HP flash is currently stronger. Computed first so the HP
+    // pulse below can override both alpha and colour.
+    const ageShield = now - lastShieldDropAt;
+    if (!selfDead && ageShield < DAMAGE_FLASH_MS) {
+      const shieldAlpha = 0.3 * (1 - ageShield / DAMAGE_FLASH_MS);
+      if (shieldAlpha > alpha) {
+        alpha = shieldAlpha;
+        color = 0x1fb6d6; // cyan = shield
+      }
+    }
     if (selfDead) {
       alpha = 0.55;
+      color = 0x9b0000;
     } else {
-      // Recent hit pulse: fades over DAMAGE_FLASH_MS. Bigger
-      // chunks of HP loss (>10%) get a stronger flash.
+      // Recent HP-hit pulse: fades over DAMAGE_FLASH_MS. Bigger
+      // chunks of HP loss (>15%) get a stronger flash. Any HP flash
+      // that wins the alpha also forces the colour to red (over a
+      // concurrent shield flash). Helper keeps colour + alpha in sync.
+      const bumpRed = (a: number): void => {
+        if (a > alpha) {
+          alpha = a;
+          color = 0x9b0000;
+        }
+      };
       const ageSmall = now - lastHpDropAt;
       if (ageSmall < DAMAGE_FLASH_MS) {
-        alpha = Math.max(alpha, 0.32 * (1 - ageSmall / DAMAGE_FLASH_MS));
+        bumpRed(0.32 * (1 - ageSmall / DAMAGE_FLASH_MS));
       }
       const ageBig = now - lastBigHpDropAt;
       if (ageBig < DAMAGE_FLASH_MS * 1.5) {
-        alpha = Math.max(alpha, 0.55 * (1 - ageBig / (DAMAGE_FLASH_MS * 1.5)));
+        bumpRed(0.55 * (1 - ageBig / (DAMAGE_FLASH_MS * 1.5)));
       }
       // Low-HP background tint so the player feels the danger
       // without needing to glance at the HUD bar.
       if (lastSelfMaxHp > 0) {
         const hpFrac = Math.max(0, lastSelfHp) / lastSelfMaxHp;
         if (hpFrac < 0.3) {
-          alpha = Math.max(alpha, 0.14 * (1 - hpFrac / 0.3));
+          bumpRed(0.14 * (1 - hpFrac / 0.3));
         }
       }
     }
@@ -655,7 +680,7 @@ export function runFpsV2Game(
     damageOverlay.clear();
     damageOverlay
       .rect(0, 0, canvasEl.width, canvasEl.height)
-      .fill({ color: 0x9b0000, alpha });
+      .fill({ color, alpha });
   }
 
   function updateSkybox(): void {
@@ -2274,6 +2299,7 @@ export function runFpsV2Game(
       characterId: string,
       hp: number,
       maxHp: number,
+      shield?: number,
     ) => {
       if (characterId !== init.self.characterId) return;
       const now = performance.now();
@@ -2285,6 +2311,15 @@ export function runFpsV2Game(
         if (maxHp > 0 && drop / maxHp > 0.15) {
           lastBigHpDropAt = now;
         }
+      }
+      // Shield drop → cyan flash (only when HP itself didn't also
+      // drop this tick; an overflow hit that chews shield AND hp
+      // reads as the red HP flash, the more urgent signal).
+      if (shield !== undefined) {
+        if (shield < lastSelfShield && hp >= prev) {
+          lastShieldDropAt = now;
+        }
+        lastSelfShield = shield;
       }
       lastSelfHp = hp;
       lastSelfMaxHp = maxHp;
