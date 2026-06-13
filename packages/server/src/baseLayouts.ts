@@ -10,7 +10,7 @@
 // centred on the Power Link world position.
 
 import { loadBaseLayouts } from '@dumrunner/shared/content/loader';
-import type { BaseLayoutDef } from '@dumrunner/shared';
+import { setBaseLayoutCatalog, type BaseLayoutDef } from '@dumrunner/shared';
 
 // The layout every world starts on and every pre-v5 save migrates to.
 // Must match an authored base_square_mk1.json on disk.
@@ -23,6 +23,9 @@ export async function initBaseLayouts(): Promise<void> {
   // Clear + repopulate so hot-reload reflects deletes, not just adds.
   for (const key of Object.keys(BASE_LAYOUTS)) delete BASE_LAYOUTS[key];
   for (const def of defs) BASE_LAYOUTS[def.id] = def;
+  // Mirror into the shared client-facing catalog so the welcome
+  // message ships the same data the Power Link's Base tab renders.
+  setBaseLayoutCatalog(defs);
 
   if (defs.length === 0) {
     console.warn(
@@ -40,4 +43,10 @@ export async function initBaseLayouts(): Promise<void> {
 
 export function getBaseLayout(id: string): BaseLayoutDef | null {
   return BASE_LAYOUTS[id] ?? null;
+}
+
+// Subset shipped to the client in the welcome message. Same shape as
+// the registry — clients call setBaseLayoutCatalog on receive.
+export function getBaseLayoutsForWire(): BaseLayoutDef[] {
+  return Object.values(BASE_LAYOUTS);
 }

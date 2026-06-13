@@ -104,6 +104,7 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
   interact: (w, c, m) => w.handleInteract(c, m.interactableId),
   craft_request: (w, c, m) => w.handleCraftRequest(c, m.recipeId),
   purchase_blueprint: (w, c, m) => w.handlePurchaseBlueprint(c, m.blueprintId),
+  set_base_layout: (w, c, m) => w.handleSetBaseLayout(c, m.layoutId),
   purchase_key: (w, c, m) => w.handlePurchaseKey(c, m.count),
   pickup_station_outputs: (w, c, m) =>
     w.handlePickupStationOutputs(c, m.kind),

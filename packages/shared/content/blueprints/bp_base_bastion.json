@@ -1,0 +1,8 @@
+{
+  "id": "bp_base_bastion",
+  "recipeId": "base_bastion_mk1",
+  "displayName": "Bastion Compound Schematic",
+  "description": "Unlocks the Bastion base layout: a larger pad with 8 turret mounts and more workstation/storage slots. Build it at the Power Link.",
+  "cost": 8,
+  "tier": "rare"
+}

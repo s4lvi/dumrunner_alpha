@@ -45,6 +45,8 @@ import {
   effectiveHazardDps,
   resistFor,
   setAttachmentRegistry,
+  setBaseLayoutCatalog,
+  listBaseLayouts,
   setBiomePalettes,
   setBlueprintCatalog,
   setEnemyVisuals,
@@ -54,7 +56,10 @@ import {
   setWeaponRegistry,
   SUIT_ATTACHMENT_SLOTS,
   SUIT_SLOT_KINDS,
+  type AmmoKind,
+  type BaseLayoutDef,
   type BuildingKind,
+  type MaterialKind,
   type PlaceableBuildingKind,
   type BuildingState,
   type CarriedPart,
@@ -308,6 +313,10 @@ export function Game({
   const [knownBlueprints, setKnownBlueprints] = useState<Set<string>>(
     () => new Set()
   );
+  // Active surface base-layout id (base-layouts P4). Shipped in welcome
+  // and scene_changed; drives the Power Link's Base tab (marks which
+  // layout is built). Defaults to the starter id.
+  const [baseLayoutId, setBaseLayoutId] = useState<string>('base_square_mk1');
   // Workstation kinds the player is standing within crafting range of.
   // Updated by pixi via onNearWorkstationsChanged.
   const [nearWorkstations, setNearWorkstations] = useState<Set<BuildingKind>>(
@@ -375,6 +384,10 @@ export function Game({
     setContainerModal(next);
   }
   const [showTradeModal, setShowTradeModal] = useState(false);
+  // Power Link modal (base-layouts P4) — [ Descend | Base | Uplink ].
+  // Opened by E near the Power Link instead of an immediate descend.
+  const [showPowerLink, setShowPowerLink] = useState(false);
+  const showPowerLinkRef = useRef(false);
   // Refs mirror the modal flags so the global keydown effect (set up with
   // [] deps) reads live values without needing exhaustive deps.
   const showTradeModalRef = useRef(false);
@@ -681,6 +694,9 @@ export function Game({
         // server. The editor at /editor/blueprints writes those
         // JSON files; client picks up changes on next welcome.
         setBlueprintCatalog(msg.blueprints);
+        // Base-layout catalog — drives the Power Link's Base tab
+        // (lists every layout with its cost / blueprint gate / caps).
+        if (msg.baseLayouts) setBaseLayoutCatalog(msg.baseLayouts);
         // Weapon registry — same flow. Populates WEAPON_STATS /
         // MELEE_STATS / WEAPON_FAMILY so effectiveWeaponStats and
         // tooltips see authored data without a redeploy.
@@ -722,6 +738,7 @@ export function Game({
         }
         setCurrentLayout(msg.layout);
         setKnownBlueprints(new Set(msg.knownBlueprints));
+        if (msg.baseLayoutId) setBaseLayoutId(msg.baseLayoutId);
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
         selfIdRef.current = msg.self.characterId;
         prevSelfHpRef.current = msg.self.hp;
@@ -988,6 +1005,7 @@ export function Game({
         setSceneId(msg.sceneId);
         setTransitionTick((t) => t + 1);
         setCurrentLayout(msg.layout);
+        if (msg.baseLayoutId) setBaseLayoutId(msg.baseLayoutId);
         setEquipment(msg.equipment);
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
         // Server uses scene_changed (not player_respawned) when a
@@ -1342,6 +1360,16 @@ export function Game({
     if (showTradeModal) audio.playSfx('ui-back');
   }, [showTradeModal]);
   useEffect(() => {
+    showPowerLinkRef.current = showPowerLink;
+    if (showPowerLink) audio.playSfx('ui-back');
+  }, [showPowerLink]);
+  // Close the Power Link modal when the player walks away from it.
+  useEffect(() => {
+    if (showPowerLink && nearInteractable?.id !== 'power_link') {
+      setShowPowerLink(false);
+    }
+  }, [showPowerLink, nearInteractable]);
+  useEffect(() => {
     stationModalKindRef.current = stationModalKind;
     if (stationModalKind !== null) audio.playSfx('ui-back');
   }, [stationModalKind]);
@@ -1493,6 +1521,13 @@ export function Game({
   const tryInteract = useCallback((): void => {
     const near = nearInteractableRef.current;
     if (near) {
+      // Power Link (base-layouts P4): open the tabbed
+      // [ Descend | Base | Uplink ] modal instead of descending
+      // immediately. The Descend tab sends the same interact message.
+      if (near.id === 'power_link') {
+        setShowPowerLink(true);
+        return;
+      }
       sendOnLiveWs({ type: 'interact', interactableId: near.id });
       return;
     }
@@ -1571,6 +1606,10 @@ export function Game({
           setShowTradeModal(false);
           return;
         }
+        if (showPowerLinkRef.current) {
+          setShowPowerLink(false);
+          return;
+        }
         if (stationModalKindRef.current !== null) {
           setStationModalKind(null);
           return;
@@ -1601,6 +1640,10 @@ export function Game({
         }
         if (showTradeModalRef.current) {
           setShowTradeModal(false);
+          return;
+        }
+        if (showPowerLinkRef.current) {
+          setShowPowerLink(false);
           return;
         }
         if (stationModalKindRef.current !== null) {
@@ -1904,6 +1947,29 @@ export function Game({
             knownBlueprints={knownBlueprints}
             nearUplink={nearWorkstations.has('artifact_uplink')}
             onClose={() => setShowTradeModal(false)}
+            onPurchase={(blueprintId) =>
+              sendOnLiveWs({ type: 'purchase_blueprint', blueprintId })
+            }
+            onPurchaseKey={(count) =>
+              sendOnLiveWs({ type: 'purchase_key', count })
+            }
+          />
+        )}
+
+        {showPowerLink && (
+          <PowerLinkModal
+            inventory={inventory}
+            knownBlueprints={knownBlueprints}
+            activeLayoutId={baseLayoutId}
+            nearUplink={nearWorkstations.has('artifact_uplink')}
+            onClose={() => setShowPowerLink(false)}
+            onDescend={() => {
+              setShowPowerLink(false);
+              sendOnLiveWs({ type: 'interact', interactableId: 'power_link' });
+            }}
+            onSetLayout={(layoutId) =>
+              sendOnLiveWs({ type: 'set_base_layout', layoutId })
+            }
             onPurchase={(blueprintId) =>
               sendOnLiveWs({ type: 'purchase_blueprint', blueprintId })
             }
@@ -3845,6 +3911,248 @@ function TradeModal({
         />
       )}
     </Modal>
+  );
+}
+
+// Power Link interaction (base-layouts P4). Tabbed:
+//   Descend — the existing dungeon portal (sends `interact`).
+//   Base    — list base-layout schematics; build/activate one.
+//   Uplink  — the existing blueprint/keys shop (reused verbatim).
+function PowerLinkModal({
+  inventory,
+  knownBlueprints,
+  activeLayoutId,
+  nearUplink,
+  onClose,
+  onDescend,
+  onSetLayout,
+  onPurchase,
+  onPurchaseKey,
+}: {
+  inventory: Inventory;
+  knownBlueprints: Set<string>;
+  activeLayoutId: string;
+  nearUplink: boolean;
+  onClose: () => void;
+  onDescend: () => void;
+  onSetLayout: (layoutId: string) => void;
+  onPurchase: (blueprintId: string) => void;
+  onPurchaseKey: (count: number) => void;
+}) {
+  const [tab, setTab] = useState<'descend' | 'base' | 'uplink'>('descend');
+  const artifacts = countMaterial(inventory, 'artifact');
+  const heldKeys = countMaterial(inventory, 'key');
+  return (
+    <Modal onClose={onClose} width="min(640px, 92vw)">
+      <ModalHeader
+        title="Power Link"
+        icon={<ItemIcon kind="placeable" subkind="power_link" />}
+        onClose={onClose}
+      />
+      <ModalTabs
+        tabs={[
+          { id: 'descend', label: 'Descend' },
+          { id: 'base', label: 'Base' },
+          { id: 'uplink', label: 'Uplink' },
+        ]}
+        active={tab}
+        onSelect={setTab}
+      />
+      {tab === 'descend' && (
+        <div className="px-5 py-6 flex flex-col items-center gap-4">
+          <button
+            onClick={onDescend}
+            className={BTN_PRIMARY + ' px-6 py-2.5 text-sm font-semibold'}
+          >
+            Descend
+          </button>
+        </div>
+      )}
+      {tab === 'base' && (
+        <BaseLayoutsList
+          inventory={inventory}
+          knownBlueprints={knownBlueprints}
+          activeLayoutId={activeLayoutId}
+          onSetLayout={onSetLayout}
+        />
+      )}
+      {tab === 'uplink' && (
+        <>
+          {!nearUplink && (
+            <div className="px-5 py-2 border-b border-[color:var(--panel-border)] text-amber-400/80 text-xs">
+              Move closer to the uplink to trade.
+            </div>
+          )}
+          <ModalTabs
+            tabs={[{ id: 'blueprints', label: 'Blueprints' }]}
+            active="blueprints"
+            onSelect={() => {}}
+            compact
+          />
+          <TradeBlueprintsList
+            knownBlueprints={knownBlueprints}
+            artifacts={artifacts}
+            nearUplink={nearUplink}
+            onPurchase={onPurchase}
+          />
+          <TradeKeysPanel
+            artifacts={artifacts}
+            heldKeys={heldKeys}
+            nearUplink={nearUplink}
+            onPurchaseKey={onPurchaseKey}
+          />
+        </>
+      )}
+    </Modal>
+  );
+}
+
+// Base tab body: lists every base-layout schematic. The starter is
+// always present + always owned; others appear once their blueprint
+// is known (bought at the Uplink). Each row shows the layout's caps +
+// mount count + build cost (have/need) and a Build/Activate button that
+// sends set_base_layout. Sell on capacity + mounts + size, never on
+// maze geometry (see docs/base-layouts-plan.md).
+function BaseLayoutsList({
+  inventory,
+  knownBlueprints,
+  activeLayoutId,
+  onSetLayout,
+}: {
+  inventory: Inventory;
+  knownBlueprints: Set<string>;
+  activeLayoutId: string;
+  onSetLayout: (layoutId: string) => void;
+}) {
+  const layouts = listBaseLayouts().slice().sort((a, b) => {
+    // Starter (no blueprint gate) first, then by mount count.
+    const ga = a.blueprintId === null ? 0 : 1;
+    const gb = b.blueprintId === null ? 0 : 1;
+    return ga - gb || a.turretMounts.length - b.turretMounts.length;
+  });
+  if (layouts.length === 0) {
+    return (
+      <div className="px-5 py-6 text-zinc-500 text-sm">
+        No base layouts available.
+      </div>
+    );
+  }
+  return (
+    <div className="px-4 pb-4 pt-2 flex flex-col gap-2">
+      {layouts.map((layout) => (
+        <BaseLayoutRow
+          key={layout.id}
+          layout={layout}
+          inventory={inventory}
+          knownBlueprints={knownBlueprints}
+          active={layout.id === activeLayoutId}
+          onSetLayout={onSetLayout}
+        />
+      ))}
+    </div>
+  );
+}
+
+function BaseLayoutRow({
+  layout,
+  inventory,
+  knownBlueprints,
+  active,
+  onSetLayout,
+}: {
+  layout: BaseLayoutDef;
+  inventory: Inventory;
+  knownBlueprints: Set<string>;
+  active: boolean;
+  onSetLayout: (layoutId: string) => void;
+}) {
+  // Owned = starter (null gate) or its blueprint is known.
+  const owned =
+    layout.blueprintId === null || knownBlueprints.has(layout.blueprintId);
+  // Cost rows (have/need). The authored cost is RecipeInput-shaped.
+  const costRows = (layout.cost as Array<{
+    kind: string;
+    materialId?: string;
+    ammoId?: string;
+    count: number;
+  }>).map((c) => {
+    const id = c.materialId ?? c.ammoId ?? c.kind;
+    const have =
+      c.kind === 'material' && c.materialId
+        ? countMaterial(inventory, c.materialId as MaterialKind)
+        : c.kind === 'ammo' && c.ammoId
+        ? countAmmo(inventory, c.ammoId as AmmoKind)
+        : 0;
+    const label =
+      c.kind === 'material' && c.materialId
+        ? MATERIALS[c.materialId as MaterialKind]?.name ?? c.materialId
+        : id;
+    return { label, have, need: c.count, ok: have >= c.count };
+  });
+  const canAfford = costRows.every((r) => r.ok);
+  const buildable = owned && !active && canAfford;
+  const reason = !owned
+    ? 'Buy this schematic at the Uplink'
+    : active
+    ? 'Active layout'
+    : !canAfford
+    ? 'Missing: ' +
+      costRows.filter((r) => !r.ok).map((r) => r.label).join(', ')
+    : undefined;
+  return (
+    <div
+      className={
+        'rounded border px-3 py-2.5 ' +
+        (active
+          ? 'border-emerald-600 bg-emerald-950/20'
+          : owned
+          ? 'border-[color:var(--panel-border)]'
+          : 'border-[color:var(--panel-border)] opacity-60')
+      }
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-sm flex items-center gap-2">
+            <span className="truncate">{layout.label}</span>
+            {active && (
+              <span className="shrink-0 text-[9px] uppercase tracking-wider px-1.5 py-px rounded-sm border border-emerald-500/60 text-emerald-300">
+                Active
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-zinc-400 mt-0.5">
+            {layout.capacity.workstations} workstations ·{' '}
+            {layout.capacity.storage} storage · {layout.turretMounts.length}{' '}
+            mounts
+          </div>
+        </div>
+        <button
+          onClick={() => buildable && onSetLayout(layout.id)}
+          disabled={!buildable}
+          title={reason}
+          className={
+            (active ? BTN_GHOST : BTN_PRIMARY) + ' px-3 py-1.5 text-xs shrink-0'
+          }
+        >
+          {active ? 'Active' : owned ? 'Activate' : 'Locked'}
+        </button>
+      </div>
+      {costRows.length > 0 && !active && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[11px]">
+          {costRows.map((r, i) => (
+            <span
+              key={i}
+              className={r.ok ? 'text-zinc-300' : 'text-red-400'}
+            >
+              {r.label}{' '}
+              <span className="tabular-nums">
+                {r.have}/{r.need}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

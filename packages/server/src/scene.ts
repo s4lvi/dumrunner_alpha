@@ -519,8 +519,14 @@ export class Scene {
   private readonly bindings: SceneBindings;
 
   // Static layout for dungeon floors (rooms + corridors + interactables).
-  // Surface scenes have layout = null and skip collision.
-  readonly layout: SceneLayout | null;
+  // Surface scenes have layout = null and skip collision. Backed by a
+  // private field so the base-layout swap (P4) can replace the surface
+  // clearing / caps / mounts in place via applyBaseLayoutSwap; the
+  // public accessor stays read-only to every other caller.
+  private _layout: SceneLayout | null;
+  get layout(): SceneLayout | null {
+    return this._layout;
+  }
 
   // Decoded tile grid bytes (one allocation per scene) — collision
   // and AI line-of-sight read from this when present so template-
@@ -569,7 +575,7 @@ export class Scene {
     this.id = id;
     this.kind = kind;
     this.bindings = bindings;
-    this.layout = layout;
+    this._layout = layout;
     this.layoutTiles = layout?.tileGrid ? decodeTileGrid(layout.tileGrid) : null;
     // Parse the 1-based floor index from `dungeon:N`; surface and
     // unknown scene ids fall through to 0 (no hazard).
@@ -4560,6 +4566,235 @@ export class Scene {
     this.buildings.clear();
     this.notifyBuildingsChanged();
     return n;
+  }
+
+  // ---------- base-layout swap (P4) ----------
+  //
+  // Replace the surface clearing / caps / mounts with `newLayout` and
+  // re-seat the existing buildings against the new footprint. The
+  // trickiest transaction in the game (assemble_weapon-class): it
+  // mutates building state + chest contents + the initiating player's
+  // inventory at once, and the refund targets interact (a chest being
+  // refunded is NOT a valid refund destination). Implemented as
+  // clone → validate → commit:
+  //   1. partition KEEP / REFUND against the NEW footprint + caps +
+  //      mounts WITHOUT mutating anything;
+  //   2. resolve refund destinations in fixed order (surviving chests
+  //      → initiator inventory → ground at the Power Link), computing
+  //      capacity as we go so nothing lands in a container that's
+  //      itself being removed;
+  //   3. only then COMMIT: swap the layout, rebuild collision, drop
+  //      removed buildings, re-seat surviving turrets onto new mounts
+  //      (id order preserved so power assignment stays stable),
+  //      transfer (not recreate) the Power Link to its new tile, and
+  //      flush the refund plan to the resolved destinations.
+  // Ground-drop is the guaranteed sink so the transaction always
+  // completes. The World owns cost consumption + baseLayoutId + the
+  // scene_changed rebroadcast; this method owns the building/inventory
+  // mutation. Returns the new Power Link tile so the World's layout
+  // (already built) stays in sync if it needs it. Surface-only.
+  applyBaseLayoutSwap(
+    newLayout: SceneLayout,
+    initiatorCharacterId: string,
+  ): boolean {
+    if (this.kind !== 'surface') return false;
+    const newTerrain = newLayout.terrain;
+    const clearing = newTerrain?.clearing;
+    if (!clearing) return false;
+    const tileSize = newLayout.tileSize ?? 32;
+    if (tileSize <= 0) return false;
+
+    const initiator = this.bindings.connection(initiatorCharacterId);
+    if (!initiator) return false;
+
+    const tileCenter = (t: number): number => (t + 0.5) * tileSize;
+    const onNewPad = (b: BuildingRuntime): boolean =>
+      insideClearingPad(newTerrain, tileCenter(b.tileX), tileCenter(b.tileY));
+
+    // Deterministic building order: lowest id first (turrets re-seat
+    // in id order so power assignment is stable; refunds are stable).
+    const idNum = (id: string): number => {
+      const n = Number.parseInt(id.replace(/^b/, ''), 10);
+      return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+    };
+    const ordered = [...this.buildings.values()].sort(
+      (a, b) => idNum(a.id) - idNum(b.id) || (a.id < b.id ? -1 : 1),
+    );
+
+    // ---- 1. PARTITION (no mutation) ----
+    const newMounts = newLayout.turretMounts ?? [];
+    const cap = newLayout.baseCapacity;
+    const keep: BuildingRuntime[] = []; // non-turret kept buildings
+    const refund: BuildingRuntime[] = []; // buildings to remove + refund
+    // Surviving (kept) chests — valid refund destinations. Collected
+    // during the partition so a refunded chest is never a destination.
+    const survivingChests: BuildingRuntime[] = [];
+    // Turret re-seat plan: surviving turrets in id order get the next
+    // free mount index; excess turrets (more turrets than mounts) are
+    // refunded. Off-pad turrets are refunded regardless.
+    const turretReseat: { building: BuildingRuntime; mountIndex: number }[] =
+      [];
+
+    let workstationCount = 0;
+    let storageCount = 0;
+    let nextMount = 0;
+    for (const b of ordered) {
+      // Power Link is always kept and transferred (handled at commit).
+      if (b.kind === 'power_link') {
+        keep.push(b);
+        continue;
+      }
+      const category = baseBuildCategory(b.kind);
+      if (category === 'turret') {
+        // Re-seat onto a new mount if the building was on a mount and a
+        // free mount remains; else refund. Off-pad is irrelevant for
+        // turrets — they bind to mounts, which are all on the new pad.
+        if (nextMount < newMounts.length) {
+          turretReseat.push({ building: b, mountIndex: nextMount });
+          nextMount++;
+        } else {
+          refund.push(b);
+        }
+        continue;
+      }
+      // Non-turret: must land on the new footprint AND fit the caps.
+      if (!onNewPad(b)) {
+        refund.push(b);
+        continue;
+      }
+      if (category === 'storage') {
+        if (cap && storageCount >= cap.storage) {
+          refund.push(b);
+          continue;
+        }
+        storageCount++;
+        keep.push(b);
+        survivingChests.push(b);
+        continue;
+      }
+      if (category === 'workstation') {
+        if (cap && workstationCount >= cap.workstations) {
+          refund.push(b);
+          continue;
+        }
+        workstationCount++;
+        keep.push(b);
+        continue;
+      }
+      // Uncapped (walls / doors) on the pad: kept.
+      keep.push(b);
+    }
+
+    // ---- 2. RESOLVE REFUND DESTINATIONS (no mutation yet) ----
+    // Each refunded building yields its placeable item + (for chests)
+    // its contents. Route every slot through the destination chain:
+    // surviving chest buffers → initiator inventory → ground. Capacity
+    // is computed against working COPIES so the plan is consistent
+    // before any live state changes; the commit replays it on the live
+    // buffers. Ground is the guaranteed sink (always succeeds).
+    const dropX = clearing.cx;
+    const dropY = clearing.cy;
+    type RefundPlan = {
+      // Live destination buffers, in priority order, plus a ground sink.
+      chestBuffers: import('@dumrunner/shared').InventorySlot[][];
+      // Slots to flush, each with its resolved destination index:
+      // 0..chestBuffers.length-1 = that chest; -1 = inventory; -2 = ground.
+      flush: { slot: import('@dumrunner/shared').InventorySlot; dest: number }[];
+    };
+    const chestBuffers = survivingChests.map((c) => c.output);
+    // Working copies for capacity accounting (deep-ish: clone slots).
+    const chestWork = chestBuffers.map((buf) => buf.map((s) => ({ ...s })));
+    const invWork = initiator.inventory.map((s) => ({ ...s }));
+    const plan: RefundPlan = { chestBuffers, flush: [] };
+    const routeSlot = (
+      slot: import('@dumrunner/shared').InventorySlot,
+    ): void => {
+      if (slot.kind === 'empty') return;
+      // Try each surviving chest in order.
+      for (let i = 0; i < chestWork.length; i++) {
+        const overflow = addInventorySlotToInventory(chestWork[i], { ...slot });
+        if (!overflow) {
+          plan.flush.push({ slot: { ...slot }, dest: i });
+          return;
+        }
+      }
+      // Then the initiator's inventory.
+      const invOverflow = addInventorySlotToInventory(invWork, { ...slot });
+      if (!invOverflow) {
+        plan.flush.push({ slot: { ...slot }, dest: -1 });
+        return;
+      }
+      // Ground — guaranteed sink.
+      plan.flush.push({ slot: { ...slot }, dest: -2 });
+    };
+    for (const b of refund) {
+      // The building itself refunds as one placeable of its kind.
+      routeSlot({ kind: 'placeable', buildingKind: b.kind, count: 1 });
+      // A refunded chest's contents are swept out too (the chest is
+      // being removed, so it can't hold its own loot).
+      if (b.kind === 'storage_chest') {
+        for (const s of b.output) routeSlot(s);
+      }
+    }
+
+    // ---- 3. COMMIT ----
+    // Swap the live layout (clearing / caps / mounts) first so the
+    // rebuilt collision + any later sampling reads the new footprint.
+    this._layout = newLayout;
+
+    // Transfer the Power Link: keep its building id / hp / powered
+    // status, only re-anchor its tile to the new layout's Power Link
+    // position (clearing centre). Do NOT destroy + recreate it.
+    const linkTileX = Math.floor(clearing.cx / tileSize);
+    const linkTileY = Math.floor(clearing.cy / tileSize);
+    for (const b of keep) {
+      if (b.kind === 'power_link') {
+        b.tileX = linkTileX;
+        b.tileY = linkTileY;
+      }
+    }
+
+    // Remove refunded buildings from the live map.
+    for (const b of refund) this.buildings.delete(b.id);
+
+    // Re-seat surviving turrets onto the new mounts (id order
+    // preserved via the partition's `ordered` walk).
+    for (const { building, mountIndex } of turretReseat) {
+      const m = newMounts[mountIndex];
+      building.mountIndex = mountIndex;
+      building.tileX = Math.floor(m.x / tileSize);
+      building.tileY = Math.floor(m.y / tileSize);
+    }
+
+    // Flush the refund plan onto the live destinations.
+    let groundDropped = false;
+    for (const { slot, dest } of plan.flush) {
+      if (dest >= 0) {
+        addInventorySlotToInventory(plan.chestBuffers[dest], slot);
+      } else if (dest === -1) {
+        addInventorySlotToInventory(initiator.inventory, slot);
+        initiator.inventoryDirty = true;
+      } else {
+        this.spawnDroppedSlot(dropX, dropY, slot, initiatorCharacterId);
+        groundDropped = true;
+      }
+    }
+    void groundDropped;
+
+    // Push the inventory change to the initiator if anything landed there.
+    if (initiator.inventoryDirty) {
+      this.bindings.send(initiator.characterId, {
+        type: 'inventory_changed',
+        inventory: initiator.inventory,
+      });
+    }
+
+    // Rebuild collision against the new clearing + buildings and notify
+    // the power system that the building set changed (turret re-seat,
+    // removals). The caller broadcasts scene_changed for the full
+    // geometry reload.
+    this.notifyBuildingsChanged();
+    return true;
   }
 
   // Spawn the portal cubes (stairs_down + extract_pad) at the

@@ -1618,3 +1618,25 @@ export const BaseLayoutDefSchema = z
   })
   .strict();
 export type BaseLayoutDef = z.infer<typeof BaseLayoutDefSchema>;
+
+// Client-side base-layout catalog (base-layouts P4). The server ships
+// the loaded BaseLayoutDefs in the welcome message so the Power Link's
+// Base tab can list every layout with its cost / blueprint gate / caps.
+// Mirrors BLUEPRINT_CATALOG: empty at module load, populated by
+// setBaseLayoutCatalog (server boot AND client welcome handler).
+export const BASE_LAYOUT_CATALOG: Record<string, BaseLayoutDef> = {};
+
+export function setBaseLayoutCatalog(
+  entries: ReadonlyArray<BaseLayoutDef>,
+): void {
+  for (const k of Object.keys(BASE_LAYOUT_CATALOG)) {
+    delete BASE_LAYOUT_CATALOG[k];
+  }
+  for (const e of entries) {
+    BASE_LAYOUT_CATALOG[e.id] = e;
+  }
+}
+
+export function listBaseLayouts(): BaseLayoutDef[] {
+  return Object.values(BASE_LAYOUT_CATALOG);
+}

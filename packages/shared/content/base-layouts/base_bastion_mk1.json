@@ -1,0 +1,23 @@
+{
+  "id": "base_bastion_mk1",
+  "label": "Bastion Compound Mk1",
+  "radius": 480,
+  "apron": 192,
+  "padZ": 0,
+  "turretMounts": [
+    { "dx": 360, "dy": 360 },
+    { "dx": -360, "dy": 360 },
+    { "dx": 360, "dy": -360 },
+    { "dx": -360, "dy": -360 },
+    { "dx": 384, "dy": 0 },
+    { "dx": -384, "dy": 0 },
+    { "dx": 0, "dy": 384 },
+    { "dx": 0, "dy": -384 }
+  ],
+  "capacity": { "workstations": 6, "storage": 4 },
+  "blueprintId": "bp_base_bastion",
+  "cost": [
+    { "kind": "material", "materialId": "alloy", "count": 12 },
+    { "kind": "material", "materialId": "circuit", "count": 6 }
+  ]
+}

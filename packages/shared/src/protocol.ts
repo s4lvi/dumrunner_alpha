@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 import type { BlueprintCatalogEntry, Recipe } from './crafting';
-import type { WeaponDef } from './content/types';
+import type { BaseLayoutDef, WeaponDef } from './content/types';
 import type { AttachmentDef, AttachmentStatRanges } from './inventory';
 import type { Equipment, Inventory, InventorySlot, MaterialKind } from './inventory';
 
@@ -713,6 +713,17 @@ export const PurchaseBlueprintMsgSchema = z.object({
   blueprintId: z.string().min(1).max(64),
 });
 
+// Player builds/activates a base layout at the Power Link's Base tab
+// (base-layouts P4). Server validates: layout exists; its blueprint is
+// known (or null = starter); player on the surface in range of the
+// Power Link; player holds the layout's component cost. Runs the
+// clone-validate-commit swap transaction (re-seat / refund buildings,
+// transfer the Power Link) and rebroadcasts the surface scene.
+export const SetBaseLayoutMsgSchema = z.object({
+  type: z.literal('set_base_layout'),
+  layoutId: z.string().min(1).max(64),
+});
+
 // Player buys keys at an artifact uplink. Flat per-key artifact cost
 // (KEY_ARTIFACT_COST in inventory.ts). Server validates proximity +
 // affordability; consumes artifacts and adds keys to inventory.
@@ -1056,6 +1067,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   InteractMsgSchema,
   CraftRequestMsgSchema,
   PurchaseBlueprintMsgSchema,
+  SetBaseLayoutMsgSchema,
   PurchaseKeyMsgSchema,
   PickupStationOutputsMsgSchema,
   OpenDoorMsgSchema,
@@ -1230,6 +1242,16 @@ export type ServerMessage =
           deaths: number;
         }>;
       } | null;
+      // Active surface base-layout id (base-layouts P4). Lets the
+      // Power Link's Base tab mark which layout is currently built.
+      // Optional so older clients tolerate it; absent ⇒ starter.
+      baseLayoutId?: string;
+      // Full base-layout catalog (base-layouts P4). Populated from
+      // packages/shared/content/base-layouts/*.json at server boot.
+      // Client calls setBaseLayoutCatalog on receive so the Power
+      // Link's Base tab lists every layout with its cost / blueprint
+      // gate / caps. Optional for wire-compat with older servers.
+      baseLayouts?: BaseLayoutDef[];
     }
   | {
       // Sent when the player transitions between scenes (stairs, extract pad,
@@ -1248,6 +1270,11 @@ export type ServerMessage =
       props: PropState[];
       equipment: Equipment;
       layout: SceneLayout | null;
+      // Active surface base-layout id (base-layouts P4). Sent so a
+      // base-layout swap (which fires scene_changed for the surface
+      // every player is standing on) carries the new active id to
+      // mark in the Base tab. Optional; absent ⇒ unchanged/starter.
+      baseLayoutId?: string;
     }
   | { type: 'player_joined'; player: Player }
   | { type: 'player_left'; characterId: string }
@@ -1490,4 +1517,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 49;
+export const PROTOCOL_VERSION = 50;

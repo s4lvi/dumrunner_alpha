@@ -68,6 +68,7 @@ import {
   TIER_UP_COSTS,
   weaponFamily as weaponFamilyOf,
   type AttachmentInstance,
+  type RecipeInput,
   type WeaponPieceKind,
   type WeaponPieces,
   type WeaponTier,
@@ -111,6 +112,7 @@ import { getBuildingVisualsForWire } from './buildingOverrides.js';
 import { getBlueprintsForWire } from './blueprints.js';
 import {
   getBaseLayout,
+  getBaseLayoutsForWire,
   STARTER_BASE_LAYOUT_ID,
 } from './baseLayouts.js';
 import { getWeaponsForWire } from './weapons.js';
@@ -177,7 +179,7 @@ function surfaceLayout(layout: BaseLayoutDef | null): SceneLayout {
         kind: 'stairs_down',
         x: linkX,
         y: linkY,
-        label: 'Descend — Power Link',
+        label: 'Power Link',
       },
     ],
     // Surface uses the same 32-px grid as dungeons so base-building snaps
@@ -1207,6 +1209,8 @@ export class World {
       buildingVisuals: getBuildingVisualsForWire(),
       mode: this.mode,
       deathmatchRound: this.dmRoundForWire(),
+      baseLayoutId: this.baseLayoutId,
+      baseLayouts: getBaseLayoutsForWire(),
     });
   }
 
@@ -1459,6 +1463,8 @@ export class World {
       buildingVisuals: getBuildingVisualsForWire(),
       mode: this.mode,
       deathmatchRound: this.dmRoundForWire(),
+      baseLayoutId: this.baseLayoutId,
+      baseLayouts: getBaseLayoutsForWire(),
     });
 
     scene.broadcast(
@@ -2456,6 +2462,107 @@ export class World {
       type: 'blueprints_changed',
       knownBlueprints: mergedBlueprints(conn),
     });
+  }
+
+  // ---------- base-layout swap (P4) ----------
+  //
+  // Build/activate a base layout at the Power Link's Base tab. Validates
+  // (layout exists; its blueprint is known OR null = starter; player on
+  // the surface near the Power Link; player holds the layout's component
+  // cost), then runs the clone-validate-commit swap on the surface scene
+  // and rebroadcasts scene_changed to every surface member so each
+  // client reloads the new geometry. Rejects silently on any failure
+  // (no state change) — the client gates the button by the same rules.
+  handleSetBaseLayout(characterId: string, layoutId: string): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+
+    // No-op if already on this layout.
+    if (this.baseLayoutId === layoutId) return;
+
+    const def = getBaseLayout(layoutId);
+    if (!def) return;
+
+    // Schematic gate: starter (null blueprintId) is always owned; any
+    // other layout requires its blueprint in the player's known set
+    // (per-cycle OR persistent — same merged check the uplink uses).
+    if (def.blueprintId !== null) {
+      const known = new Set(mergedBlueprints(conn));
+      if (!known.has(def.blueprintId)) return;
+    }
+
+    // Must be on the surface within Power Link range. The Power Link is
+    // the 'power_link' building; reuse the station-proximity pattern.
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (!surface) return;
+    if (
+      !surface.hasBuildingNearby(
+        conn.x,
+        conn.y,
+        'power_link',
+        COMBAT.CRAFT_STATION_RANGE_PX
+      )
+    ) {
+      return;
+    }
+
+    // Cost check (component law: dropped components, validated like a
+    // craft). The authored cost is RecipeInput-shaped; treat it as such.
+    const cost = def.cost as unknown as RecipeInput[];
+    for (const input of cost) {
+      if (!hasRecipeInput(conn.inventory, input)) return;
+    }
+
+    // Build the NEW surface layout from the target def the exact way
+    // boot/hydrate does (shape from the def, centred on the Power Link).
+    const newLayout = surfaceLayout(def);
+
+    // Run the swap transaction on the live surface scene. It mutates
+    // buildings + chest contents + the initiator's inventory atomically
+    // (ground-drop is the guaranteed sink, so it always completes).
+    const ok = surface.applyBaseLayoutSwap(newLayout, characterId);
+    if (!ok) {
+      this.sendDirect(conn.ws, { type: 'error', message: 'base_swap_failed' });
+      return;
+    }
+
+    // Commit world state: consume cost, flip the active layout id.
+    for (const input of cost) consumeRecipeInput(conn.inventory, input);
+    if (cost.length > 0) {
+      conn.inventoryDirty = true;
+      this.sendDirect(conn.ws, {
+        type: 'inventory_changed',
+        inventory: conn.inventory,
+      });
+    }
+    this.baseLayoutId = layoutId;
+
+    // Rebroadcast scene_changed for the surface to EVERY member so each
+    // client reloads the rebuilt geometry (this fires for the scene
+    // players are standing in — the client swapScene path re-resolves
+    // footing onto the new pad). Carry the new baseLayoutId so the Base
+    // tab marks the active layout.
+    const wireSnap = surface.toWireSnapshot();
+    for (const memberId of surface.members) {
+      const member = this.connections.get(memberId);
+      if (!member) continue;
+      this.sendTo(memberId, {
+        type: 'scene_changed',
+        sceneId: SURFACE_SCENE_ID,
+        self: this.toPlayerWire(member),
+        players: this.playersInScene(SURFACE_SCENE_ID, memberId),
+        enemies: wireSnap.enemies,
+        projectiles: wireSnap.projectiles,
+        loot: wireSnap.loot,
+        corpses: wireSnap.corpses,
+        buildings: wireSnap.buildings,
+        props: wireSnap.props,
+        equipment: member.equipment,
+        layout: surface.layout,
+        baseLayoutId: this.baseLayoutId,
+      });
+    }
   }
 
   // ---------- weapon bench actions ----------
