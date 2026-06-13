@@ -18,6 +18,7 @@ const noopBindings: SceneBindings = {
   onPlayerEquipmentChanged: () => {},
   applyPlayerEffect: () => {},
   pvpEnabled: () => false,
+  isPlaytest: () => false,
 };
 
 // For each locked-room door tile, sweep a player-radius circle

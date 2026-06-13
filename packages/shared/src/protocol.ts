@@ -434,10 +434,10 @@ export type SceneLayout = {
   // See @dumrunner/shared/terrain for the noise impl + tuning.
   terrain?: import('./terrain').TerrainConfig;
   // Base-layout free-build capacity (surface only). Caps how many
-  // workstation / storage buildings the player can place on the pad;
-  // turrets are mount-gated (not counted here), walls are uncapped.
+  // workstation / storage / wall buildings the player can place on the
+  // pad; turrets are mount-gated (not counted here), doors are uncapped.
   // Server enforces; client uses it for the build HUD used/max.
-  baseCapacity?: { workstations: number; storage: number };
+  baseCapacity?: { workstations: number; storage: number; walls: number };
   // Turret mount sockets (surface only, base layouts P3). WORLD
   // coordinates, computed in world.ts from the active layout's
   // `turretMounts` offsets + the clearing centre (Power Link pos).

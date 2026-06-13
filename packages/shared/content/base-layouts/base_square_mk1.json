@@ -10,7 +10,7 @@
     { "dx": 248, "dy": -248 },
     { "dx": -248, "dy": -248 }
   ],
-  "capacity": { "workstations": 4, "storage": 2 },
+  "capacity": { "workstations": 4, "storage": 2, "walls": 30 },
   "blueprintId": null,
   "cost": []
 }

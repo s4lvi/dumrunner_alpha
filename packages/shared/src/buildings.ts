@@ -274,3 +274,16 @@ const TURRET_KINDS = new Set<BuildingKind>([
 export function isTurretKind(kind: BuildingKind): boolean {
   return TURRET_KINDS.has(kind);
 }
+
+// Barrier-wall kinds — solid defensive walls capped per base layout
+// via baseCapacity.walls. Doors (wall_door / dungeon door) are passable
+// fixtures and are NOT part of the wall budget.
+const WALL_BARRIER_KINDS: ReadonlySet<BuildingKind> = new Set<BuildingKind>([
+  'wall',
+  'wall_mk2',
+  'wall_mk3',
+  'wall_mk4',
+]);
+export function isWallBarrierKind(kind: BuildingKind): boolean {
+  return WALL_BARRIER_KINDS.has(kind);
+}

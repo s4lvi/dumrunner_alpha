@@ -273,6 +273,7 @@ async function main() {
     onPlayerEquipmentChanged: () => {},
     applyPlayerEffect: () => {},
     pvpEnabled: () => false,
+    isPlaytest: () => false,
   };
   const scene = new Scene('surface', 'surface', bindings, surfaceLayout());
   scene.addMember('diag');

@@ -1582,8 +1582,18 @@ export function runFpsV2Game(
   // socket pads on the ground.
   function occupiedMountIndices(): Set<number> {
     const occ = new Set<number>();
+    const mountCount = layout?.turretMounts?.length ?? 0;
     for (const b of buildings.values()) {
-      if (b.mountIndex !== undefined && isTurretKind(b.kind)) {
+      // Guard the stored mountIndex against the live mount count —
+      // a legacy/corrupt save could carry an out-of-range index that
+      // would otherwise mark a non-existent mount occupied (and free
+      // mounts would never render). Mirrors the server's range checks.
+      if (
+        b.mountIndex !== undefined &&
+        b.mountIndex >= 0 &&
+        b.mountIndex < mountCount &&
+        isTurretKind(b.kind)
+      ) {
         occ.add(b.mountIndex);
       }
     }

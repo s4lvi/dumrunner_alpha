@@ -48,6 +48,7 @@ import {
   countAmmo,
   effectiveWeaponStats,
   isStationKind,
+  isWallBarrierKind,
   swapSlotsBetween,
   weaponFamily,
 } from '@dumrunner/shared';
@@ -129,15 +130,17 @@ const POLY_COLLISION = process.env.POLY_COLLISION !== '0';
 // Base-layout build category for capacity gating (P2) + mount gating
 // (P3). 'storage' = chests, 'workstation' = every other station
 // (benches/forge/mill/uplink — anything isStation that isn't a
-// chest). 'turret' = any TURRET_VARIANTS kind: NOT capacity-capped —
-// bounded by the layout's turret mounts instead (handleBuildRequest
-// snaps these to a free mount). Walls, doors, and the Power Link are
-// 'uncapped'. Drives the per-category caps + mount snap on the pad.
+// chest). 'wall' = the barrier-wall kinds (capped via baseCapacity.walls;
+// doors excluded). 'turret' = any TURRET_VARIANTS kind: NOT capacity-
+// capped — bounded by the layout's turret mounts instead
+// (handleBuildRequest snaps these to a free mount). Doors and the Power
+// Link are 'uncapped'. Drives the per-category caps + mount snap on the pad.
 function baseBuildCategory(
   kind: BuildingKind,
-): 'workstation' | 'storage' | 'turret' | 'uncapped' {
+): 'workstation' | 'storage' | 'wall' | 'turret' | 'uncapped' {
   if (kind === 'storage_chest') return 'storage';
   if (TURRET_VARIANTS[kind]) return 'turret';
+  if (isWallBarrierKind(kind)) return 'wall';
   return BUILDING_REGISTRY[kind]?.isStation ? 'workstation' : 'uncapped';
 }
 
@@ -182,6 +185,12 @@ export function applyInputToConnection(
   conn.inputCrouch = crouch;
   conn.inputAt = Date.now();
 }
+
+// Absolute world-z floor. If a player somehow integrates below this
+// (glitched outside all geometry, falling forever) we recover them to
+// their floor anchor rather than let z run to -Infinity. Cheap safety
+// net — never fires in normal play.
+const WORLD_FLOOR_MIN = -1000;
 
 // 16 unit-circle directions used by Scene.circlePassable. Mirrors the
 // shared geometry sampler so player and AI bounding-circle tests are
@@ -1074,13 +1083,28 @@ export class Scene {
       mountIndex = mount.index;
     } else {
       // Capacity caps (P2): the active layout limits how many
-      // workstation / storage buildings fit on the pad. Walls +
-      // power_link are uncapped. Counted by category against
+      // workstation / storage / wall buildings fit on the pad.
+      // Doors + power_link are uncapped. Counted by category against
       // layout.baseCapacity.
+      //
+      // Playtest worlds skip the caps entirely: ensurePlaytestStations
+      // pre-places a starter kit that can exceed a layout's caps, which
+      // would otherwise block the player's own builds. The off-pad and
+      // tile-occupancy checks stay active.
       const cap = this.layout?.baseCapacity;
-      if (cap && (category === 'workstation' || category === 'storage')) {
+      if (
+        cap &&
+        !this.bindings.isPlaytest() &&
+        (category === 'workstation' ||
+          category === 'storage' ||
+          category === 'wall')
+      ) {
         const limit =
-          category === 'workstation' ? cap.workstations : cap.storage;
+          category === 'workstation'
+            ? cap.workstations
+            : category === 'storage'
+              ? cap.storage
+              : cap.walls;
         let count = 0;
         for (const b of this.buildings.values()) {
           if (baseBuildCategory(b.kind) === category) count++;
@@ -1875,6 +1899,14 @@ export class Scene {
         // the xyMoved block below.)
         if (conn.z <= conn.floorZ && conn.vz <= 0) {
           conn.z = conn.floorZ;
+          conn.vz = 0;
+        }
+        // World-floor clamp (defensive): a player who glitched outside
+        // all geometry would fall forever. Recover them to their floor
+        // anchor (or 0 if that too is below the world floor) and kill
+        // the velocity. Never fires in normal play.
+        if (conn.z < WORLD_FLOOR_MIN) {
+          conn.z = conn.floorZ < WORLD_FLOOR_MIN ? 0 : conn.floorZ;
           conn.vz = 0;
         }
       }
@@ -5338,6 +5370,11 @@ export interface SceneBindings {
   // sandbox return false; deathmatch returns true. Gates the
   // PvP collision loop in projectile + melee processing.
   pvpEnabled(): boolean;
+  // True when this world is a playtest server. Playtest mode pre-places
+  // starter stations (ensurePlaytestStations) that can exceed a layout's
+  // caps; the build path skips the capacity caps when this is set so the
+  // pre-placed kit doesn't block the player's own builds.
+  isPlaytest(): boolean;
   // Optional: notified on every PvP kill so the World can update
   // round score, check win condition, broadcast scoreboard. Only
   // present on deathmatch worlds — live / sandbox don't wire it.

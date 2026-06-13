@@ -209,10 +209,13 @@ export const COMBAT = {
   // fuels surface defences. Power Link destruction sets capacity to 0.
   POWER_BASE_CAPACITY: 2,
   POWER_PER_DEPTH: 1,
-  // Per-consumer draw. Turrets draw 1 each; (Phase 4) each running craft
-  // job also draws 1. When draw > capacity, the lowest-priority
-  // consumers shut off (turrets sorted by id for determinism).
-  POWER_DRAW_TURRET: 1,
+  // Per-consumer draw. Turrets draw 0.5 each so a layout's turret
+  // mounts are actually powerable: starter (capacity 2 at depth 0)
+  // powers 4 turrets; bastion's 8 mounts need ~depth 2. (Phase 4)
+  // each running craft job draws 1. When draw > capacity, the
+  // lowest-priority consumers shut off (turrets sorted by id for
+  // determinism).
+  POWER_DRAW_TURRET: 0.5,
   POWER_DRAW_CRAFT_JOB: 1,
 } as const;
 

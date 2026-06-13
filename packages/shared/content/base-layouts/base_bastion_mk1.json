@@ -14,7 +14,7 @@
     { "dx": 0, "dy": 384 },
     { "dx": 0, "dy": -384 }
   ],
-  "capacity": { "workstations": 6, "storage": 4 },
+  "capacity": { "workstations": 6, "storage": 4, "walls": 60 },
   "blueprintId": "bp_base_bastion",
   "cost": [
     { "kind": "material", "materialId": "alloy", "count": 12 },

@@ -154,7 +154,7 @@ function main(): void {
     isPowerOnline: () => true, isPowered: () => false,
     onBuildingsChanged: () => {}, dropItemsOnDeath: () => false,
     onPlayerEquipmentChanged: () => {}, applyPlayerEffect: () => {},
-    pvpEnabled: () => false,
+    pvpEnabled: () => false, isPlaytest: () => false,
   };
   const scene = new Scene('surface', 'surface', bindings, surfaceLayout());
   scene.addMember('diag');
@@ -219,11 +219,30 @@ function main(): void {
   const stCount = countKind('storage_chest');
   console.log(`5b. storage cap: built=${stCount} (limit ${cap.storage})`);
   if (stCount !== cap.storage) fail++;
-  // 5c. Walls uncapped: 6 on distinct on-pad tiles all succeed.
-  for (let i = 0; i < 6; i++) build('wall', ct - 3 + i, -2);
-  const wallCount = countKind('wall');
-  console.log(`5c. walls uncapped: built=${wallCount} (expect 6)`);
-  if (wallCount !== 6) fail++;
+  // 5c. Walls capped: a wall cap is now enforced like workstation /
+  // storage. Use a dedicated scene with a small walls cap so cap+3
+  // placements fit within build reach; expect exactly `cap.walls`
+  // built. (The live starter cap is 30 — far more tiles than fit in
+  // one player's reach, so it gets the small-cap treatment here.)
+  const WALL_CAP = 3;
+  const wallLayout: SceneLayout = {
+    ...surfaceLayout(),
+    baseCapacity: { ...cap, walls: WALL_CAP },
+  };
+  const wScene = new Scene('surface', 'surface', bindings, wallLayout);
+  wScene.addMember('diag');
+  conn = makeConn(c.cx, c.cy, 0);
+  conn.inventory = emptyInventory();
+  addPlaceable(conn.inventory, 'wall', 20);
+  const wallBuild = (tx: number, ty: number) =>
+    (wScene as unknown as { handleBuildRequest: (id: string, k: string, tx: number, ty: number) => void }).handleBuildRequest('diag', 'wall', tx, ty);
+  for (let i = 0; i < WALL_CAP + 3; i++) wallBuild(ct - 3 + i, -2);
+  let wallCount = 0;
+  for (const b of (wScene as unknown as { buildings: Map<string, { kind: string }> }).buildings.values()) {
+    if (b.kind === 'wall') wallCount++;
+  }
+  console.log(`5c. walls capped: built=${wallCount} (limit ${WALL_CAP})`);
+  if (wallCount !== WALL_CAP) fail++;
   // 5d. Off-pad rejected: a wall far outside the pad, but in range of
   // a player standing at the pad edge.
   const edgeTile = Math.round((c.cx + c.radius + c.apron + 64) / 32);

@@ -18,6 +18,7 @@ import {
   effectiveWeaponStats,
   HOTBAR_SIZE,
   isTurretKind,
+  isWallBarrierKind,
   partDisplayName,
   TIER_COLORS_HEX,
   WEAPON_FAMILY,
@@ -2944,9 +2945,10 @@ function PowerHud({
 // before clicking. No clearing/baseCapacity → nothing renders.
 function baseBuildCategoryClient(
   kind: BuildingKind,
-): 'workstation' | 'storage' | 'turret' | 'uncapped' {
+): 'workstation' | 'storage' | 'wall' | 'turret' | 'uncapped' {
   if (kind === 'storage_chest') return 'storage';
   if (isTurretKind(kind)) return 'turret';
+  if (isWallBarrierKind(kind)) return 'wall';
   return BUILDING_REGISTRY[kind]?.isStation ? 'workstation' : 'uncapped';
 }
 
@@ -2971,17 +2973,35 @@ function BaseCapacityHud({
     if (!mounts || mounts.length === 0) return null;
     max = mounts.length;
     for (const b of buildings.values()) {
-      if (b.mountIndex !== undefined && isTurretKind(b.kind)) used++;
+      // Range-guard the stored mountIndex (legacy/corrupt save defence).
+      if (
+        b.mountIndex !== undefined &&
+        b.mountIndex >= 0 &&
+        b.mountIndex < mounts.length &&
+        isTurretKind(b.kind)
+      ) {
+        used++;
+      }
     }
     label = 'Turret Mounts';
   } else {
     const cap = layout?.baseCapacity;
     if (!cap) return null;
-    max = category === 'storage' ? cap.storage : cap.workstations;
+    max =
+      category === 'storage'
+        ? cap.storage
+        : category === 'wall'
+          ? cap.walls
+          : cap.workstations;
     for (const b of buildings.values()) {
       if (baseBuildCategoryClient(b.kind) === category) used++;
     }
-    label = category === 'storage' ? 'Storage' : 'Workstations';
+    label =
+      category === 'storage'
+        ? 'Storage'
+        : category === 'wall'
+          ? 'Walls'
+          : 'Workstations';
   }
   const full = used >= max;
   return (
@@ -4122,8 +4142,8 @@ function BaseLayoutRow({
           </div>
           <div className="text-[11px] text-zinc-400 mt-0.5">
             {layout.capacity.workstations} workstations ·{' '}
-            {layout.capacity.storage} storage · {layout.turretMounts.length}{' '}
-            mounts
+            {layout.capacity.storage} storage · {layout.capacity.walls} walls ·{' '}
+            {layout.turretMounts.length} mounts
           </div>
         </div>
         <button

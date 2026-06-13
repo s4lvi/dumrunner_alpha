@@ -102,7 +102,7 @@ const bindings: SceneBindings = {
   isPowerOnline: () => true, isPowered: () => false,
   onBuildingsChanged: () => {}, dropItemsOnDeath: () => false,
   onPlayerEquipmentChanged: () => {}, applyPlayerEffect: () => {},
-  pvpEnabled: () => false,
+  pvpEnabled: () => false, isPlaytest: () => false,
 };
 
 type B = { id: string; kind: string; tileX: number; tileY: number; mountIndex?: number; hp: number; output: InventorySlot[] };

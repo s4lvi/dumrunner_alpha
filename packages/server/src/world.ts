@@ -530,6 +530,7 @@ export class World {
       pvpEnabled: () =>
         this.mode === 'deathmatch' &&
         this.deathmatchRound?.intermissionEndsAt == null,
+      isPlaytest: () => this.worldConfig.isPlaytest,
       onDeathmatchKill: (killerId) => {
         // Round-state side effects only — the kill-feed line lands
         // in chat via `notifyPlayerDied`, which the existing
@@ -2518,17 +2519,36 @@ export class World {
     // boot/hydrate does (shape from the def, centred on the Power Link).
     const newLayout = surfaceLayout(def);
 
+    // Consume the cost BEFORE running the swap so the transaction
+    // boundary is clean: the swap reads the post-cost inventory. Snapshot
+    // the pre-consume inventory so a swap failure can refund exactly
+    // (a deep clone restores part instances / rolled affixes that a
+    // forward "add" couldn't reconstruct).
+    const preConsumeInventory =
+      cost.length > 0
+        ? (JSON.parse(JSON.stringify(conn.inventory)) as typeof conn.inventory)
+        : null;
+    for (const input of cost) consumeRecipeInput(conn.inventory, input);
+
     // Run the swap transaction on the live surface scene. It mutates
     // buildings + chest contents + the initiator's inventory atomically
     // (ground-drop is the guaranteed sink, so it always completes).
     const ok = surface.applyBaseLayoutSwap(newLayout, characterId);
     if (!ok) {
+      // Refund the cost we just consumed and report the failure.
+      if (preConsumeInventory) {
+        conn.inventory = preConsumeInventory;
+        conn.inventoryDirty = true;
+        this.sendDirect(conn.ws, {
+          type: 'inventory_changed',
+          inventory: conn.inventory,
+        });
+      }
       this.sendDirect(conn.ws, { type: 'error', message: 'base_swap_failed' });
       return;
     }
 
-    // Commit world state: consume cost, flip the active layout id.
-    for (const input of cost) consumeRecipeInput(conn.inventory, input);
+    // Commit world state: flip the active layout id (cost already paid).
     if (cost.length > 0) {
       conn.inventoryDirty = true;
       this.sendDirect(conn.ws, {

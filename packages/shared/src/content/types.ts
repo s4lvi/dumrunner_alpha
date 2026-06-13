@@ -1580,11 +1580,13 @@ export const TurretMountSchema = z
 export type TurretMount = z.infer<typeof TurretMountSchema>;
 
 // Free-build caps per category (P2). Turrets are NOT counted here —
-// they're bounded by turretMounts. Walls are uncapped.
+// they're bounded by turretMounts. Walls ARE capped (the barrier-wall
+// kinds; doors excluded).
 const baseLayoutCapacitySchema = z
   .object({
     workstations: z.number().int().nonnegative(),
     storage: z.number().int().nonnegative(),
+    walls: z.number().int().nonnegative(),
   })
   .strict();
 
