@@ -79,8 +79,77 @@ type BaseLayoutDef = {
 The platform footprint = the layout scene's walkable sectors. The
 surrounding terrain hills stay non-buildable (build validation
 already requires a walkable tile once the surface carries an
-`authoredSectorMap` — see slice 2). The Power Link is part of every
+`authoredSectorMap` — see P2). The Power Link is part of every
 base layout scene (authored at a fixed anchor) so it survives swaps.
+
+## Key decision: a leveled clearing, not a platform floating over noise
+
+The base layout is the first scene that is **both** authored
+geometry **and** terrain noise — every existing scene is one or the
+other (dungeons/arenas: authored, no terrain; surface today: terrain,
+no authored map). Naively flooring the platform at z=0 over ±64wu
+noise breaks three systems that assume a flat surrounding floor:
+
+- **`floorAt` resolution** ("highest containing platform vs terrain
+  baseline") lets a terrain peak poke *above* the platform floor —
+  the hill erupts through the base; in a trough the platform floats
+  64wu over the ground.
+- **Riser/hole geometry** (the pit/platform machinery hardened over
+  the last sessions) assumes the surrounding floor is 0. Perimeter
+  risers computed against varying terrain render wrong at the seam.
+- **Ledge-fall** (shipped 2026-06-13): the platform edge is now a
+  real cliff — walk off into a trough = a 64wu fall; over a peak the
+  ground is *above* the floor you're standing on.
+
+**Resolution: the base sits in a leveled clearing.** Within the
+layout footprint the surface floor is flat authored geometry at a
+fixed pad height; the terrain noise is **suppressed to that height
+inside the footprint** and only rises into hills *outside* it. The
+hills are backdrop you can walk to the edge of and fall off (into the
+desolate overworld), not ground the platform floats over. Concretely:
+
+- The surface's effective floor = `max(platformFloor, terrainHeight)`
+  becomes, inside the footprint, just `platformFloor` — terrain is
+  clamped under the pad so it can never poke through. Implement as a
+  footprint mask consulted by the surface `floorAt`/terrain sampler
+  (terrain returns `min(terrainHeight, padZ)` — or simply `padZ` —
+  for any xy inside the layout's walkable footprint).
+- The pad sits slightly **above** the terrain's local mean so the
+  clearing reads as a raised platform with a consistent drop-off at
+  every edge, rather than a floor that's sometimes below grade.
+- Outside the footprint, terrain is untouched (the existing hilly
+  desolate overworld), non-buildable, and below the pad — so every
+  platform edge is a uniform fall, which the ledge-fall code already
+  handles cleanly.
+
+This collapses the hybrid back toward the proven "authored, flat"
+case for everything inside the base, and confines the terrain
+interaction to a single well-defined seam (the pad edge), which is
+exactly the ledge-fall case that's already tested.
+
+## P0 spike (do this before P1)
+
+The seam above is the highest-risk unknown; prototype it on a
+throwaway branch before committing to the feature:
+
+1. Give the live surface an `authoredSectorMap`: one flat square pad
+   (~20×20 tiles) at a fixed `padZ` over the existing terrain, via a
+   hand-built `SectorScene` (no new types yet).
+2. Apply the footprint terrain clamp in the surface `floorAt`/terrain
+   sampler so noise can't pierce the pad.
+3. Walk it in-game: stand/build on the pad (flat, stable), walk to
+   every edge (uniform fall onto the hills via ledge-fall), confirm
+   the renderer draws the pad edge + drop-off without z-fighting or
+   missing risers, confirm spawn lands on the pad.
+4. Extend `diag-jump.ts` with a pad-edge walk-off case (real fall,
+   lands on terrain, never below floor) and a "terrain never exceeds
+   padZ inside footprint" assertion.
+
+Exit criteria: flat stable pad, clean uniform edges, spawn on pad,
+diag green. If the seam fights the renderer/collision harder than
+expected, that's caught here for the cost of a spike instead of
+mid-feature. Promote the spike's working pad into the starter layout
+content in P1.
 
 ## Turret mounts (the one real gameplay change — confirm)
 
@@ -94,13 +163,22 @@ socket on the layout:
   The turret snaps to the mount centre rather than the cursor tile.
 - New runtime linkage: `BuildingRuntime.mountIndex?: number` on the
   turret (which mount it occupies); a per-scene `Set<number>` of
-  occupied mounts derived on hydrate. No child/parent cascade needed
-  — mounts are layout geometry, not buildings, so they can't be
-  destroyed independently; a destroyed turret frees its mount.
+  occupied mounts **rebuilt deterministically on hydrate** by
+  scanning turret `mountIndex` fields (not stored separately, so it
+  can't drift). On a collision (two turrets claiming one mount from
+  a corrupt save) keep the lowest-id turret and refund the other.
+  No child/parent cascade — mounts are layout geometry, not
+  buildings; a destroyed turret frees its mount.
+- **Power-id churn caveat:** turrets are powered in id order
+  (lowest-id first, `world.ts:3284-3323`). Refunding + rebuilding
+  turrets on a layout swap mints new ids, so *which* turrets are
+  powered can shift after a swap. Acceptable, but the swap should
+  re-seat surviving turrets onto mounts **preserving id order** so
+  the power assignment stays stable where it can.
 - Client: render empty mounts as a visible socket pad; build mode
   for a turret highlights free mounts instead of the floor ring.
 
-This is the item to confirm before slice 4 — it changes how players
+This is the item to confirm before P3 — it changes how players
 place turrets. Walls, stations, and chests stay free-placed on the
 platform (capacity-capped for stations/storage; walls uncapped).
 
@@ -133,11 +211,40 @@ Base tab:
   Power Link itself is part of the layout and is re-anchored, never
   refunded.
 
+**Swap is the trickiest transaction in the game — treat it like
+`assemble_weapon`.** It mutates building state + storage contents +
+player inventory at once, and the refund targets interact (a chest
+being refunded can't also be a refund destination). Implement as
+clone → validate → commit:
+1. Compute the keep/refund partition against the new footprint +
+   caps without mutating anything.
+2. Resolve refund destinations in a fixed order — chests that
+   *survive* the swap first, then inventory, then ground at the
+   Power Link — computing capacity as you go so nothing is refunded
+   into a container that's itself being removed or already full.
+3. Only if the whole partition + refund plan is consistent, commit:
+   swap geometry, apply building changes, write inventories/chests,
+   broadcast. A failure at any step aborts with the live base
+   unchanged (return a `base_swap_failed` error).
+Ground-drop is the guaranteed sink so the transaction can always
+complete; dropped items land on the new pad near the Power Link
+(inside the footprint, never on the terrain you can't reach).
+
 Server: new `set_base_layout { layoutId }` client message
 (PROTOCOL_VERSION bump). Handler validates schematic known +
-on-surface + cost, swaps the surface scene's `authoredSectorMap`/
-layout, runs re-seating, rebroadcasts `scene_changed` for the
-surface so clients reload geometry.
+on-surface + cost, runs the clone-validate-commit swap above, and
+rebroadcasts `scene_changed` for the surface.
+
+**Mid-session reload caveat:** `scene_changed` normally fires on a
+transition into a fresh scene; a layout swap fires it for the
+surface **while every surface player is standing on it**. The
+client `swapScene` path resets vertical state, fog, and camera —
+exercise this with 2+ players on the surface: each must reload the
+new geometry, re-resolve their footing onto the new pad (not fall
+through), and keep seeing each other. The active `baseLayoutId` is
+server-authoritative and shipped in `welcome`, so a player who
+joins after a swap and one who was present converge on the same
+layout.
 
 ## Persistence + protocol
 
@@ -152,6 +259,33 @@ surface so clients reload geometry.
   carries the layout's `turretMounts` + `capacity` so the client can
   render sockets and gate the build HUD.
 - PROTOCOL_VERSION bump covers the new client message + wire fields.
+
+### Migration of existing worlds (decide up front)
+
+Flipping the surface from a free-build terrain plane to a
+constrained pad is **not backward-compatible with saved bases**:
+buildings persisted at old terrain-plane tile coords won't land on
+the new (smaller) footprint, the hardcoded Power Link at tile
+`(6,-1)` won't match the layout's Power Link anchor, and a world
+with more stations than the starter cap loads over-capacity. Three
+problems, one decision:
+
+- **Chosen policy (alpha): reset surface bases on the schema-5
+  boundary.** On hydrating a pre-v5 (`schema < 5`) snapshot, drop
+  all *surface* buildings, assign the starter layout, and let the
+  Power Link come from its anchor. Dungeon scenes, characters,
+  inventories, and blueprints are untouched — only the surface base
+  resets. This is acceptable because the game is pre-public with
+  effectively no live bases, and it dodges all three problems for
+  zero migration code. Surface contents are not precious (no extract
+  loot lives there; corpses are wiped at perihelion anyway).
+- Log the reset (`[world] surface base reset for base-layouts
+  migration`) so it's observable if it ever fires on a world that
+  mattered.
+- The alternative (snap old coords onto the pad, relocate the Power
+  Link, grandfather over-cap) is real migration code for users who
+  don't exist yet — explicitly **not** doing it. Revisit only if a
+  world worth preserving exists before this ships.
 
 ## Authoring
 
@@ -172,19 +306,31 @@ surface so clients reload geometry.
 
 ## Phased plan
 
+**P0 — Terrain-seam spike (throwaway, gate on it).** See the P0
+section above. Flat pad + footprint terrain clamp + leveled-clearing
+edges on the live surface, walked in-game, diag-jump pad-edge case
+green. Exit criteria there. **Do not start P1 until the seam is
+proven** — if it fights collision/renderer, the whole feature's risk
+lives here and it's cheapest to learn now. The working pad becomes
+P1's starter content.
+
 **P1 — Layout data + starter, surface built from it (no behavior change yet).**
 - `BaseLayoutDef` type + Zod (`shared/src/content/types.ts`), loader
   + registry (`server/src`), `initBaseLayouts()` at boot.
-- Author the starter square scene + `base_square_mk1.json`.
+- Author the starter square scene (the proven P0 pad) +
+  `base_square_mk1.json`.
 - `World` builds the surface from the active layout's rasterized
-  scene instead of the bare `surfaceLayout()` terrain plane; Power
-  Link comes from the layout anchor (drop `ensurePowerLink`'s
-  hardcoded tile). `baseLayoutId` persisted (schema 5), defaults to
-  starter. Terrain hills remain outside the platform.
-- Verify: surface loads, Power Link present, descend still works,
-  existing buildings still place on the platform, snapshot
-  round-trips (extend diag-dungeon-persistence with a surface-layout
-  case). Typechecks green.
+  scene instead of the bare `surfaceLayout()` terrain plane, with the
+  footprint terrain clamp from P0; Power Link comes from the layout
+  anchor (drop `ensurePowerLink`'s hardcoded tile). `baseLayoutId`
+  persisted (schema 5), defaults to starter.
+- **Migration:** pre-v5 snapshot → reset surface buildings + starter
+  layout (see Migration above), logged.
+- Verify: surface loads as a flat clearing, Power Link present,
+  descend still works, building places on the pad, spawn on the pad,
+  pre-v5 snapshot resets cleanly, snapshot round-trips (extend
+  diag-dungeon-persistence with a surface-layout + migration case).
+  Typechecks green.
 
 **P2 — Build constrained to the platform + capacity slots.**
 - `handleBuildRequest` rejects off-platform (non-walkable) tiles
