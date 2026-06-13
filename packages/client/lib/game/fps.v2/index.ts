@@ -213,11 +213,37 @@ export function runFpsV2Game(
   // scene transitions, teleports, respawns. 96 world units
   // ≈ 3 tiles.
   const SELF_SNAP_PX = 96;
-  // Exponential decay time constant. tau=50ms catches ~28% of
-  // the remaining delta in one 16ms frame; ~3 frames to fully
-  // converge without overshoot.
-  const SELF_SMOOTH_TAU_MS = 50;
   let lastSelfTickAt = 0;
+
+  // Client-side movement prediction. The local player moves
+  // IMMEDIATELY from input each frame (no waiting for the server
+  // round-trip), then the lagged authoritative position gently
+  // corrects drift. Without this, on a real-latency server the
+  // camera only advances when a ~20Hz snapshot arrives — it lerps
+  // to each one and stalls between, reading as smooth "hops". Must
+  // mirror the server's movement math (scene.ts simulatePlayer
+  // movement): normalized move vector, base 140 px/s, sprint 1.6×,
+  // crouch 0.55×. Duplicated like the jump constants because COMBAT
+  // is server-only.
+  const PRED_MOVE_SPEED = 140;
+  const PRED_SPRINT_MULT = 1.6;
+  const PRED_CROUCH_MULT = 0.55;
+  // Predicted local move vector (normalized) + sprint/crouch state,
+  // set each frame in tickInput, consumed in tickSelfSmoothing.
+  let predMoveX = 0;
+  let predMoveY = 0;
+  let predSprint = false;
+  let predCrouch = false;
+  // Reconciliation: correct the predicted position toward the
+  // authoritative one. Gentle when the error is small (preserve the
+  // RTT-sized lead that makes input feel instant), firm when it's
+  // large (snap back from a wall the client predicted through, since
+  // the client doesn't run collision). Below CORRECT_SOFT_PX use the
+  // slow tau, at/above CORRECT_HARD_PX use the fast tau, lerp between.
+  const CORRECT_TAU_SLOW_MS = 220;
+  const CORRECT_TAU_FAST_MS = 35;
+  const CORRECT_SOFT_PX = 6;
+  const CORRECT_HARD_PX = 40;
 
   // Smoothed absolute feet z the camera reads. While grounded it
   // targets the local floor mirror under the lerped XY (snap up
@@ -1808,12 +1834,36 @@ export function runFpsV2Game(
     const now = performance.now();
     const dt = lastSelfTickAt === 0 ? 16 : now - lastSelfTickAt;
     lastSelfTickAt = now;
+    // 1. Predict: advance the local player from this frame's input
+    // immediately, mirroring the server's movement math. This is what
+    // makes input feel instant instead of waiting a round-trip.
+    const dts = dt / 1000;
+    if (predMoveX !== 0 || predMoveY !== 0) {
+      let speed = PRED_MOVE_SPEED;
+      if (predSprint) speed *= PRED_SPRINT_MULT;
+      if (predCrouch) speed *= PRED_CROUCH_MULT;
+      selfX += predMoveX * speed * dts;
+      selfY += predMoveY * speed * dts;
+    }
+    // 2. Reconcile toward the authoritative position. Error-scaled:
+    // gentle when small (keep the prediction lead so motion stays
+    // smooth and responsive), firm when large (pull back from a wall
+    // the client predicted through — it doesn't run collision).
     const dx = targetSelfX - selfX;
     const dy = targetSelfY - selfY;
-    const txy = Math.min(1, 1 - Math.exp(-dt / SELF_SMOOTH_TAU_MS));
-    if (dx !== 0 || dy !== 0) {
-      selfX += dx * txy;
-      selfY += dy * txy;
+    const err = Math.hypot(dx, dy);
+    if (err > 0) {
+      const tFrac =
+        err <= CORRECT_SOFT_PX
+          ? 0
+          : err >= CORRECT_HARD_PX
+            ? 1
+            : (err - CORRECT_SOFT_PX) / (CORRECT_HARD_PX - CORRECT_SOFT_PX);
+      const tau =
+        CORRECT_TAU_SLOW_MS + (CORRECT_TAU_FAST_MS - CORRECT_TAU_SLOW_MS) * tFrac;
+      const k = Math.min(1, 1 - Math.exp(-dt / tau));
+      selfX += dx * k;
+      selfY += dy * k;
       if (Math.abs(targetSelfX - selfX) < 0.05) selfX = targetSelfX;
       if (Math.abs(targetSelfY - selfY) < 0.05) selfY = targetSelfY;
     }
@@ -2068,6 +2118,14 @@ export function runFpsV2Game(
     const crouch =
       keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
     init.sendInput(mx, my, sprint, jumpEdge, crouch);
+
+    // Stash the normalized move vector for client-side prediction in
+    // tickSelfSmoothing (server normalizes diagonals, so we do too).
+    const mlen = Math.hypot(mx, my);
+    predMoveX = mlen > 0 ? mx / mlen : 0;
+    predMoveY = mlen > 0 ? my / mlen : 0;
+    predSprint = sprint && mlen > 0;
+    predCrouch = crouch;
 
     // Hold-to-fire while a weapon is equipped. Server gates by
     // per-weapon fire interval + mag + reload, so we can pulse
