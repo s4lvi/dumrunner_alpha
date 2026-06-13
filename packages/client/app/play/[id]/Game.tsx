@@ -17,6 +17,7 @@ import {
   CONSUMABLES,
   effectiveWeaponStats,
   HOTBAR_SIZE,
+  isTurretKind,
   partDisplayName,
   TIER_COLORS_HEX,
   WEAPON_FAMILY,
@@ -2870,14 +2871,16 @@ function PowerHud({
 
 // Base-capacity readout shown while build mode is active. Mirrors the
 // server's baseBuildCategory: storage_chest counts against storage,
-// any other station building against workstations, everything else
-// (walls/turrets/power_link) is uncapped and shows nothing. Goes red
-// when the category is full so the player sees the server's silent
-// cap before clicking. No clearing/baseCapacity → nothing renders.
+// any other station building against workstations, turrets are
+// mount-gated (used/max = bound turrets / mount count), everything
+// else (walls/power_link) is uncapped and shows nothing. Goes red when
+// the category is full so the player sees the server's silent cap
+// before clicking. No clearing/baseCapacity → nothing renders.
 function baseBuildCategoryClient(
   kind: BuildingKind,
-): 'workstation' | 'storage' | 'uncapped' {
+): 'workstation' | 'storage' | 'turret' | 'uncapped' {
   if (kind === 'storage_chest') return 'storage';
+  if (isTurretKind(kind)) return 'turret';
   return BUILDING_REGISTRY[kind]?.isStation ? 'workstation' : 'uncapped';
 }
 
@@ -2890,17 +2893,31 @@ function BaseCapacityHud({
   buildings: Map<string, BuildingState>;
   layout: import('@dumrunner/shared').SceneLayout | null;
 }) {
-  const cap = layout?.baseCapacity;
-  if (!cap) return null;
   const category = baseBuildCategoryClient(kind);
   if (category === 'uncapped') return null;
-  const max = category === 'storage' ? cap.storage : cap.workstations;
+
+  let max: number;
   let used = 0;
-  for (const b of buildings.values()) {
-    if (baseBuildCategoryClient(b.kind) === category) used++;
+  let label: string;
+  if (category === 'turret') {
+    // Turrets are bounded by the layout's mount count, not baseCapacity.
+    const mounts = layout?.turretMounts;
+    if (!mounts || mounts.length === 0) return null;
+    max = mounts.length;
+    for (const b of buildings.values()) {
+      if (b.mountIndex !== undefined && isTurretKind(b.kind)) used++;
+    }
+    label = 'Turret Mounts';
+  } else {
+    const cap = layout?.baseCapacity;
+    if (!cap) return null;
+    max = category === 'storage' ? cap.storage : cap.workstations;
+    for (const b of buildings.values()) {
+      if (baseBuildCategoryClient(b.kind) === category) used++;
+    }
+    label = category === 'storage' ? 'Storage' : 'Workstations';
   }
   const full = used >= max;
-  const label = category === 'storage' ? 'Storage' : 'Workstations';
   return (
     <div className="absolute top-20 left-1/2 -translate-x-1/2 pointer-events-none select-none">
       <div

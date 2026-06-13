@@ -42,6 +42,7 @@ import {
 } from './texturedSectorShader';
 import { createTexturedBuildingLayer } from './texturedBuildingLayer';
 import { createGhostCubeLayer } from './ghostCube';
+import { createMountSocketsLayer } from './mountSockets';
 import { createFogUniforms } from './fogUniforms';
 import { createLightingUniforms } from './lightingUniforms';
 import {
@@ -71,6 +72,7 @@ import {
   decodeTileGrid,
   enemyVisualFor,
   insideClearingPad,
+  isTurretKind,
   isWalkableTileId,
   materialTint,
   propVisualFor,
@@ -525,6 +527,12 @@ export function runFpsV2Game(
   // mode is on. Driven entirely by setBuildMode + per-frame
   // updateGhostCube().
   const ghostCube = createGhostCubeLayer(fog);
+  // Turret mount socket pads (base layouts P3) — flat markers on free
+  // mounts so the player sees where turrets snap. Rebuilt per frame
+  // from layout.turretMounts minus the mounts a turret already
+  // occupies. Always rendered on the surface (not gated on build
+  // mode), so the sockets read as fixed base infrastructure.
+  const mountSockets = createMountSocketsLayer(fog);
   // Sprite layer (P3.1): one big mesh, rebuilt each frame from
   // the current entity state, sharing the sector shader for
   // now (untextured colored quads). Added to the stage AFTER
@@ -1057,6 +1065,7 @@ export function runFpsV2Game(
       app.stage.addChild(texturedBuildings.container);
       app.stage.addChild(sprites.mesh);
       app.stage.addChild(texturedSprites.container);
+      app.stage.addChild(mountSockets.mesh);
       app.stage.addChild(ghostCube.mesh);
       app.stage.addChild(damageOverlay);
       app.stage.addChild(crosshair);
@@ -1111,7 +1120,10 @@ export function runFpsV2Game(
     texturedBuildings.flushCamera();
     ghostCube.cameraMatrix.set(camera.viewProj.m);
     ghostCube.flushCamera();
+    mountSockets.cameraMatrix.set(camera.viewProj.m);
+    mountSockets.flushCamera();
     updateGhostCube();
+    updateMountSockets();
     // Fog params: camera world position + biome-derived colour.
     // Single write reaches every shader via the shared
     // fogUniforms group. Fog colour is the biome's wall hue
@@ -1564,6 +1576,77 @@ export function runFpsV2Game(
     ghostCube.setVisible(true);
   }
 
+  // Turret mount sockets (base layouts P3). The set of occupied mount
+  // indices is DERIVED from current buildings (turrets carrying a
+  // mountIndex), mirroring the server. Free mounts render as flat
+  // socket pads on the ground.
+  function occupiedMountIndices(): Set<number> {
+    const occ = new Set<number>();
+    for (const b of buildings.values()) {
+      if (b.mountIndex !== undefined && isTurretKind(b.kind)) {
+        occ.add(b.mountIndex);
+      }
+    }
+    return occ;
+  }
+
+  // The nearest FREE mount to a world point within `maxDist`, or null.
+  // Mirrors the server's nearestFreeMount so the turret build ghost
+  // snaps where the build will actually land.
+  function nearestFreeMount(
+    px: number,
+    py: number,
+    maxDist: number,
+  ): { index: number; x: number; y: number } | null {
+    const mounts = layout?.turretMounts;
+    if (!mounts || mounts.length === 0) return null;
+    const occ = occupiedMountIndices();
+    let best: { index: number; x: number; y: number } | null = null;
+    let bestD2 = maxDist * maxDist;
+    for (let i = 0; i < mounts.length; i++) {
+      if (occ.has(i)) continue;
+      const m = mounts[i];
+      const dx = m.x - px;
+      const dy = m.y - py;
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        best = { index: i, x: m.x, y: m.y };
+      }
+    }
+    return best;
+  }
+
+  // Rebuild the free-mount socket pads each frame from the layout's
+  // mounts minus the occupied set. Surface only (mounts undefined
+  // elsewhere ⇒ layer hidden).
+  function updateMountSockets(): void {
+    if (!layout) {
+      mountSockets.setVisible(false);
+      return;
+    }
+    const mounts = layout.turretMounts;
+    if (!mounts || mounts.length === 0) {
+      mountSockets.setVisible(false);
+      return;
+    }
+    const occ = occupiedMountIndices();
+    const free: { x: number; y: number; z: number }[] = [];
+    for (let i = 0; i < mounts.length; i++) {
+      if (occ.has(i)) continue;
+      const m = mounts[i];
+      free.push({ x: m.x, y: m.y, z: entityFloorAt(m.x, m.y) });
+    }
+    if (free.length === 0) {
+      mountSockets.setVisible(false);
+      return;
+    }
+    const tileSize = layout.tileSize > 0 ? layout.tileSize : 32;
+    mountSockets.setMounts(free, tileSize * 0.5);
+    mountSockets.setColor(0x55ddff, 0.28);
+    mountSockets.setVisible(true);
+  }
+
   // Project the camera's look direction onto the floor plane to
   // pick the target tile for build mode. If pitch is shallow
   // (looking near horizontal or up), fall back to a tile ~2 in
@@ -1598,6 +1681,26 @@ export function runFpsV2Game(
       tx = Math.floor((selfX + fx * fallbackDist) / tileSize);
       ty = Math.floor((selfY + fy * fallbackDist) / tileSize);
     }
+    // Turret mounts (base layouts P3): turrets aren't free-placed —
+    // the ghost snaps to the nearest FREE mount near the cursor tile
+    // (server uses ~1.5 tiles of slack). No free mount near the
+    // cursor ⇒ no valid target (ghost hidden). inRange additionally
+    // requires the mount itself to sit within the player's build
+    // radius, mirroring the server's range gate.
+    if (buildMode !== null && isTurretKind(buildMode)) {
+      const cursorCx = tx * tileSize + tileSize * 0.5;
+      const cursorCy = ty * tileSize + tileSize * 0.5;
+      const mount = nearestFreeMount(cursorCx, cursorCy, tileSize * 1.5);
+      if (!mount) return null;
+      const mtx = Math.floor(mount.x / tileSize);
+      const mty = Math.floor(mount.y / tileSize);
+      const mdx = mount.x - selfX;
+      const mdy = mount.y - selfY;
+      const reach = (3 + buildRadiusBonusTiles + 0.5) * tileSize;
+      const inRange = mdx * mdx + mdy * mdy <= reach * reach;
+      return { tileX: mtx, tileY: mty, inRange };
+    }
+
     const selfTx = Math.floor(selfX / tileSize);
     const selfTy = Math.floor(selfY / tileSize);
     const dx = tx - selfTx;
@@ -2613,6 +2716,7 @@ export function runFpsV2Game(
       texturedSprites.destroy();
       texturedBuildings.destroy();
       ghostCube.destroy();
+      mountSockets.destroy();
       detachInputListeners();
       if (canvasEl && document.pointerLockElement === canvasEl) {
         document.exitPointerLock?.();

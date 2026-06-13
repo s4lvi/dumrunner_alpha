@@ -235,8 +235,99 @@ function main(): void {
   console.log(`5d. off-pad build: placed=${offPadBuilt} (expect false)`);
   if (offPadBuilt) fail++;
 
+  // 6. Turret mounts (P3) — end-to-end through handleBuildRequest on a
+  // fresh surface scene whose layout carries the starter's turret
+  // mounts (world coords = LINK_X + dx, 0 + dy). Player stands at the
+  // pad centre with plenty of turret stock; build range (radius 3 +
+  // 0.5 ≈ 112wu) reaches all four corner mounts at ±248 from a player
+  // near each mount, so we move the player to each mount in turn.
+  const mScene = new Scene('surface', 'surface', bindings, surfaceLayoutWithMounts());
+  mScene.addMember('diag');
+  conn = makeConn(c.cx, c.cy, 0);
+  conn.inventory = emptyInventory();
+  addPlaceable(conn.inventory, 'turret', 20);
+  const mounts = STARTER!.turretMounts.map((m) => ({ x: LINK_X + m.dx, y: 0 + m.dy }));
+  const turretBuildings = () =>
+    [...(mScene as unknown as { buildings: Map<string, { kind: string; mountIndex?: number; id: string }> }).buildings.values()].filter(
+      (b) => b.kind === 'turret',
+    );
+  const buildTurretNear = (wx: number, wy: number) => {
+    // Stand the player ~2 tiles toward pad centre from the mount: in
+    // build range (radius 3+0.5 ≈ 112wu) but NOT overlapping the mount
+    // tile (the player-overlap check would otherwise reject placing a
+    // building under the player's feet). Target the mount's own tile.
+    const towardCentre = (a: number, centre: number) => a + Math.sign(centre - a) * 64;
+    conn.x = towardCentre(wx, c.cx);
+    conn.y = towardCentre(wy, c.cy);
+    (mScene as unknown as { handleBuildRequest: (id: string, k: string, tx: number, ty: number) => void }).handleBuildRequest(
+      'diag',
+      'turret',
+      Math.floor(wx / 32),
+      Math.floor(wy / 32),
+    );
+  };
+
+  // 6a. One turret near each mount binds to a distinct mountIndex.
+  for (const m of mounts) buildTurretNear(m.x, m.y);
+  const placed = turretBuildings();
+  const boundIdx = new Set(placed.map((b) => b.mountIndex));
+  const allBound = placed.every((b) => b.mountIndex !== undefined);
+  console.log(
+    `6a. turret per mount: placed=${placed.length} distinctMounts=${boundIdx.size} allBound=${allBound}` +
+      ` (expect ${mounts.length}, ${mounts.length}, true)`,
+  );
+  if (placed.length !== mounts.length || boundIdx.size !== mounts.length || !allBound) fail++;
+
+  // 6b. Count bounded by mounts: re-attempting on every mount (all now
+  // occupied) adds nothing.
+  for (const m of mounts) buildTurretNear(m.x, m.y);
+  const afterRetry = turretBuildings().length;
+  console.log(`6b. count bounded by mounts: total=${afterRetry} (expect ${mounts.length})`);
+  if (afterRetry !== mounts.length) fail++;
+
+  // 6c. Off-mount turret rejected: target a tile far from any mount
+  // but on the pad and in range (player at pad centre, no mount near).
+  conn.x = c.cx;
+  conn.y = c.cy;
+  const beforeOff = turretBuildings().length;
+  (mScene as unknown as { handleBuildRequest: (id: string, k: string, tx: number, ty: number) => void }).handleBuildRequest(
+    'diag',
+    'turret',
+    Math.round(c.cx / 32),
+    0,
+  );
+  const offMountBuilt = turretBuildings().length > beforeOff;
+  console.log(`6c. off-mount turret: placed=${offMountBuilt} (expect false)`);
+  if (offMountBuilt) fail++;
+
+  // 6d. Destroying a turret frees its mount: remove the turret on
+  // mount 0, then a new turret near mount 0 takes the freed slot.
+  const onMount0 = turretBuildings().find((b) => b.mountIndex === 0);
+  if (onMount0) {
+    (mScene as unknown as { buildings: Map<string, unknown> }).buildings.delete(onMount0.id);
+  }
+  const freedCount = turretBuildings().length;
+  buildTurretNear(mounts[0].x, mounts[0].y);
+  const refilled = turretBuildings();
+  const refilledMount0 = refilled.some((b) => b.mountIndex === 0);
+  console.log(
+    `6d. destroy frees mount: afterDestroy=${freedCount} afterRebuild=${refilled.length} mount0Filled=${refilledMount0}` +
+      ` (expect ${mounts.length - 1}, ${mounts.length}, true)`,
+  );
+  if (freedCount !== mounts.length - 1 || refilled.length !== mounts.length || !refilledMount0) fail++;
+
   console.log(fail === 0 ? 'PASS' : `FAIL (${fail})`);
   if (fail !== 0) process.exit(1);
+}
+
+// Surface layout variant carrying the starter's turret mounts in WORLD
+// coords (same construction as world.ts surfaceLayout): offsets + the
+// clearing centre (LINK_X, 0). Used by the P3 turret-mount section.
+function surfaceLayoutWithMounts(): SceneLayout {
+  return {
+    ...surfaceLayout(),
+    turretMounts: STARTER!.turretMounts.map((m) => ({ x: LINK_X + m.dx, y: 0 + m.dy })),
+  };
 }
 
 main();

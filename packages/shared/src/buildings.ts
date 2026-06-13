@@ -258,3 +258,19 @@ export function buildingHordePriority(kind: BuildingKind): number {
 export function buildingParallelSlots(kind: BuildingKind): number {
   return BUILDING_REGISTRY[kind]?.parallelSlots ?? 0;
 }
+
+// Turret kinds — the mount-gated placeables (base layouts P3). The
+// server's TURRET_VARIANTS table is the gameplay source of truth for
+// stats; this is the wire/UI predicate both halves share so the
+// client can route the build ghost to a turret mount and the server
+// can classify a build request without importing combat tables. Keep
+// in sync with TURRET_VARIANTS (server/src/combat.ts).
+const TURRET_KINDS = new Set<BuildingKind>([
+  'turret',
+  'turret_smg',
+  'turret_shotgun',
+  'turret_rifle',
+]);
+export function isTurretKind(kind: BuildingKind): boolean {
+  return TURRET_KINDS.has(kind);
+}

@@ -126,15 +126,18 @@ import {
 // the swap is bedding in.
 const POLY_COLLISION = process.env.POLY_COLLISION !== '0';
 
-// Base-layout build category for capacity gating (P2). 'storage' =
-// chests, 'workstation' = every other station (benches/forge/mill/
-// uplink — anything isStation that isn't a chest). Turrets, walls,
-// doors, and the Power Link are uncapped here (turrets get
-// mount-gated in P3). Drives the per-category caps on the pad.
+// Base-layout build category for capacity gating (P2) + mount gating
+// (P3). 'storage' = chests, 'workstation' = every other station
+// (benches/forge/mill/uplink — anything isStation that isn't a
+// chest). 'turret' = any TURRET_VARIANTS kind: NOT capacity-capped —
+// bounded by the layout's turret mounts instead (handleBuildRequest
+// snaps these to a free mount). Walls, doors, and the Power Link are
+// 'uncapped'. Drives the per-category caps + mount snap on the pad.
 function baseBuildCategory(
   kind: BuildingKind,
-): 'workstation' | 'storage' | 'uncapped' {
+): 'workstation' | 'storage' | 'turret' | 'uncapped' {
   if (kind === 'storage_chest') return 'storage';
+  if (TURRET_VARIANTS[kind]) return 'turret';
   return BUILDING_REGISTRY[kind]?.isStation ? 'workstation' : 'uncapped';
 }
 
@@ -343,6 +346,10 @@ type CorpseRuntime = CorpseState;
 type BuildingRuntime = BuildingState & {
   // Turrets only — last shot fired (epoch ms). Walls leave it 0.
   lastFireAt: number;
+  // Turret mount binding (base layouts P3). Mirrors BuildingState.
+  // mountIndex; the occupied-mount set is derived by scanning this
+  // across all turret buildings. Undefined on non-turrets.
+  mountIndex?: number;
   // Workstation output buffer. Each station holds STATION_OUTPUT_SLOTS
   // worth of completed craft outputs until the player picks them up.
   // Non-station buildings keep this as an empty array.
@@ -811,6 +818,21 @@ export class Scene {
       }
     }
 
+    // Turret mounts (P3): the occupied-mount set is derived, never
+    // stored, so a corrupt save with two turrets on one mount must be
+    // resolved deterministically on hydrate. Keep the lowest-id
+    // turret; drop the rest (mounts are layout geometry, not
+    // buildings — a dropped turret just frees its slot). Logged so the
+    // resolution is observable; refund-to-inventory is a P4 concern
+    // (swap re-seating), not a hydrate one.
+    const { collisions } = this.deriveOccupiedMounts();
+    for (const loserId of collisions) {
+      console.warn(
+        `[scene ${this.id}] turret mount collision on hydrate — dropping duplicate turret ${loserId}`,
+      );
+      this.buildings.delete(loserId);
+    }
+
     // Continue id sequences past the snapshot so we never collide with old ids.
     if (snap.nextEnemyId > this.nextEnemyId) this.nextEnemyId = snap.nextEnemyId;
     if (snap.nextProjectileId > this.nextProjectileId) {
@@ -903,6 +925,74 @@ export class Scene {
     }
   }
 
+  // ---------- turret mounts (base layouts P3) ----------
+
+  // The occupied-mount set is DERIVED, never stored: scan the current
+  // buildings for turrets carrying a mountIndex. On a collision (two
+  // turrets claiming the same mount — only possible from a corrupt
+  // save / hydrate) keep the lowest building-id and report the loser
+  // so the caller can drop/refund it. Returns the surviving
+  // mountIndex→buildingId map plus the list of evicted building ids.
+  private deriveOccupiedMounts(): {
+    occupied: Map<number, string>;
+    collisions: string[];
+  } {
+    const occupied = new Map<number, string>();
+    const collisions: string[] = [];
+    // Sort building ids so "lowest id wins" is deterministic. Ids are
+    // minted as `b<seq>`; compare by the numeric suffix when both
+    // parse, else lexicographically.
+    const idNum = (id: string): number => {
+      const n = Number.parseInt(id.replace(/^b/, ''), 10);
+      return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+    };
+    const turrets = [...this.buildings.values()].filter(
+      (b) => b.mountIndex !== undefined && TURRET_VARIANTS[b.kind],
+    );
+    turrets.sort((a, b) => idNum(a.id) - idNum(b.id) || (a.id < b.id ? -1 : 1));
+    for (const b of turrets) {
+      const mi = b.mountIndex as number;
+      const existing = occupied.get(mi);
+      if (existing === undefined) {
+        occupied.set(mi, b.id);
+      } else {
+        // Lower id already holds the mount (turrets sorted ascending),
+        // so this one loses.
+        collisions.push(b.id);
+      }
+    }
+    return { occupied, collisions };
+  }
+
+  // Find the nearest FREE turret mount to a world point, within
+  // `maxDist`. Returns the mount index + its world position, or null
+  // when no free mount is in range (no mount nearby, or the nearest
+  // is already occupied). `occupied` is the derived set so callers can
+  // reuse one scan.
+  private nearestFreeMount(
+    px: number,
+    py: number,
+    maxDist: number,
+    occupied: Map<number, string>,
+  ): { index: number; x: number; y: number } | null {
+    const mounts = this.layout?.turretMounts;
+    if (!mounts || mounts.length === 0) return null;
+    let best: { index: number; x: number; y: number } | null = null;
+    let bestD2 = maxDist * maxDist;
+    for (let i = 0; i < mounts.length; i++) {
+      if (occupied.has(i)) continue;
+      const m = mounts[i];
+      const dx = m.x - px;
+      const dy = m.y - py;
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        best = { index: i, x: m.x, y: m.y };
+      }
+    }
+    return best;
+  }
+
   // ---------- input handlers (called from World) ----------
 
   handleBuildRequest(
@@ -946,14 +1036,43 @@ export class Scene {
       return;
     }
 
-    // Capacity caps (P2): the active layout limits how many
-    // workstation / storage buildings fit on the pad. Turrets are
-    // mount-gated (P3) not capacity-gated; walls + power_link are
-    // uncapped. Counted by category against layout.baseCapacity.
-    const cap = this.layout?.baseCapacity;
-    if (cap) {
-      const category = baseBuildCategory(kind);
-      if (category === 'workstation' || category === 'storage') {
+    const category = baseBuildCategory(kind);
+
+    // Placement tile — turrets re-snap this to a mount below; every
+    // other kind builds on the cursor tile. mountIndex stays undefined
+    // for non-turrets.
+    let placeTileX = tileX;
+    let placeTileY = tileY;
+    let mountIndex: number | undefined;
+
+    if (category === 'turret') {
+      // Turret mounts (P3): turrets are NOT free-placed. The cursor
+      // tile must be near a FREE mount; the turret snaps to that mount
+      // and records its index. Reject silently when no free mount is
+      // in range (none nearby, or the nearest is taken) — the client
+      // highlights free mounts so a legal target is obvious. The
+      // capacity caps + tile-occupancy check below are skipped for
+      // turrets: the mount set bounds the turret count, and a mount's
+      // tile is its own (never shared with a free-placed building).
+      const MOUNT_SNAP_DIST = tileSize * 1.5; // ~1 tile of slack
+      const { occupied } = this.deriveOccupiedMounts();
+      const mount = this.nearestFreeMount(
+        tileCenterX,
+        tileCenterY,
+        MOUNT_SNAP_DIST,
+        occupied,
+      );
+      if (!mount) return;
+      placeTileX = Math.floor(mount.x / tileSize);
+      placeTileY = Math.floor(mount.y / tileSize);
+      mountIndex = mount.index;
+    } else {
+      // Capacity caps (P2): the active layout limits how many
+      // workstation / storage buildings fit on the pad. Walls +
+      // power_link are uncapped. Counted by category against
+      // layout.baseCapacity.
+      const cap = this.layout?.baseCapacity;
+      if (cap && (category === 'workstation' || category === 'storage')) {
         const limit =
           category === 'workstation' ? cap.workstations : cap.storage;
         let count = 0;
@@ -962,16 +1081,16 @@ export class Scene {
         }
         if (count >= limit) return;
       }
-    }
 
-    // Tile already occupied?
-    for (const b of this.buildings.values()) {
-      if (b.tileX === tileX && b.tileY === tileY) return;
+      // Tile already occupied?
+      for (const b of this.buildings.values()) {
+        if (b.tileX === placeTileX && b.tileY === placeTileY) return;
+      }
     }
 
     // Players currently overlapping the tile? Avoid trapping someone.
-    const tilePxX = tileX * tileSize;
-    const tilePxY = tileY * tileSize;
+    const tilePxX = placeTileX * tileSize;
+    const tilePxY = placeTileY * tileSize;
     const tilePxR = tilePxX + tileSize;
     const tilePxB = tilePxY + tileSize;
     const r = COMBAT.PLAYER_RADIUS;
@@ -1006,8 +1125,8 @@ export class Scene {
     const building: BuildingRuntime = {
       id,
       kind,
-      tileX,
-      tileY,
+      tileX: placeTileX,
+      tileY: placeTileY,
       width: 1,
       height: 1,
       hp: maxHp,
@@ -1021,6 +1140,9 @@ export class Scene {
       // Player-built doors start CLOSED so a freshly-placed door
       // gates the doorway by default — opening is an explicit act.
       open: kind === 'wall_door' ? false : undefined,
+      // Turret mount binding (P3) — set only for turrets snapped to a
+      // mount above; undefined for every other kind.
+      mountIndex,
     };
     this.buildings.set(id, building);
     this.broadcast({ type: 'building_placed', building: toBuildingState(building) });
@@ -5138,6 +5260,7 @@ function toBuildingState(b: BuildingRuntime): BuildingState {
     ...(includeOutput ? { output: b.output.map((s) => ({ ...s })) } : {}),
     ...(b.benchTier !== undefined ? { benchTier: b.benchTier } : {}),
     ...(b.open !== undefined ? { open: b.open } : {}),
+    ...(b.mountIndex !== undefined ? { mountIndex: b.mountIndex } : {}),
   };
 }
 

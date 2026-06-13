@@ -223,6 +223,14 @@ function surfaceLayout(layout: BaseLayoutDef | null): SceneLayout {
     // Free-build caps from the active layout (P2). Fallback shape
     // carries no caps → undefined leaves building unconstrained.
     baseCapacity: layout?.capacity,
+    // Turret mount sockets (P3). The layout stores offsets from the
+    // clearing centre; resolve them to WORLD positions here (centre =
+    // Power Link pos, the same (linkX, 0) the clearing centres on).
+    // Fallback shape has no mounts → undefined leaves turrets
+    // unplaceable (no free turret placement once mounts exist).
+    turretMounts: layout
+      ? layout.turretMounts.map((m) => ({ x: linkX + m.dx, y: 0 + m.dy }))
+      : undefined,
   };
 }
 

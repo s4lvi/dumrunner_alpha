@@ -274,6 +274,13 @@ export type BuildingState = {
   // doors don't block movement / projectiles. Undefined on every
   // other building kind.
   open?: boolean;
+  // Turret mount binding (base layouts P3). Only meaningful on turret
+  // kinds: the index into the active layout's `turretMounts` this
+  // turret occupies. The occupied-mount set is DERIVED from these
+  // fields (never stored separately) so it can't drift; a destroyed
+  // turret frees its mount automatically. Undefined on non-turrets
+  // and on legacy turrets placed before mounts existed.
+  mountIndex?: number;
 };
 
 // Per-cell tile id grid for the dungeon floor. Phase 1 of E3.4.
@@ -431,6 +438,14 @@ export type SceneLayout = {
   // turrets are mount-gated (not counted here), walls are uncapped.
   // Server enforces; client uses it for the build HUD used/max.
   baseCapacity?: { workstations: number; storage: number };
+  // Turret mount sockets (surface only, base layouts P3). WORLD
+  // coordinates, computed in world.ts from the active layout's
+  // `turretMounts` offsets + the clearing centre (Power Link pos).
+  // Index into this array is the `mountIndex` a placed turret records.
+  // Client renders free mounts as socket pads and snaps the turret
+  // build ghost to the nearest free mount. Optional — absent ⇒ no
+  // mounts (non-surface scenes, layouts with no mounts).
+  turretMounts?: { x: number; y: number }[];
   // Hand-authored sector geometry. When present, server polygon
   // collision + v2 renderer both consume this DIRECTLY instead
   // of rebuilding a SectorMap from `tileGrid`. Authored scenes
@@ -1475,4 +1490,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 48;
+export const PROTOCOL_VERSION = 49;
