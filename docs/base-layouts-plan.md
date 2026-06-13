@@ -82,74 +82,113 @@ already requires a walkable tile once the surface carries an
 `authoredSectorMap` — see P2). The Power Link is part of every
 base layout scene (authored at a fixed anchor) so it survives swaps.
 
-## Key decision: a leveled clearing, not a platform floating over noise
+## Key decision: an at-grade leveled clearing (raised pad deferred)
 
 The base layout is the first scene that is **both** authored
 geometry **and** terrain noise — every existing scene is one or the
 other (dungeons/arenas: authored, no terrain; surface today: terrain,
 no authored map). Naively flooring the platform at z=0 over ±64wu
-noise breaks three systems that assume a flat surrounding floor:
+noise breaks three things that assume a flat surrounding floor:
+`floorAt` resolution (a terrain peak pokes *through* the pad; a
+trough leaves it floating), riser/hole geometry (perimeter risers
+computed against varying terrain), and ledge-fall (the edge becomes a
+±64wu cliff).
 
-- **`floorAt` resolution** ("highest containing platform vs terrain
-  baseline") lets a terrain peak poke *above* the platform floor —
-  the hill erupts through the base; in a trough the platform floats
-  64wu over the ground.
-- **Riser/hole geometry** (the pit/platform machinery hardened over
-  the last sessions) assumes the surrounding floor is 0. Perimeter
-  risers computed against varying terrain render wrong at the seam.
-- **Ledge-fall** (shipped 2026-06-13): the platform edge is now a
-  real cliff — walk off into a trough = a 64wu fall; over a peak the
-  ground is *above* the floor you're standing on.
+A raised pad with clean drop-off edges *looks* right, but it is
+**incompatible with the horde**, which is the entire reason the
+surface base exists. Enemy collision (`circlePassable` →
+`pointPassable`, `scene.ts:4144`) and enemy pathfinding
+(`nextAiWaypoint` BFS, `fsm.ts`) are **purely 2D — no floorZ or
+step-up awareness** (the open Sprint G "enemy pathing on raised
+sectors" item). The horde spawns on terrain outside the base and
+paths to the Power Link. Against a raised pad that means either the
+perimeter walls block enemies and the horde *can't reach the base at
+all*, or the walls are passable and enemies clip vertically up the
+cliff face. Both are broken; the first kills the defend-the-Link
+event outright.
 
-**Resolution: the base sits in a leveled clearing.** Within the
-layout footprint the surface floor is flat authored geometry at a
-fixed pad height; the terrain noise is **suppressed to that height
-inside the footprint** and only rises into hills *outside* it. The
-hills are backdrop you can walk to the edge of and fall off (into the
-desolate overworld), not ground the platform floats over. Concretely:
+**Resolution: v1 is an AT-GRADE leveled clearing — flat, flush,
+walkable straight in. Defense is walls + turrets, not elevation
+(which is the 7D2D fantasy anyway — you wall the horde out, you
+don't hover above it).** The raised-platform aesthetic is deferred
+until enemy AI gains floorZ/step-up pathing (Sprint G); see
+"Raised pads, later" below.
 
-- The surface's effective floor = `max(platformFloor, terrainHeight)`
-  becomes, inside the footprint, just `platformFloor` — terrain is
-  clamped under the pad so it can never poke through. Implement as a
-  footprint mask consulted by the surface `floorAt`/terrain sampler
-  (terrain returns `min(terrainHeight, padZ)` — or simply `padZ` —
-  for any xy inside the layout's walkable footprint).
-- The pad sits slightly **above** the terrain's local mean so the
-  clearing reads as a raised platform with a consistent drop-off at
-  every edge, rather than a floor that's sometimes below grade.
-- Outside the footprint, terrain is untouched (the existing hilly
-  desolate overworld), non-buildable, and below the pad — so every
-  platform edge is a uniform fall, which the ledge-fall code already
-  handles cleanly.
+At-grade mechanics:
 
-This collapses the hybrid back toward the proven "authored, flat"
-case for everything inside the base, and confines the terrain
-interaction to a single well-defined seam (the pad edge), which is
-exactly the ledge-fall case that's already tested.
+- **Footprint clamp.** Inside the layout footprint the surface floor
+  is flat authored geometry at `padZ` (≈ the terrain's local mean,
+  near 0). The terrain sampler returns `padZ` for any xy inside the
+  footprint so noise can't pierce the pad. Implement as a footprint
+  mask consulted by the surface `floorAt`/terrain sampler.
+- **Apron ramp.** In a ring of width `apronTiles` around the
+  footprint, the sampler lerps from `padZ` at the inner edge to the
+  natural `terrainHeight` at the outer edge — a smooth, fully
+  walkable slope whose per-step delta stays under `STEP_UP_MAX`, so
+  the horde walks onto the pad on continuous ground with no riser to
+  climb and the renderer shows no cliff. The apron is the seam, and
+  it's a gentle slope, not a wall.
+- **Beyond the apron**, terrain is untouched — the hilly desolate
+  overworld as backdrop. It stays non-buildable (build requires a
+  pad-footprint tile, P2).
+- **No ledge-fall on the base** in v1 — the apron means there is no
+  drop-off edge to fall from. Ledge-fall stays a dungeon/raised-pad
+  concern.
+
+This keeps the genre-true picture (a leveled walled compound in the
+hills) while staying inside what the 2D AI can navigate, and confines
+terrain interaction to a gentle walkable apron instead of an
+AI-hostile cliff.
+
+### Raised pads, later
+
+A true raised platform with drop-off edges and ramp lanes the horde
+must funnel up is a real upgrade — but it is **hard-blocked on
+Sprint G enemy floorZ/step-up pathing**. Until that lands, raised
+geometry on the surface is unreachable or visually broken for
+enemies. Treat raised pads (and maze/kill-lane layout geometry, see
+Authoring) as a post-Sprint-G enhancement that reuses everything
+here; do not build them into v1.
 
 ## P0 spike (do this before P1)
 
-The seam above is the highest-risk unknown; prototype it on a
-throwaway branch before committing to the feature:
+Two seams are the highest-risk unknowns — the player seam (does the
+pad+apron read as flat stable ground?) and, more importantly, the
+**enemy seam (can the horde cross the apron and attack the base?)**.
+The enemy seam is the one that, if wrong, kills the feature, and it's
+the one the obvious player-side checks miss. Prototype both on a
+throwaway branch before committing:
 
 1. Give the live surface an `authoredSectorMap`: one flat square pad
-   (~20×20 tiles) at a fixed `padZ` over the existing terrain, via a
-   hand-built `SectorScene` (no new types yet).
-2. Apply the footprint terrain clamp in the surface `floorAt`/terrain
-   sampler so noise can't pierce the pad.
-3. Walk it in-game: stand/build on the pad (flat, stable), walk to
-   every edge (uniform fall onto the hills via ledge-fall), confirm
-   the renderer draws the pad edge + drop-off without z-fighting or
-   missing risers, confirm spawn lands on the pad.
-4. Extend `diag-jump.ts` with a pad-edge walk-off case (real fall,
-   lands on terrain, never below floor) and a "terrain never exceeds
-   padZ inside footprint" assertion.
+   (~20×20 tiles) at `padZ` ≈ local mean, via a hand-built
+   `SectorScene` (no new types yet).
+2. Apply the footprint clamp **and the apron ramp** in the surface
+   `floorAt`/terrain sampler so noise can't pierce the pad and the
+   approach slopes gently to grade.
+3. Player seam, in-game: stand/build on the pad (flat, stable), walk
+   the apron in/out (no stutter-fall, no clip), confirm spawn lands
+   on the pad, confirm the renderer draws the apron slope without
+   z-fighting or missing risers.
+4. **Enemy seam, in-game: fire a horde wave** (or hand-spawn enemies
+   at the 700px ring) and confirm they path across the apron onto the
+   pad and attack the Power Link — no enemies stuck at the edge, no
+   vertical clip-up.
+5. Diagnostics (`diag-jump.ts` + extend `diag-procgen.ts` or a new
+   `diag-base.ts`):
+   - terrain never exceeds `padZ` inside the footprint;
+   - apron per-tile floor delta ≤ `STEP_UP_MAX` everywhere (no riser
+     the AI must climb);
+   - **tile-grid BFS from the horde spawn ring reaches the Power Link
+     tile** (the horde-can-attack invariant, the same connectivity
+     check pattern diag-procgen uses for dungeon exits);
+   - a sampled enemy walk from the ring across the apron stays
+     walkable every tick.
 
-Exit criteria: flat stable pad, clean uniform edges, spawn on pad,
-diag green. If the seam fights the renderer/collision harder than
-expected, that's caught here for the cost of a spike instead of
-mid-feature. Promote the spike's working pad into the starter layout
-content in P1.
+Exit criteria: flat stable pad + walkable apron (player), **horde
+reaches and attacks the Power Link** (enemy), spawn on pad, all diag
+invariants green. The enemy-reaches-base criterion is the gate — a
+green player seam alone is **not** sufficient to proceed. Promote the
+working pad+apron into the starter layout content in P1.
 
 ## Turret mounts (the one real gameplay change — confirm)
 
@@ -188,8 +227,31 @@ platform (capacity-capped for stations/storage; walls uncapped).
 category. `handleBuildRequest` counts existing buildings of the
 category and rejects past the cap (new error `base_slot_full`).
 Client greys the placeable and shows `used/max` in the build HUD.
-Walls remain uncapped (they're the defensive maze material). Turret
+Walls remain uncapped (they're the defensive barrier material). Turret
 count is bounded by mount count, not capacity.
+
+## Horde integration
+
+The horde is why the base exists, so the spawn geometry has to track
+the layout, not a constant:
+
+- **Spawn ring derives from the footprint.** Today waves spawn at a
+  hardcoded 700px ring (`scene.ts:1456`). A larger layout (the
+  bastion) can extend past 700px, spawning enemies *on* the base.
+  Replace the constant with `footprintRadius + HORDE_RING_MARGIN`
+  (footprintRadius = the layout's bounding radius incl. apron;
+  margin a fixed ~200px), so the ring is always just outside the
+  walkable approach regardless of layout size. Spawn points still
+  snap to clear walkable ground via `findSafeSpawnNear`.
+- **Reachability is a layout invariant.** Every authored/generated
+  layout must satisfy the P0 BFS check (horde ring → Power Link tile
+  walkable). The base-layout loader rejects a layout that fails it,
+  the same way procgen asserts entrance→stairs connectivity — a base
+  the horde can't besiege is a content bug, caught at load.
+- **At grade, building-priority targeting just works:** enemies path
+  to the Power Link / turrets / walls on the flat approach exactly as
+  they do today. No AI change needed for v1 (which is the whole
+  reason v1 is at-grade).
 
 ## Swap flow at the Power Link
 
@@ -208,8 +270,14 @@ Base tab:
   platform buildings) is **refunded as items** → storage chest if
   one survives, else player inventory, else dropped as loot at the
   Power Link. Refund-not-destroy keeps a swap from eating gear.
-  Power Link itself is part of the layout and is re-anchored, never
-  refunded.
+- **Power Link is transferred, not recreated.** It keeps its
+  building id, hp, and powered status; only its tile position is
+  re-anchored to the new layout's Power Link anchor. The World-level
+  `deepestFloorReached` / power-capacity chain is World state, not
+  building state, so it's untouched by the swap — but the Power Link
+  building itself must NOT be destroyed-and-rebuilt (that would drop
+  hp to full mid-cycle and could desync the dungeon-portal
+  interactable). Move it; don't respawn it.
 
 **Swap is the trickiest transaction in the game — treat it like
 `assemble_weapon`.** It mutates building state + storage contents +
@@ -271,21 +339,30 @@ with more stations than the starter cap loads over-capacity. Three
 problems, one decision:
 
 - **Chosen policy (alpha): reset surface bases on the schema-5
-  boundary.** On hydrating a pre-v5 (`schema < 5`) snapshot, drop
-  all *surface* buildings, assign the starter layout, and let the
-  Power Link come from its anchor. Dungeon scenes, characters,
-  inventories, and blueprints are untouched — only the surface base
-  resets. This is acceptable because the game is pre-public with
-  effectively no live bases, and it dodges all three problems for
-  zero migration code. Surface contents are not precious (no extract
-  loot lives there; corpses are wiped at perihelion anyway).
-- Log the reset (`[world] surface base reset for base-layouts
-  migration`) so it's observable if it ever fires on a world that
-  mattered.
-- The alternative (snap old coords onto the pad, relocate the Power
-  Link, grandfather over-cap) is real migration code for users who
-  don't exist yet — explicitly **not** doing it. Revisit only if a
-  world worth preserving exists before this ships.
+  boundary.** `parseWorldSnapshot` keeps accepting schema 3/4/5; on
+  hydrating any snapshot that lacks `baseLayoutId` (i.e. pre-v5),
+  the World assigns the starter layout and drops all *surface-scene*
+  buildings, then proceeds normally. Dungeon scenes, the cycle
+  clock, craft jobs, characters, inventories, and blueprints all
+  load untouched — the reset is scoped to the surface scene's
+  building set only.
+- **Caveat — storage chests are not free to wipe.** Surface storage
+  chests persist player loot across cycles; resetting the surface
+  destroys their contents. That's the one genuinely precious thing
+  on the surface (corpses are perihelion-wiped, the rest is
+  re-buildable). Acceptable on a pre-public alpha with effectively
+  no live worlds. **If** the reset ever needs to run somewhere that
+  matters, the fallback is: before dropping buildings, sweep every
+  `storage_chest` + station output buffer into a holding stash keyed
+  by `characterId` and re-grant on that character's next join
+  (mail-style). Build that only if a world worth preserving exists
+  before this ships — not for v1.
+- Log the reset with a content count (`[world] surface base reset
+  for base-layouts migration — dropped N buildings, M chest items`)
+  so it's observable.
+- The alternative full migration (snap old coords onto the pad,
+  relocate the Power Link, grandfather over-cap) is real code for
+  users who don't exist yet — explicitly **not** doing it.
 
 ## Authoring
 
@@ -300,19 +377,44 @@ problems, one decision:
   anchors at the corners, `capacity { workstations: 4, storage: 2 }`,
   `blueprintId: null` (always owned), `cost: []`.
 - **Procgen (later):** a generator emitting `BaseLayoutDef` +
-  scene (wall mazes, more mounts) for variety/higher tiers — reuses
-  the same rasterization output, so it's purely a generator that
-  writes the same shape. Out of scope for the first build.
+  scene for variety/higher tiers — reuses the same rasterization
+  output, so it's purely a generator that writes the same shape.
+  Out of scope for the first build.
+
+### What layout progression can actually offer in v1 (be honest)
+
+The pitch was "layouts grow more complex with wall mazes and kill
+lanes." That kind of **geometry** progression is circular with the
+AI problem: a wall maze only matters if the horde must thread it,
+and the 2D floorZ-agnostic pather doesn't navigate cleverly enough
+for a maze to read as designed (it greedily BFSes the shortest
+walkable route; intricate internal geometry just becomes a longer
+path, not a kill lane). So v1 layout value is **quantity, not
+geometry**:
+
+- more turret mounts (more guns),
+- higher workstation/storage capacity,
+- a larger buildable footprint (more room for player-built walls —
+  and player walls at grade *are* real horde barriers today, which
+  is where the defensive depth actually comes from),
+- optionally a few pre-placed wall segments as a starting perimeter.
+
+Genuine **geometry** progression (mazes, funnels, kill lanes, raised
+tiers) is deferred to post-Sprint-G alongside raised pads, when the
+AI can be made to honor it. Don't sell layouts on maze geometry in
+v1 UI copy — sell them on capacity + mounts + size.
 
 ## Phased plan
 
-**P0 — Terrain-seam spike (throwaway, gate on it).** See the P0
-section above. Flat pad + footprint terrain clamp + leveled-clearing
-edges on the live surface, walked in-game, diag-jump pad-edge case
-green. Exit criteria there. **Do not start P1 until the seam is
-proven** — if it fights collision/renderer, the whole feature's risk
-lives here and it's cheapest to learn now. The working pad becomes
-P1's starter content.
+**P0 — Pad+apron spike (throwaway, gate on it).** See the P0 section
+above. The gate is the **enemy seam**: a flat pad + walkable apron on
+the live surface where a horde wave crosses from the spawn ring and
+attacks the Power Link, plus the player seam (stable pad, no
+stutter-fall on the apron) and the diag invariants (terrain clamp,
+apron step ≤ STEP_UP_MAX, ring→Power-Link BFS reachable). **Do not
+start P1 until the horde-reaches-base criterion is green** — a clean
+player seam alone does not clear the gate. The working pad+apron
+becomes P1's starter content.
 
 **P1 — Layout data + starter, surface built from it (no behavior change yet).**
 - `BaseLayoutDef` type + Zod (`shared/src/content/types.ts`), loader
@@ -360,14 +462,32 @@ P1's starter content.
 
 ## Open decisions
 
-1. **Turret mounts replacing free turret placement** — confirm
+1. **At-grade v1, raised pads deferred** — RESOLVED (above): v1 is a
+   flat at-grade clearing with a walkable apron because the 2D
+   floorZ-agnostic enemy AI can't besiege a raised pad. Raised pads +
+   maze/kill-lane geometry are post-Sprint-G. This is the load-
+   bearing decision; flag if the raised aesthetic is considered
+   non-negotiable for v1 (then Sprint G becomes a hard prerequisite
+   and the timeline grows).
+2. **Turret mounts replacing free turret placement** — confirm
    (changes player muscle memory; everything else is additive).
-2. **Swap re-seating policy** — proposed refund-to-storage/
+3. **Swap re-seating policy** — proposed refund-to-storage/
    inventory/ground; alternative is block-swap-until-cleared. Refund
    is friendlier.
-3. **Multiple bases / one per server** — assume one active layout
+4. **Migration: reset surface bases on schema-5** — proposed
+   (above), with the storage-chest caveat. Confirm acceptable, or
+   commit to the mail-stash fallback.
+5. **Multiple bases / one per server** — assume one active layout
    per server world (matches the single surface scene). Multi-base
    is out of scope.
-4. **Capacity granularity** — single `workstations` pool vs per-kind
+6. **Capacity granularity** — single `workstations` pool vs per-kind
    caps (e.g. max 1 uplink). Start with a pool + a hardcoded "max 1
    uplink/power_link"; refine if needed.
+
+## Dependency note
+
+This feature's *full* vision (raised fortress, maze defenses) is
+gated on **Sprint G enemy floorZ/step-up pathing**. v1 ships the
+at-grade subset that needs no AI work; the geometry-progression half
+should be scheduled *after* Sprint G, not before, or it ships
+cosmetic.
