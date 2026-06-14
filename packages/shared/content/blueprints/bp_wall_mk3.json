@@ -2,7 +2,7 @@
   "id": "bp_wall_mk3",
   "recipeId": "wall_mk3",
   "displayName": "Composite Wall",
-  "description": "4x wall HP. Alloy + wire. Crafted at the Electronics Bench.",
+  "description": "4x wall HP. Alloy + wire. Crafted at the Workbench.",
   "cost": 8,
   "tier": "rare",
   "prerequisites": [

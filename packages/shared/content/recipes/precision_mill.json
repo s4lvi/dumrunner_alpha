@@ -1,6 +1,6 @@
 {
   "id": "precision_mill",
-  "name": "Precision Machining Mill",
+  "name": "Upgrade Mill",
   "inputs": [
     {
       "kind": "material",

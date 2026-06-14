@@ -2,7 +2,7 @@
   "id": "bp_turret_shotgun",
   "recipeId": "turret_shotgun",
   "displayName": "Shotgun Turret",
-  "description": "Close-range pellet sweeper. Consumes a built Shotgun. Crafted at an Electronics Bench.",
+  "description": "Close-range pellet sweeper. Consumes a built Shotgun. Crafted at the Workbench.",
   "cost": 6,
   "tier": "uncommon",
   "prerequisites": [

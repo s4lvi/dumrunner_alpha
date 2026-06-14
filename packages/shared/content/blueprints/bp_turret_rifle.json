@@ -2,7 +2,7 @@
   "id": "bp_turret_rifle",
   "recipeId": "turret_rifle",
   "displayName": "Rifle Turret",
-  "description": "Long-range single-shot turret. Consumes a built Rifle. Crafted at an Electronics Bench.",
+  "description": "Long-range single-shot turret. Consumes a built Rifle. Crafted at the Workbench.",
   "cost": 8,
   "tier": "rare",
   "prerequisites": [

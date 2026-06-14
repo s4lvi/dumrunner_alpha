@@ -111,8 +111,11 @@ export const BUILDING_REGISTRY: Record<BuildingKind, BuildingDef> = {
     isWorkstation: true,
     parallelSlots: 1,
   },
+  // "Med Bench" — crafts medical/consumable kits (medkits, stims,
+  // overcharge). Turrets and the composite wall used to live here but
+  // moved to the Workbench so the name matches its actual output.
   electronics_bench: {
-    label: 'Electronics Bench',
+    label: 'Med Bench',
     maxHp: 130,
     hordePriority: 25,
     isStation: true,
@@ -131,25 +134,24 @@ export const BUILDING_REGISTRY: Record<BuildingKind, BuildingDef> = {
     isWorkstation: true,
     parallelSlots: 1,
   },
-  // Precision Machining Mill — vendor-shaped station (modal opens on
-  // E, but it accepts no recipes). Hosts the tier-up flow that used
-  // to live on the Weapon Bench. Hand-crafted at the Workbench so a
+  // Upgrade Mill — vendor-shaped station (modal opens on E, but it
+  // accepts no recipes). Hosts the weapon tier-up flow that used to
+  // live on the Weapon Bench. Hand-crafted at the Workbench so a
   // brand-new player can stand up the assembly + tier-up pair as
   // soon as they have the alloy/circuit budget.
   precision_mill: {
-    label: 'Precision Machining Mill',
+    label: 'Upgrade Mill',
     maxHp: 180,
     hordePriority: 25,
     isStation: true,
     isWorkstation: false,
   },
-  // Suit Assembly Bench — vendor-shaped sibling of the Weapon
-  // Bench, but for suit parts. Hosts the assembly modal that
-  // attaches/detaches suit_affix instances to equipped suit parts.
-  // No recipes target it; attachments are crafted at the
-  // Electronics Bench.
+  // Suit Bench — vendor-shaped sibling of the Mod Bench, but for
+  // suit parts. Hosts the assembly modal that attaches/detaches
+  // suit_affix instances to equipped suit parts. No recipes target
+  // it; attachments are crafted at the Med Bench.
   suit_bench: {
-    label: 'Suit Assembly Bench',
+    label: 'Suit Bench',
     maxHp: 160,
     hordePriority: 25,
     isStation: true,

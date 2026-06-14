@@ -529,10 +529,8 @@ export type InitialLootDrop = {
 
 // Material weights by floor depth. Higher floors push higher-tier components.
 const LOOT_WEIGHTS: { maxFloor: number; weights: Record<string, number> }[] = [
-  // Alloy on floors 1-2 too: it's the binder for most benches/walls,
-  // and gating it behind floor 3 left early players unable to build.
-  { maxFloor: 2, weights: { scrap: 60, wire: 25, alloy: 15 } },
-  { maxFloor: 5, weights: { scrap: 45, wire: 30, alloy: 18, circuit: 10 } },
+  { maxFloor: 2, weights: { scrap: 70, wire: 30 } },
+  { maxFloor: 5, weights: { scrap: 45, wire: 30, alloy: 15, circuit: 10 } },
   {
     maxFloor: 10,
     weights: { scrap: 30, wire: 20, alloy: 25, circuit: 15, biotic: 10 },

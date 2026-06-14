@@ -5524,7 +5524,7 @@ function PrecisionMillModal({
   return (
     <Modal onClose={onClose} width="min(640px, 94vw)">
       <ModalHeader
-        title="Precision Machining Mill"
+        title="Upgrade Mill"
         icon={<ItemIcon kind="placeable" subkind="precision_mill" />}
         onClose={onClose}
       />
@@ -5635,7 +5635,7 @@ function SuitAssemblyModal({
   return (
     <Modal onClose={onClose} width="min(720px, 94vw)">
       <ModalHeader
-        title="Suit Assembly Bench"
+        title="Suit Bench"
         icon={<ItemIcon kind="placeable" subkind="suit_bench" />}
         onClose={onClose}
       />
@@ -5903,7 +5903,7 @@ function SuitAssemblyPanel({
                 {candidates.length === 0 ? (
                   <span className="text-[10px] text-zinc-600 px-1">
                     nothing compatible in inventory — craft Hardened Plating
-                    or Servomotor Tune at the Electronics Bench
+                    or Servomotor Tune at the Med Bench
                   </span>
                 ) : (
                   candidates.map((inst) => {

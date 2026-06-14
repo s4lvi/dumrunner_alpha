@@ -28,7 +28,7 @@
     "buildingKind": "turret_smg",
     "count": 1
   },
-  "workstation": "electronics_bench",
+  "workstation": "workbench",
   "blueprintId": "bp_turret_smg",
   "craftTimeMs": 60000
 }

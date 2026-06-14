@@ -28,7 +28,7 @@
     "buildingKind": "turret_shotgun",
     "count": 1
   },
-  "workstation": "electronics_bench",
+  "workstation": "workbench",
   "blueprintId": "bp_turret_shotgun",
   "craftTimeMs": 60000
 }

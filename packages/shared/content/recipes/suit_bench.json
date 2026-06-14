@@ -1,6 +1,6 @@
 {
   "id": "suit_bench",
-  "name": "Suit Assembly Bench",
+  "name": "Suit Bench",
   "inputs": [
     {
       "kind": "material",
