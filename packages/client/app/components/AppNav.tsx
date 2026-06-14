@@ -29,6 +29,13 @@ export async function AppNav() {
           </Link>
         </nav>
         <div className="ml-auto flex items-center gap-3 text-sm">
+          <span
+            className="hidden sm:inline font-mono text-[10px] text-zinc-600"
+            title={`commit ${process.env.NEXT_PUBLIC_COMMIT_SHA ?? 'dev'}`}
+          >
+            v{process.env.NEXT_PUBLIC_BUILD_NUMBER ?? '0'}·
+            {process.env.NEXT_PUBLIC_COMMIT_SHA ?? 'dev'}
+          </span>
           {user?.displayName && (
             <span className="hidden sm:inline text-zinc-300 truncate max-w-[12rem]">
               {user.displayName}
