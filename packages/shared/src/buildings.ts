@@ -120,7 +120,11 @@ export const BUILDING_REGISTRY: Record<BuildingKind, BuildingDef> = {
     parallelSlots: 1,
   },
   weapon_bench: {
-    label: 'Weapon Bench',
+    // "Mod Bench" — it attaches mods/affixes to existing weapons; it
+    // does NOT build base weapons (those are crafted at the Workbench
+    // from a dropped frame). Renamed to stop players buying a weapon
+    // blueprint and looking for it here.
+    label: 'Mod Bench',
     maxHp: 160,
     hordePriority: 25,
     isStation: true,

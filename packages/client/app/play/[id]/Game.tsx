@@ -3724,7 +3724,7 @@ function renderInspectBody(
     return (
       <div>
         {header(
-          `${partDisplayName(part)}  (${SLOT_LABELS[part.slot] ?? part.slot})`,
+          `${partDisplayName(part)}  (${part.weaponClass ? `${part.weaponClass} ` : ''}${SLOT_LABELS[part.slot] ?? part.slot})`,
           tierColor,
         )}
         {primary.hpBonus ? (
@@ -5281,7 +5281,7 @@ function WeaponAssemblyPanel({
                   onClick={() => setSelectedIdx(w.idx)}
                   title={
                     blocked
-                      ? `Requires Mk${w.weapon.tier} Weapon Bench`
+                      ? `Requires Mk${w.weapon.tier} Mod Bench`
                       : undefined
                   }
                   className={
@@ -7665,7 +7665,7 @@ function slotTooltip(slot: InventorySlot): string | undefined {
   }
   if (slot.kind === 'part') {
     const part = slot.part;
-    const tag = `${partDisplayName(part)}  (${SLOT_LABELS[part.slot] ?? part.slot})`;
+    const tag = `${partDisplayName(part)}  (${part.weaponClass ? `${part.weaponClass} ` : ''}${SLOT_LABELS[part.slot] ?? part.slot})`;
     const lines: string[] = [tag];
     // Primary stat — the part's slot contribution at its tier, no affixes.
     const primary = partPrimaryStat(part);
@@ -8077,21 +8077,27 @@ function SlotIcon({ slot }: { slot: InventorySlot }) {
     );
   }
   if (slot.kind === 'part') {
-    // partDisplayName returns "{tier} {creative name}". Strip the tier
-    // since we render it separately as a colour-coded badge above.
-    const full = partDisplayName(slot.part);
-    const compactName = full.replace(/^\S+\s+/, '');
+    // Functional label first — class + slot — so a weapon part reads
+    // as exactly what recipes ask for ("SMG Frame"), not just the
+    // flavor name (which hides the class behind words like
+    // "Burstfire"). Class shown only for class-locked weapon parts;
+    // suit / universal parts just show the slot.
+    const part = slot.part;
+    const slotLabel = SLOT_LABELS[part.slot] ?? part.slot;
+    const fnLabel = part.weaponClass
+      ? `${part.weaponClass.toUpperCase()} ${slotLabel}`
+      : slotLabel;
     return (
       <div className="flex flex-col items-center leading-tight gap-0.5">
-        <ItemIcon kind="part" tierColor={TIER_HEX[slot.part.tier]} />
+        <ItemIcon kind="part" tierColor={TIER_HEX[part.tier]} />
         <span
           className="text-[9px] font-semibold"
-          style={{ color: TIER_HEX[slot.part.tier] }}
+          style={{ color: TIER_HEX[part.tier] }}
         >
-          {slot.part.tier}
+          {part.tier}
         </span>
-        <span className="text-zinc-400 text-[8px] text-center leading-[1.05] max-w-[68px] truncate">
-          {compactName}
+        <span className="text-zinc-200 text-[8px] font-semibold text-center leading-[1.05] max-w-[68px] truncate">
+          {fnLabel}
         </span>
       </div>
     );
