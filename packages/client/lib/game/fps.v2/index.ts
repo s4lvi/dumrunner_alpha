@@ -228,6 +228,7 @@ export function runFpsV2Game(
   const PRED_MOVE_SPEED = 140;
   const PRED_SPRINT_MULT = 1.6;
   const PRED_CROUCH_MULT = 0.55;
+  const PRED_PLAYER_RADIUS = 10; // mirror COMBAT.PLAYER_RADIUS
   // Predicted local move vector (normalized) + sprint/crouch state,
   // set each frame in tickInput, consumed in tickSelfSmoothing.
   let predMoveX = 0;
@@ -1836,14 +1837,27 @@ export function runFpsV2Game(
     lastSelfTickAt = now;
     // 1. Predict: advance the local player from this frame's input
     // immediately, mirroring the server's movement math. This is what
-    // makes input feel instant instead of waiting a round-trip.
+    // makes input feel instant instead of waiting a round-trip. The
+    // step is gated against the client's copy of the (carved) tile
+    // grid so prediction can't walk THROUGH procgen walls — without
+    // this you visibly push into walls until the server tugs you back.
+    // Axis-slide mirrors the server's moveWithCollision fallback.
     const dts = dt / 1000;
     if (predMoveX !== 0 || predMoveY !== 0) {
       let speed = PRED_MOVE_SPEED;
       if (predSprint) speed *= PRED_SPRINT_MULT;
       if (predCrouch) speed *= PRED_CROUCH_MULT;
-      selfX += predMoveX * speed * dts;
-      selfY += predMoveY * speed * dts;
+      const sx = predMoveX * speed * dts;
+      const sy = predMoveY * speed * dts;
+      if (predPassable(selfX + sx, selfY + sy)) {
+        selfX += sx;
+        selfY += sy;
+      } else if (predPassable(selfX + sx, selfY)) {
+        selfX += sx;
+      } else if (predPassable(selfX, selfY + sy)) {
+        selfY += sy;
+      }
+      // else fully blocked — hold position (server reconciles).
     }
     // 2. Reconcile toward the authoritative position. Error-scaled:
     // gentle when small (keep the prediction lead so motion stays
@@ -1853,14 +1867,28 @@ export function runFpsV2Game(
     const dy = targetSelfY - selfY;
     const err = Math.hypot(dx, dy);
     if (err > 0) {
-      const tFrac =
-        err <= CORRECT_SOFT_PX
-          ? 0
-          : err >= CORRECT_HARD_PX
-            ? 1
-            : (err - CORRECT_SOFT_PX) / (CORRECT_HARD_PX - CORRECT_SOFT_PX);
-      const tau =
-        CORRECT_TAU_SLOW_MS + (CORRECT_TAU_FAST_MS - CORRECT_TAU_SLOW_MS) * tFrac;
+      const predicting = predMoveX !== 0 || predMoveY !== 0;
+      let tau: number;
+      if (!predicting) {
+        // Stopped: converge fast so the prediction lead doesn't
+        // glide to a halt (the "slide when I stop"). Once input
+        // ends there's nothing to keep predicting, so snapping the
+        // small residual in is correct and reads as a clean stop.
+        tau = CORRECT_TAU_FAST_MS;
+      } else {
+        // Moving: gentle when the error is small (keep the lead so
+        // input feels instant), firming as it grows (pull back from
+        // a wall predicted through).
+        const tFrac =
+          err <= CORRECT_SOFT_PX
+            ? 0
+            : err >= CORRECT_HARD_PX
+              ? 1
+              : (err - CORRECT_SOFT_PX) / (CORRECT_HARD_PX - CORRECT_SOFT_PX);
+        tau =
+          CORRECT_TAU_SLOW_MS +
+          (CORRECT_TAU_FAST_MS - CORRECT_TAU_SLOW_MS) * tFrac;
+      }
       const k = Math.min(1, 1 - Math.exp(-dt / tau));
       selfX += dx * k;
       selfY += dy * k;
@@ -2292,6 +2320,27 @@ export function runFpsV2Game(
       cachedLayoutTiles = decodeTileGrid(tg);
     }
     return cachedLayoutTiles ?? undefined;
+  }
+
+  // Client passability for movement prediction. Tests the player
+  // circle (centre + 4 cardinal edge points at radius) against the
+  // carved tile grid. Returns true (passable) when there's no tile
+  // grid — the open surface has no procgen walls, only buildings,
+  // which the server reconciliation handles. Approximate vs the
+  // server's swept-circle test, but enough to stop prediction from
+  // walking through walls.
+  function predPassable(x: number, y: number): boolean {
+    const tg = layout?.tileGrid;
+    const tiles = getLayoutTiles();
+    if (!tg || !tiles) return true;
+    if (!isWalkableTileId(tileIdAt(tg, tiles, x, y))) return false;
+    const r = PRED_PLAYER_RADIUS;
+    return (
+      isWalkableTileId(tileIdAt(tg, tiles, x + r, y)) &&
+      isWalkableTileId(tileIdAt(tg, tiles, x - r, y)) &&
+      isWalkableTileId(tileIdAt(tg, tiles, x, y + r)) &&
+      isWalkableTileId(tileIdAt(tg, tiles, x, y - r))
+    );
   }
 
   function selfState(): Player {
