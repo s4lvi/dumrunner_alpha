@@ -1,6 +1,6 @@
 {
   "id": "forge_bench_upgrade_mk2",
-  "name": "Weapon Bench Mk2 Upgrade",
+  "name": "Mod Bench Mk2 Upgrade",
   "inputs": [
     {
       "kind": "material",

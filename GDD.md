@@ -32,7 +32,7 @@ One rule governs the whole item economy:
 > **The dungeon produces all inputs. The base converts inputs into capability. Nothing at the base creates inputs.**
 
 - **Components** — weapon pieces, suit parts, attachments, building cores, materials — enter the world exclusively as dungeon drops: enemies, containers, scatter piles, champions.
-- **The base assembles.** Workstations combine components into products — weapons, suits, turrets, stations, consumables. No station ever manufactures a component; the Forge runs the only reverse path (salvaging components back into materials) plus affix rerolling.
+- **The base assembles.** Workstations combine components into products — weapons, suits, turrets, stations, consumables. No station manufactures a *dropped* component (weapon pieces, suit parts, attachments, artifacts). The **Forge** is the sanctioned exception for **materials**: it both salvages components back into materials and refines lower material tiers upward (scrap+wire → Alloy Plate → Refined → Precision Alloy), plus affix rerolling. So materials have a base-side source, but the loot that defines a build never does.
 - **Three keys, one lock.** Using a component takes all three progression axes, and each axis is fed by a different activity:
 
 | Axis | Source | Activity it pulls |
@@ -88,7 +88,7 @@ Tactical extraction-shooter feel. Slower and more deliberate than arcade twin-st
 - `pelletCount` + `spreadRad` (the shotgun's pattern; pellet count = 1 collapses to a single shot).
 - `accuracy` ∈ [0..1] — per-shot uniform jitter offset within `(1 - acc) × MAX_INACCURACY_RAD`. Independent of pellet pattern; a tight shotgun can have wide pellets.
 - `magazineSize` + `reloadMs`. Reserve ammo lives in inventory; only consumed during reload, not per shot. **R** triggers a reload; fire is locked while reloading.
-- `ammoKind` per family (`pistol_basic`, `smg_basic`, `shotgun_shells`, `rifle_rounds`).
+- `ammoKind` per family (`pistol_basic`, `smg_basic`, `shotgun_shells`, `rifle_rounds`, `sniper_rounds`, `heavy_slugs`, `energy_cells`).
 
 Mods + piece-affix attachments scale these stats per weapon instance via `computeWeaponEffect` (damage / fire-interval / spread / projectile-speed multipliers stack from every attached piece + mod). The full part-driven assembly described in [Items & Procedural Generation](#items--procedural-generation) is the economy's spine under [The Economy Law](#the-economy-law); today's shipped mods + affixes are its foundation, and the components-first migration is tracked in `ROADMAP.md`.
 
@@ -344,9 +344,9 @@ Tier multiplier curve: Mk1 ×1, Mk2 ×2.2, Mk3 ×4, Mk4 ×7, Alien ×12.
 
 - **Weapon mods** sit in a free mod-slot list on the weapon. Slot count tier-gated (T1 = 0, T4 = 3).
 - **Weapon piece affixes** are piece-bound: at most one per `frame / grip / magazine / barrel` slot. Slot count tier-gated (T1 = frame only, T4 = all four).
-- **Suit-part affixes** are *piece-bound to a specific equipped suit part*. They bolt onto a particular plating / utility-mod / etc. via `CarriedPart.appliedAttachments`, mirroring how weapon mods bolt onto a `WeaponItem`. Attached and detached at the dedicated **Suit Assembly Bench**, which mirrors the Weapon Bench (per-part slot caps tier-gated via `SUIT_ATTACHMENT_SLOTS`, atomic `assemble_suit_part` transaction, suit-side tier-mismatch curve).
+- **Suit-part affixes** are *piece-bound to a specific equipped suit part*. They bolt onto a particular plating / utility-mod / etc. via `CarriedPart.appliedAttachments`, mirroring how weapon mods bolt onto a `WeaponItem`. Attached and detached at the dedicated **Suit Bench**, which mirrors the Mod Bench (per-part slot caps tier-gated via `SUIT_ATTACHMENT_SLOTS`, atomic `assemble_suit_part` transaction, suit-side tier-mismatch curve).
 
-**Stat composition.** `computeWeaponEffect(weapon)` walks every piece affix instance + mod instance and returns one resolved multiplier set (damage / fire-interval / spread / projectile-speed). Server's fire path applies them; client's tooltip + Weapon Bench stats panel show the resulting "effective" stats so the player sees real numbers, not the bare baseline. Suit affix effects fold into `computeSuitStats` alongside the primary slot stat and rolled affixes — `appliedAttachments` is read via `attachmentInstanceSuitEffect` for per-instance rolls.
+**Stat composition.** `computeWeaponEffect(weapon)` walks every piece affix instance + mod instance and returns one resolved multiplier set (damage / fire-interval / spread / projectile-speed). Server's fire path applies them; client's tooltip + Mod Bench stats panel show the resulting "effective" stats so the player sees real numbers, not the bare baseline. Suit affix effects fold into `computeSuitStats` alongside the primary slot stat and rolled affixes — `appliedAttachments` is read via `attachmentInstanceSuitEffect` for per-instance rolls.
 
 Adding a new attachment class is one entry in `ATTACHMENT_DEFS` + (optional) `ATTACHMENT_STAT_RANGES` row + a loot-table weight.
 
@@ -388,13 +388,13 @@ Assembly consumes typed material stacks as binder alongside dropped components; 
 |----------|------|--------|-----|
 | **Scrap** | 1 | Every enemy, every floor | Universal ingredient — walls, basic stations, ammo, every weapon recipe |
 | **Wire** | 1 | Drones, dungeon scatter | Electronics tier recipes, every weapon recipe |
-| **Alloy Plate** | 2 | Brutes / armored mid+ floors; salvaging Mk2 components | Heavy-tier defenses, turrets, Mk2 assembly binder |
-| **Refined Alloy** | 3 | Band 2+ drops; salvaging Mk3 components | Weapon Bench Mk3 upgrade, Mk3 assembly binder |
-| **Precision Alloy** | 4 | Band 3+ drops; salvaging Mk4 components | Weapon Bench Mk4 upgrade, Mk4 assembly binder |
-| **Circuit Board** | 2 | Drones, mid+ floors | Electronics bench, turret core, AP/overclock mods, alloy refining |
+| **Alloy Plate** | 2 | Brutes / armored mid+ floors; Forge refining (scrap+wire); salvaging Mk2 components | Heavy-tier defenses, turrets, Mk2 assembly binder |
+| **Refined Alloy** | 3 | Band 2+ drops; Forge refining; salvaging Mk3 components | Mod Bench Mk3 upgrade, Mk3 assembly binder |
+| **Precision Alloy** | 4 | Band 3+ drops; Forge refining; salvaging Mk4 components | Mod Bench Mk4 upgrade, Mk4 assembly binder |
+| **Circuit Board** | 2 | Drones, mid+ floors | Med Bench kits, turret core, AP/overclock mods, alloy refining |
 | **Biotic Tissue** | 2 | Chasers (rare), deep floors | Medkits, stims, overcharge kits |
 | **Resonant Crystal** | 3 | Brutes (rare), deep floors | Artifact uplink, AP-core mod, precision-alloy synthesis |
-| **Artifact** | 3 | Kill-drop only (chaser 4% / drone 5% / brute 12% / armored 9% / swarmer none / others rare) | Currency at the Artifact Uplink (blueprints, keys); precision-alloy synthesis |
+| **Artifact** | 3 | Kill-drop only (brutes/armored ~14–18%, common drones/chasers ~6–8%, swarmers none) | Currency at the Artifact Uplink (blueprints, keys); precision-alloy synthesis |
 | **Key** | 2 | Kill-drop (~2-6%) + buyable at Uplink (1 artifact each) | Opens locked dungeon doors |
 
 The registry (`MATERIALS` in shared) is one entry per material; adding a new material is one line plus loot-table tuning.
@@ -407,11 +407,12 @@ Assembly is **station-driven, schematic-gated, and time-and-power-bound**. Per [
 
 | Station | Tier | Crafted at | Recipes |
 |---------|------|------------|---------|
-| **Workbench** | Basic | Hand-assembled (no station) | Assembles the other stations, base weapons (from a dropped frame + pieces), ammo, medkits, bench-upgrade items |
-| **Forge** | Mid | Workbench | **Salvage & reroll** — breaks unwanted components into materials; rerolls a component's affixes for a material + artifact cost. The sink that gives every bad drop a floor value and every good-base-bad-roll drop a second life. |
-| **Electronics Bench** | Mid | Workbench | Assembles Auto-Turret + per-family turret variants (built weapon + components) and consumable kits (large medkit, stim, overcharge). |
-| **Weapon Bench** | Mid | Workbench | **Weapon assembly only** — slots dropped pieces, mods, and affixes onto frames via the assembly modal. **No tier-up here** — that lives at the Precision Machining Mill. |
-| **Precision Machining Mill** | Mid | Workbench | **Vendor-shaped** (no recipes) — modal lists every non-melee weapon in the player's inventory and tier-ups it (T1 → T4) for a tier-scaled cost in dropped materials. |
+| **Workbench** | Basic | Hand-assembled (no station) | The general fabrication bench — assembles the other stations, base weapons (from a dropped frame + pieces), ammo, basic medkits, **turret variants, and reinforced/composite walls**. |
+| **Forge** | Mid | Workbench | **Salvage, refine & reroll** — salvages components into materials, **refines material tiers upward (scrap+wire → Alloy Plate → Refined/Precision Alloy)**, crafts the reactive wall and the **bench-upgrade items**, and rerolls a component's affixes for a material + artifact cost. The material sink *and* source. |
+| **Med Bench** | Mid | Workbench | Assembles consumable kits (large medkit, stim, overcharge) and suit attachments. *(formerly Electronics Bench; turrets + walls moved to the Workbench)* |
+| **Mod Bench** | Mid | Workbench | **Weapon assembly only** — slots dropped pieces, mods, and affixes onto frames via the assembly modal. **No tier-up here** — that lives at the Upgrade Mill. *(formerly Weapon Bench)* |
+| **Upgrade Mill** | Mid | Workbench | **Vendor-shaped** (no recipes) — modal lists every non-melee weapon in the player's inventory and tier-ups it (T1 → T4) for a tier-scaled cost in dropped materials. *(formerly Precision Machining Mill)* |
+| **Suit Bench** | Mid | Workbench | **Vendor-shaped** (no recipes) — attaches/detaches suit affixes on equipped suit parts. *(formerly Suit Assembly Bench)* |
 | **Artifact Uplink** | Mid | Workbench (requires 1 crystal) | **Vendor only** (no assembly): schematic shop + keys shop. Tabbed UI. |
 
 **Hand-crafted basics.** Walls and the first Workbench are assemblable from inventory anywhere — the bootstrap exception to the economy law (material-only products) so a fresh character can always build out a base.
@@ -448,7 +449,7 @@ This is what makes "queue and go scavenge" feel right — you come back to a sto
 
 Weapon modification is split across two stations so each surface has a single, focused job.
 
-**Weapon Bench — assembly.** A weapon is a base chassis (its `weaponId`) plus rolled procedural attachments slotted into pieces and mod slots. The bench's modal:
+**Mod Bench — assembly.** A weapon is a base chassis (its `weaponId`) plus rolled procedural attachments slotted into pieces and mod slots. The bench's modal:
 
 1. Lists every non-melee weapon in the player's inventory (any tier).
 2. When a weapon is selected, renders a **labeled slot grid**: four piece tiles (Frame · Grip · Magazine · Barrel — locked-out tiles past the weapon's tier) and a row of mod slots (count = `TIER_MOD_SLOTS[tier]`).
@@ -465,11 +466,11 @@ Weapon modification is split across two stations so each surface has a single, f
 
 This atomicity matters because the staged-changes model invites the player to plan a multi-step rework — detach two pieces, attach three new ones, swap a mod — and a half-applied state would be confusing. There's a single commit point.
 
-**Precision Machining Mill — tier progression.** A vendor-shaped station with no recipes; its modal hosts the tier-up flow. Each non-melee weapon in inventory gets a row showing the next-tier label and the materials cost from `TIER_UP_COSTS` (tier-scaled: T1→T2 ~6 alloy + 2 circuit; T3→T4 includes crystal + artifact). Tiering up preserves all attached pieces and mods; the new tier just exposes additional piece slots and mod slots.
+**Upgrade Mill — tier progression.** A vendor-shaped station with no recipes; its modal hosts the tier-up flow. Each non-melee weapon in inventory gets a row showing the next-tier label and the materials cost from `TIER_UP_COSTS` (tier-scaled: T1→T2 ~6 alloy + 2 circuit; T3→T4 includes crystal + artifact). Tiering up preserves all attached pieces and mods; the new tier just exposes additional piece slots and mod slots.
 
 **Tier-mismatch.** Any tier of attachment can be slotted onto any tier of weapon. When tiers don't match, a small penalty folds into the resolved stats: each attachment's deviation from neutral (1.0 for multipliers, 0 for additive) is scaled by `1 - 0.05 × |attachmentTier − weaponTier|`, capped at 0.80. So a Mk3 attachment on a T1 weapon delivers 90% of its bonus; an Alien attachment on a T1 weapon delivers 80%. Same direction either way — a Mk1 attachment on a T4 weapon is also penalised because the precision chassis expects matching parts. Math lives in `computeWeaponEffect`; the cap means a strong roll always beats an empty slot.
 
-**Bench-tier upgrade items.** A fresh Weapon Bench is Mk1 and can only assemble Mk1 components. Higher tiers are unlocked by assembling a `bench_upgrade_mkN` item at the Workbench from the matching band-gated drops (Mk2 from base Alloy Plate, Mk3 from Refined Alloy, Mk4 from Precision Alloy — all dungeon-sourced per the economy law) and applying it to the bench via right-click → Apply on the upgrade item. Each step is single-tier — a Mk1 bench needs the Mk2 upgrade first; you can't skip from Mk1 to Mk3. Per-building tier persists in the world snapshot. The bench ladder is the base-side mirror of dungeon depth.
+**Bench-tier upgrade items.** A fresh Mod Bench is Mk1 and can only assemble Mk1 components. Higher tiers are unlocked by crafting a `bench_upgrade_mkN` item **at the Forge** from the matching band-gated alloys (Mk2 from base Alloy Plate, Mk3 from Refined Alloy, Mk4 from Precision Alloy — dungeon-sourced or Forge-refined) and applying it to the bench via right-click → Apply on the upgrade item. Each step is single-tier — a Mk1 bench needs the Mk2 upgrade first; you can't skip from Mk1 to Mk3. Per-building tier persists in the world snapshot. The bench ladder is the base-side mirror of dungeon depth.
 
 **Per-tier weapon base-stat scaling.** The weapon's tier is a real chassis upgrade, not just an attachment-slot count bump. `effectiveWeaponStats` applies a per-tier multiplier on top of the family base stats: each tier-up adds +15% damage, –5% fire interval, +2 magazine, +2% accuracy, +5% projectile speed, and –5% spread. So a T4 weapon hits 45% harder, fires 15% faster, and is noticeably tighter than the T1 of the same family — even before attachments. Tier-mismatch math (above) still applies to attachments on top of this base scaling.
 
@@ -575,10 +576,12 @@ Single-source-of-truth registry: `BUILDING_REGISTRY` in `@dumrunner/shared/build
 | **Auto-Turret** *(SMG)* | 120 | 480-px range, 130ms cadence, low damage. Crafted from a built SMG + materials. |
 | **Auto-Turret** *(Shotgun)* | 140 | 320-px range, 6-pellet burst. Crafted from a built Shotgun + materials. |
 | **Auto-Turret** *(Rifle)* | 120 | 720-px range, single-shot high damage, 1.1s cadence. Crafted from a built Rifle + materials. |
-| **Workbench** | 150 | Assembly station — base weapons from dropped pieces, ammo, medkits; gates the other stations. |
-| **Forge** | 220 | Salvage & reroll station — breaks components into materials; rerolls component affixes. |
-| **Electronics Bench** | 130 | Assembly station — turret variants, consumable kits. |
-| **Weapon Bench** | 160 | Assembly station — attach/detach dropped pieces, mods, affixes. |
+| **Workbench** | 150 | Assembly station — base weapons, ammo, medkits, turret variants, walls; gates the other stations. |
+| **Forge** | 220 | Salvage, refine & reroll station — salvages and refines materials; crafts bench-upgrades + reactive wall; rerolls component affixes. |
+| **Med Bench** | 130 | Assembly station — consumable kits + suit attachments. |
+| **Mod Bench** | 160 | Assembly station — attach/detach dropped pieces, mods, affixes. |
+| **Upgrade Mill** | 180 | Vendor-shaped (no recipes): weapon tier-up flow. |
+| **Suit Bench** | 160 | Vendor-shaped (no recipes): attach/detach suit affixes. |
 | **Artifact Uplink** | 200 | Vendor only (no recipes): blueprint shop + key shop. |
 | **Power Link** | 800 | Central structure that doubles as the dungeon entrance and the base's power source. Auto-spawned on world boot; rebuilt at perihelion if destroyed. See [Power System](#power-system). |
 
