@@ -32,7 +32,7 @@ One rule governs the whole item economy:
 > **The dungeon produces all inputs. The base converts inputs into capability. Nothing at the base creates inputs.**
 
 - **Components** — weapon pieces, suit parts, attachments, building cores, materials — enter the world exclusively as dungeon drops: enemies, containers, scatter piles, champions.
-- **The base assembles.** Workstations combine components into products — weapons, suits, turrets, stations, consumables. No station manufactures a *dropped* component (weapon pieces, suit parts, attachments, artifacts). The **Forge** is the sanctioned exception for **materials**: it both salvages components back into materials and refines lower material tiers upward (scrap+wire → Alloy Plate → Refined → Precision Alloy), plus affix rerolling. So materials have a base-side source, but the loot that defines a build never does.
+- **The base assembles.** Workstations combine components into products — weapons, suits, turrets, stations, consumables. No station ever manufactures a component — and that includes **materials**. The Forge runs the only reverse path (salvaging components back into materials) plus affix rerolling; it never *produces* a material from nothing. Every material tier, Alloy Plate through Precision Alloy, is a dungeon drop or a salvage output — never base-refined.
 - **Three keys, one lock.** Using a component takes all three progression axes, and each axis is fed by a different activity:
 
 | Axis | Source | Activity it pulls |
@@ -388,9 +388,9 @@ Assembly consumes typed material stacks as binder alongside dropped components; 
 |----------|------|--------|-----|
 | **Scrap** | 1 | Every enemy, every floor | Universal ingredient — walls, basic stations, ammo, every weapon recipe |
 | **Wire** | 1 | Drones, dungeon scatter | Electronics tier recipes, every weapon recipe |
-| **Alloy Plate** | 2 | Brutes / armored mid+ floors; Forge refining (scrap+wire); salvaging Mk2 components | Heavy-tier defenses, turrets, Mk2 assembly binder |
-| **Refined Alloy** | 3 | Band 2+ drops; Forge refining; salvaging Mk3 components | Mod Bench Mk3 upgrade, Mk3 assembly binder |
-| **Precision Alloy** | 4 | Band 3+ drops; Forge refining; salvaging Mk4 components | Mod Bench Mk4 upgrade, Mk4 assembly binder |
+| **Alloy Plate** | 2 | Brutes / armored mid+ floors; band-2 floor scatter; salvaging Mk2 components | Heavy-tier defenses, turrets, Mk2 assembly binder |
+| **Refined Alloy** | 3 | Band 2+ floor scatter; salvaging Mk3 components | Mod Bench Mk3 upgrade, Mk3 assembly binder |
+| **Precision Alloy** | 4 | Band 3+ floor scatter; salvaging Mk4 components | Mod Bench Mk4 upgrade, Mk4 assembly binder |
 | **Circuit Board** | 2 | Drones, mid+ floors | Med Bench kits, turret core, AP/overclock mods, alloy refining |
 | **Biotic Tissue** | 2 | Chasers (rare), deep floors | Medkits, stims, overcharge kits |
 | **Resonant Crystal** | 3 | Brutes (rare), deep floors | Artifact uplink, AP-core mod, precision-alloy synthesis |
@@ -408,7 +408,7 @@ Assembly is **station-driven, schematic-gated, and time-and-power-bound**. Per [
 | Station | Tier | Crafted at | Recipes |
 |---------|------|------------|---------|
 | **Workbench** | Basic | Hand-assembled (no station) | The general fabrication bench — assembles the other stations, base weapons (from a dropped frame + pieces), ammo, basic medkits, **turret variants, and reinforced/composite walls**. |
-| **Forge** | Mid | Workbench | **Salvage, refine & reroll** — salvages components into materials, **refines material tiers upward (scrap+wire → Alloy Plate → Refined/Precision Alloy)**, crafts the reactive wall and the **bench-upgrade items**, and rerolls a component's affixes for a material + artifact cost. The material sink *and* source. |
+| **Forge** | Mid | Workbench | **Salvage & reroll** — salvages components back into materials and rerolls a component's affixes for a material + artifact cost; also assembles the bench-upgrade items + reactive wall. **No material production** — alloy tiers are dungeon-drop + salvage only. The sink that gives every bad drop a floor value and every good-base-bad-roll drop a second life. |
 | **Med Bench** | Mid | Workbench | Assembles consumable kits (large medkit, stim, overcharge) and suit attachments. *(formerly Electronics Bench; turrets + walls moved to the Workbench)* |
 | **Mod Bench** | Mid | Workbench | **Weapon assembly only** — slots dropped pieces, mods, and affixes onto frames via the assembly modal. **No tier-up here** — that lives at the Upgrade Mill. *(formerly Weapon Bench)* |
 | **Upgrade Mill** | Mid | Workbench | **Vendor-shaped** (no recipes) — modal lists every non-melee weapon in the player's inventory and tier-ups it (T1 → T4) for a tier-scaled cost in dropped materials. *(formerly Precision Machining Mill)* |
@@ -470,7 +470,7 @@ This atomicity matters because the staged-changes model invites the player to pl
 
 **Tier-mismatch.** Any tier of attachment can be slotted onto any tier of weapon. When tiers don't match, a small penalty folds into the resolved stats: each attachment's deviation from neutral (1.0 for multipliers, 0 for additive) is scaled by `1 - 0.05 × |attachmentTier − weaponTier|`, capped at 0.80. So a Mk3 attachment on a T1 weapon delivers 90% of its bonus; an Alien attachment on a T1 weapon delivers 80%. Same direction either way — a Mk1 attachment on a T4 weapon is also penalised because the precision chassis expects matching parts. Math lives in `computeWeaponEffect`; the cap means a strong roll always beats an empty slot.
 
-**Bench-tier upgrade items.** A fresh Mod Bench is Mk1 and can only assemble Mk1 components. Higher tiers are unlocked by crafting a `bench_upgrade_mkN` item **at the Forge** from the matching band-gated alloys (Mk2 from base Alloy Plate, Mk3 from Refined Alloy, Mk4 from Precision Alloy — dungeon-sourced or Forge-refined) and applying it to the bench via right-click → Apply on the upgrade item. Each step is single-tier — a Mk1 bench needs the Mk2 upgrade first; you can't skip from Mk1 to Mk3. Per-building tier persists in the world snapshot. The bench ladder is the base-side mirror of dungeon depth.
+**Bench-tier upgrade items.** A fresh Mod Bench is Mk1 and can only assemble Mk1 components. Higher tiers are unlocked by crafting a `bench_upgrade_mkN` item **at the Forge** from the matching band-gated alloys (Mk2 from base Alloy Plate, Mk3 from Refined Alloy, Mk4 from Precision Alloy — all dungeon-sourced) and applying it to the bench via right-click → Apply on the upgrade item. Each step is single-tier — a Mk1 bench needs the Mk2 upgrade first; you can't skip from Mk1 to Mk3. Per-building tier persists in the world snapshot. The bench ladder is the base-side mirror of dungeon depth.
 
 **Per-tier weapon base-stat scaling.** The weapon's tier is a real chassis upgrade, not just an attachment-slot count bump. `effectiveWeaponStats` applies a per-tier multiplier on top of the family base stats: each tier-up adds +15% damage, –5% fire interval, +2 magazine, +2% accuracy, +5% projectile speed, and –5% spread. So a T4 weapon hits 45% harder, fires 15% faster, and is noticeably tighter than the T1 of the same family — even before attachments. Tier-mismatch math (above) still applies to attachments on top of this base scaling.
 
@@ -577,7 +577,7 @@ Single-source-of-truth registry: `BUILDING_REGISTRY` in `@dumrunner/shared/build
 | **Auto-Turret** *(Shotgun)* | 140 | 320-px range, 6-pellet burst. Crafted from a built Shotgun + materials. |
 | **Auto-Turret** *(Rifle)* | 120 | 720-px range, single-shot high damage, 1.1s cadence. Crafted from a built Rifle + materials. |
 | **Workbench** | 150 | Assembly station — base weapons, ammo, medkits, turret variants, walls; gates the other stations. |
-| **Forge** | 220 | Salvage, refine & reroll station — salvages and refines materials; crafts bench-upgrades + reactive wall; rerolls component affixes. |
+| **Forge** | 220 | Salvage & reroll station — salvages components into materials, rerolls affixes; assembles bench-upgrades + reactive wall. No material production. |
 | **Med Bench** | 130 | Assembly station — consumable kits + suit attachments. |
 | **Mod Bench** | 160 | Assembly station — attach/detach dropped pieces, mods, affixes. |
 | **Upgrade Mill** | 180 | Vendor-shaped (no recipes): weapon tier-up flow. |

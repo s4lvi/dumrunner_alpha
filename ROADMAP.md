@@ -171,8 +171,13 @@ this is the migration. Steps are roughly ordered; 1 ships alone,
 Shipped so far: step 1 (2026-06-10), steps 2+4 (attachments
 drop-only, rates up), step 3 (weapons assemble from a class-pinned
 frame drop + binder; new 'part' recipe-input matcher; frames
-weighted 3x in the slot roll). Open: 5 (Forge salvage/reroll),
-6 (benches from components), 7 (schematic scoping audit).
+weighted 3x in the slot roll; **Forge alloy-production recipes
+deleted 2026-06-19** — Refined/Precision Alloy are now band-gated
+floor-scatter drops, keeping the Economy Law literal: the base
+creates no material inputs). Open: 5 (Forge salvage/reroll —
+must include tier-matched material yield so salvage is the second
+sanctioned alloy source the GDD promises), 6 (benches from
+components), 7 (schematic scoping audit).
 
 ---
 

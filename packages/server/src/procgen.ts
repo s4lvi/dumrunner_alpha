@@ -521,7 +521,15 @@ function makeWalkableSnapper(
 // Artifacts intentionally don't appear in floor scatter — they're a kill-
 // drop only currency, sold to the artifact uplink for blueprints.
 export type InitialLootDrop = {
-  materialId: 'scrap' | 'wire' | 'circuit' | 'alloy' | 'biotic' | 'crystal';
+  materialId:
+    | 'scrap'
+    | 'wire'
+    | 'circuit'
+    | 'alloy'
+    | 'alloy_mk3'
+    | 'alloy_mk4'
+    | 'biotic'
+    | 'crystal';
   count: number;
   x: number;
   y: number;
@@ -533,14 +541,16 @@ const LOOT_WEIGHTS: { maxFloor: number; weights: Record<string, number> }[] = [
   { maxFloor: 5, weights: { scrap: 45, wire: 30, alloy: 15, circuit: 10 } },
   {
     maxFloor: 10,
-    weights: { scrap: 30, wire: 20, alloy: 25, circuit: 15, biotic: 10 },
+    weights: { scrap: 30, wire: 20, alloy: 25, alloy_mk3: 8, circuit: 15, biotic: 10 },
   },
   {
     maxFloor: Infinity,
     weights: {
       scrap: 20,
       wire: 15,
-      alloy: 25,
+      alloy: 22,
+      alloy_mk3: 15,
+      alloy_mk4: 10,
       circuit: 20,
       biotic: 15,
       crystal: 5,
@@ -615,6 +625,7 @@ function upgradeWeights(w: Record<string, number>): Record<string, number> {
   for (const k of Object.keys(out)) {
     if (k === 'scrap' || k === 'wire') out[k] = Math.max(0, out[k] * 0.4);
     if (k === 'alloy' || k === 'circuit') out[k] = (out[k] ?? 0) + 25;
+    if (k === 'alloy_mk3' || k === 'alloy_mk4') out[k] = (out[k] ?? 0) + 15;
     if (k === 'biotic' || k === 'crystal') out[k] = (out[k] ?? 0) + 10;
   }
   return out;
