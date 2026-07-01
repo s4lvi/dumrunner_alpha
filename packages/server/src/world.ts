@@ -61,6 +61,8 @@ import {
   UPGRADES,
   recipeOutputToSlot,
   RECIPES,
+  affixRerollCost,
+  rollAffixesForPart,
   salvageRefund,
   SUIT_ATTACHMENT_SLOTS,
   TIER_MOD_SLOTS,
@@ -95,6 +97,7 @@ import {
   type InitialPropSpawn,
 } from './procgen.js';
 import { ROOMS } from './rooms.js';
+import { rollAffixCount } from './loot.js';
 import {
   buildPlaytestEquipment,
   buildPlaytestInventory,
@@ -1865,10 +1868,12 @@ export class World {
     });
   }
 
-  // Salvage an inventory slot at a workbench. Yields ~20% of the
-  // base recipe's inputs (or whatever yieldPct the player's suit
-  // is currently rolling). Empties the source slot and pushes the
-  // refund materials into the bag.
+  // Salvage an inventory slot at the Forge (GDD: the Forge owns the
+  // reverse path). Recipe-backed kinds (attachment / weapon /
+  // placeable) refund ~20% of their recipe inputs; dropped
+  // CarriedParts return the fixed tier-matched alloy yield — the
+  // economy law's "second sanctioned source" of every alloy tier.
+  // Empties the source slot and pushes the refund into the bag.
   handleSalvageRequest(characterId: string, slot: number): void {
     const conn = this.connections.get(characterId);
     if (!conn) return;
@@ -1878,17 +1883,22 @@ export class World {
       !surface?.hasBuildingNearby(
         conn.x,
         conn.y,
-        'workbench',
+        'forge',
         COMBAT.CRAFT_STATION_RANGE_PX
       )
     ) {
-      this.sendDirect(conn.ws, { type: 'error', message: 'salvage_needs_workbench' });
+      this.sendDirect(conn.ws, { type: 'error', message: 'salvage_needs_forge' });
       return;
     }
     if (slot < 0 || slot >= conn.inventory.length) return;
     const src = conn.inventory[slot];
     if (src.kind === 'empty') return;
-    if (src.kind !== 'attachment' && src.kind !== 'weapon' && src.kind !== 'placeable') {
+    if (
+      src.kind !== 'attachment' &&
+      src.kind !== 'weapon' &&
+      src.kind !== 'placeable' &&
+      src.kind !== 'part'
+    ) {
       this.sendDirect(conn.ws, { type: 'error', message: 'salvage_unsupported_kind' });
       return;
     }
@@ -1924,6 +1934,62 @@ export class World {
         scene?.spawnDroppedSlot(conn.x, conn.y, r, conn.characterId);
       }
     }
+
+    conn.inventoryDirty = true;
+    this.sendDirect(conn.ws, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Reroll a CarriedPart's affixes at the Forge for a tier-scaled
+  // material + artifact cost (AFFIX_REROLL_COSTS). Re-samples the
+  // affix count on the same tier-gated distribution drops use (incl.
+  // the +1 bonus chance), then rolls fresh affixes. Slot/tier/class/
+  // specialty are untouched — the gamble is the affix lines only.
+  handleRerollAffixes(characterId: string, slot: number): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    if (conn.sceneId !== SURFACE_SCENE_ID) return;
+    const surface = this.scenes.get(SURFACE_SCENE_ID);
+    if (
+      !surface?.hasBuildingNearby(
+        conn.x,
+        conn.y,
+        'forge',
+        COMBAT.CRAFT_STATION_RANGE_PX
+      )
+    ) {
+      this.sendDirect(conn.ws, { type: 'error', message: 'reroll_needs_forge' });
+      return;
+    }
+    if (slot < 0 || slot >= conn.inventory.length) return;
+    const src = conn.inventory[slot];
+    if (src.kind !== 'part') {
+      this.sendDirect(conn.ws, { type: 'error', message: 'reroll_not_part' });
+      return;
+    }
+
+    const cost: RecipeInput[] = affixRerollCost(src.part).map((c) => ({
+      kind: 'material' as const,
+      materialId: c.materialId,
+      count: c.count,
+    }));
+    for (const input of cost) {
+      if (!hasRecipeInput(conn.inventory, input)) {
+        this.sendDirect(conn.ws, { type: 'error', message: 'reroll_cant_afford' });
+        return;
+      }
+    }
+    for (const input of cost) consumeRecipeInput(conn.inventory, input);
+
+    const affixCount = rollAffixCount(src.part.tier);
+    src.part.affixCount = affixCount;
+    src.part.affixes = rollAffixesForPart(
+      src.part.slot,
+      src.part.tier,
+      affixCount
+    );
 
     conn.inventoryDirty = true;
     this.sendDirect(conn.ws, {

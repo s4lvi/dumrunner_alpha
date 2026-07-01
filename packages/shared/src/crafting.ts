@@ -41,7 +41,9 @@ import {
 } from './inventory';
 import type {
   BuildingKind,
+  CarriedPart,
   PartSlot,
+  PartTier,
   WeaponClass,
   WorkstationKind,
 } from './protocol';
@@ -441,15 +443,92 @@ export function findRecipeForWeapon(weaponId: WeaponKind): Recipe | null {
   return null;
 }
 
+// Tier-matched salvage yield for dropped CarriedParts (economy law:
+// salvage is the second sanctioned source of every alloy tier — parts
+// have no recipe to reverse, so the yield is a fixed table keyed on
+// the part's tier). The Forge breaks a part into the alloy band that
+// gates its own tier plus scrap sweepings.
+const PART_SALVAGE_YIELDS: Record<
+  PartTier,
+  { materialId: MaterialKind; count: number }[]
+> = {
+  Mk1: [{ materialId: 'scrap', count: 2 }],
+  Mk2: [
+    { materialId: 'alloy', count: 1 },
+    { materialId: 'scrap', count: 1 },
+  ],
+  Mk3: [
+    { materialId: 'alloy_mk3', count: 1 },
+    { materialId: 'scrap', count: 1 },
+  ],
+  Mk4: [
+    { materialId: 'alloy_mk4', count: 1 },
+    { materialId: 'scrap', count: 1 },
+  ],
+  Alien: [
+    { materialId: 'crystal', count: 1 },
+    { materialId: 'alloy_mk4', count: 1 },
+  ],
+};
+
+// Forge affix-reroll price by part tier (GDD: "rerolls a component's
+// affixes for a material + artifact cost"). Materials match the
+// tier's alloy band; artifacts scale at the top so rerolling a Mk4
+// god-roll hunt competes with the blueprint/key artifact sinks.
+export const AFFIX_REROLL_COSTS: Record<
+  PartTier,
+  { materialId: MaterialKind; count: number }[]
+> = {
+  Mk1: [
+    { materialId: 'scrap', count: 4 },
+    { materialId: 'artifact', count: 1 },
+  ],
+  Mk2: [
+    { materialId: 'alloy', count: 2 },
+    { materialId: 'artifact', count: 1 },
+  ],
+  Mk3: [
+    { materialId: 'alloy_mk3', count: 2 },
+    { materialId: 'artifact', count: 1 },
+  ],
+  Mk4: [
+    { materialId: 'alloy_mk4', count: 2 },
+    { materialId: 'artifact', count: 2 },
+  ],
+  Alien: [
+    { materialId: 'crystal', count: 2 },
+    { materialId: 'artifact', count: 3 },
+  ],
+};
+
+export function affixRerollCost(
+  part: CarriedPart
+): { materialId: MaterialKind; count: number }[] {
+  return AFFIX_REROLL_COSTS[part.tier] ?? AFFIX_REROLL_COSTS.Mk1;
+}
+
 // Compute the salvage refund from a single inventory slot. Default
 // yield is 20%; suit affixes that grant `salvage_yield_pct` push it
 // up. Returns the refunded slots (always 'material' / 'ammo' kinds —
 // the original inputs we'd reverse-engineer back). Undefined input
 // kinds yield nothing.
+//
+// CarriedParts skip the recipe reverse-engineering entirely: they
+// never had a recipe (drop-only components), so they return the
+// fixed tier-matched yield above. yieldPct doesn't scale the part
+// table — the tier yield IS the floor value the economy law promises
+// every drop.
 export function salvageRefund(
   slot: InventorySlot,
   yieldPct: number = 0.20
 ): InventorySlot[] {
+  if (slot.kind === 'part') {
+    return PART_SALVAGE_YIELDS[slot.part.tier].map((y) => ({
+      kind: 'material' as const,
+      materialId: y.materialId,
+      count: y.count,
+    }));
+  }
   let recipe: Recipe | null = null;
   if (slot.kind === 'attachment') {
     recipe = findRecipeForAttachmentDefId(slot.instance.defId);

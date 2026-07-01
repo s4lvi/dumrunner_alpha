@@ -152,6 +152,7 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
     ),
   inventory_drop: (w, c, m) => w.handleInventoryDrop(c, m.slot, m.all),
   salvage_request: (w, c, m) => w.handleSalvageRequest(c, m.slot),
+  reroll_affixes: (w, c, m) => w.handleRerollAffixes(c, m.slot),
   give_item: (w, c, m) =>
     w.handleGiveItem(c, m.targetCharacterId, m.slot, m.all),
   // Sandbox-only messages. World gates these on `isSandbox`; on

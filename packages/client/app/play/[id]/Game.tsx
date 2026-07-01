@@ -30,6 +30,7 @@ import {
   type BlueprintCatalogEntry,
   listRecipes,
   MATERIALS,
+  AFFIX_REROLL_COSTS,
   TIER_PIECE_SLOTS,
   TIER_MOD_SLOTS,
   TIER_UP_COSTS,
@@ -2137,10 +2138,14 @@ export function Game({
             x={slotMenu.x}
             y={slotMenu.y}
             nearbyPlayers={gameRef.current?.nearbyPlayers(96) ?? []}
-            nearWorkbench={nearWorkstations.has('workbench')}
+            nearForge={nearWorkstations.has('forge')}
             onApplyUpgrade={onApplyUpgrade}
             onSalvage={() => {
               sendOnLiveWs({ type: 'salvage_request', slot: slotMenu.slot });
+              setSlotMenu(null);
+            }}
+            onReroll={() => {
+              sendOnLiveWs({ type: 'reroll_affixes', slot: slotMenu.slot });
               setSlotMenu(null);
             }}
             onUse={() => {
@@ -2386,12 +2391,18 @@ function friendlyErrorMessage(code: string): string {
       return 'Power Link is destroyed. Wait for the next perihelion to rebuild.';
     case 'pause_owner_only':
       return 'Only the server owner can pause.';
-    case 'salvage_needs_workbench':
-      return 'Stand near a workbench to salvage.';
+    case 'salvage_needs_forge':
+      return 'Stand near a Forge to salvage.';
     case 'salvage_unsupported_kind':
       return 'This item can\'t be salvaged.';
     case 'salvage_no_recipe':
       return 'No salvage value — no known recipe.';
+    case 'reroll_needs_forge':
+      return 'Stand near a Forge to reroll.';
+    case 'reroll_not_part':
+      return 'Only dropped parts can be rerolled.';
+    case 'reroll_cant_afford':
+      return 'Not enough materials to reroll.';
     case 'give_too_far':
       return 'Too far from the recipient.';
     case 'recipient_inventory_full':
@@ -2411,9 +2422,12 @@ function isExpectedServerError(code: string): boolean {
     code === 'insufficient_power' ||
     code === 'power_link_offline' ||
     code === 'pause_owner_only' ||
-    code === 'salvage_needs_workbench' ||
+    code === 'salvage_needs_forge' ||
     code === 'salvage_unsupported_kind' ||
     code === 'salvage_no_recipe' ||
+    code === 'reroll_needs_forge' ||
+    code === 'reroll_not_part' ||
+    code === 'reroll_cant_afford' ||
     code === 'give_too_far' ||
     code === 'recipient_inventory_full'
   );
@@ -7831,13 +7845,14 @@ function SlotContextMenu({
   x,
   y,
   nearbyPlayers,
-  nearWorkbench,
+  nearForge,
   onUse,
   onDropOne,
   onDropAll,
   onGiveOne,
   onGiveAll,
   onSalvage,
+  onReroll,
   onDiscardOne,
   onDiscardAll,
   onApplyUpgrade,
@@ -7847,13 +7862,14 @@ function SlotContextMenu({
   x: number;
   y: number;
   nearbyPlayers: { characterId: string; displayName: string }[];
-  nearWorkbench: boolean;
+  nearForge: boolean;
   onUse: () => void;
   onDropOne: () => void;
   onDropAll: () => void;
   onGiveOne: (targetCharacterId: string) => void;
   onGiveAll: (targetCharacterId: string) => void;
   onSalvage: () => void;
+  onReroll: () => void;
   onDiscardOne: () => void;
   onDiscardAll: () => void;
   // Set when the slot is an `upgrade` item AND there's a matching-
@@ -7864,7 +7880,10 @@ function SlotContextMenu({
   const salvageable =
     slot.kind === 'attachment' ||
     slot.kind === 'weapon' ||
-    slot.kind === 'placeable';
+    slot.kind === 'placeable' ||
+    slot.kind === 'part';
+  const rerollCost =
+    slot.kind === 'part' ? AFFIX_REROLL_COSTS[slot.part.tier] : null;
   const stackable =
     slot.kind === 'material' ||
     slot.kind === 'ammo' ||
@@ -7940,12 +7959,24 @@ function SlotContextMenu({
               </button>
             </div>
           ))}
-        {salvageable && nearWorkbench && (
+        {salvageable && nearForge && (
           <button
             className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)] text-cyan-300 border-t border-[color:var(--panel-border)]"
             onClick={onSalvage}
           >
-            Salvage at workbench (~20%)
+            Salvage
+          </button>
+        )}
+        {rerollCost && nearForge && (
+          <button
+            className="block w-full text-left px-3 py-2 hover:bg-[color:var(--bg)] text-fuchsia-300 border-t border-[color:var(--panel-border)]"
+            onClick={onReroll}
+          >
+            Reroll Affixes (
+            {rerollCost
+              .map((c) => `${c.count} ${MATERIALS[c.materialId]?.name ?? c.materialId}`)
+              .join(', ')}
+            )
           </button>
         )}
         {stackable && count > 1 && (

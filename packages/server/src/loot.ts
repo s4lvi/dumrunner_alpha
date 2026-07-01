@@ -75,7 +75,11 @@ function rollTier(weights: TierWeights): PartTier {
   return 'Mk4';
 }
 
-function rollAffixCount(tier: PartTier): number {
+// Exported for the Forge affix-reroll path (world.ts) so a reroll
+// re-samples the same tier-gated count distribution drops use —
+// including the +1 bonus chance that makes rerolling a gamble worth
+// taking.
+export function rollAffixCount(tier: PartTier): number {
   const base = AFFIX_BASELINE[tier];
   return Math.random() < AFFIX_BONUS_CHANCE ? base + 1 : base;
 }

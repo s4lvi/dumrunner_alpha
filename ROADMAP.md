@@ -174,10 +174,15 @@ frame drop + binder; new 'part' recipe-input matcher; frames
 weighted 3x in the slot roll; **Forge alloy-production recipes
 deleted 2026-06-19** — Refined/Precision Alloy are now band-gated
 floor-scatter drops, keeping the Economy Law literal: the base
-creates no material inputs). Open: 5 (Forge salvage/reroll —
-must include tier-matched material yield so salvage is the second
-sanctioned alloy source the GDD promises), 6 (benches from
-components), 7 (schematic scoping audit).
+creates no material inputs). Step 5 **shipped 2026-07-01**
+(PROTOCOL_VERSION 51): salvage moved from Workbench to the Forge
+per the GDD, CarriedParts salvage into fixed tier-matched yields
+(Mk2→alloy, Mk3→alloy_mk3, Mk4→alloy_mk4, Alien→crystal — the
+second sanctioned alloy source), and `reroll_affixes` rerolls a
+part's affix count + lines at the Forge for a tier-scaled
+material+artifact cost (AFFIX_REROLL_COSTS in crafting.ts; count
+re-samples the drop distribution incl. the +1 bonus chance).
+Open: 6 (benches from components), 7 (schematic scoping audit).
 
 ---
 

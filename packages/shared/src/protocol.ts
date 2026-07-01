@@ -926,6 +926,17 @@ export const SalvageRequestMsgSchema = z.object({
   slot: slotIndex,
 });
 
+// Reroll a CarriedPart's affixes at the Forge. Server validates the
+// slot holds a part, the player is in range of a forge, and the
+// inventory covers the tier-scaled material + artifact cost
+// (AFFIX_REROLL_COSTS in crafting.ts). Affix count re-rolls on the
+// same tier-gated distribution drops use, then fresh affixes roll —
+// the gamble that gives a good-base-bad-roll drop a second life.
+export const RerollAffixesMsgSchema = z.object({
+  type: z.literal('reroll_affixes'),
+  slot: slotIndex,
+});
+
 // Drop a slot's contents on the ground at the player's current
 // position. `all` = drop the whole stack; otherwise drop a single
 // unit (matches the inventory_discard semantics).
@@ -1091,6 +1102,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   InventoryDropMsgSchema,
   GiveItemMsgSchema,
   SalvageRequestMsgSchema,
+  RerollAffixesMsgSchema,
   SandboxSpawnEnemyMsgSchema,
   SandboxClearMsgSchema,
   SandboxSetLoadoutMsgSchema,
@@ -1517,4 +1529,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 50;
+export const PROTOCOL_VERSION = 51;
