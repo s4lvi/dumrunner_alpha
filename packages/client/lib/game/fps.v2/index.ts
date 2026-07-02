@@ -59,7 +59,11 @@ import {
   terrainHeightAt,
 } from '@dumrunner/shared';
 import { createTexturedSpriteLayer } from './texturedSpriteLayer';
-import { getAnimationFrame, playEntityState } from '../../entityAnimations';
+import {
+  getAnimationFrame,
+  playEntityState,
+  prewarmAnimation,
+} from '../../entityAnimations';
 
 import type { GameHandle, GameInit, SceneState } from '../types';
 import {
@@ -1228,6 +1232,22 @@ export function runFpsV2Game(
       app.stage.addChild(damageOverlay);
       app.stage.addChild(crosshair);
       app.stage.addChild(viewModel);
+
+      // Prewarm every weapon view-model + projectile animation at
+      // boot (manifest + all state sheets). Entity animations
+      // prewarm generically when their manifest resolves, but the
+      // view-model's first draw happens the instant the player
+      // swaps weapons — without this the first frame of any
+      // never-seen animation rendered the placeholder while its
+      // sheet fetched.
+      const prewarmIds = new Set<string>();
+      for (const id of Object.values(WEAPON_VIEW_ANIM)) {
+        if (id) prewarmIds.add(id);
+      }
+      for (const id of Object.values(WEAPON_PROJECTILE_ANIM)) {
+        if (id) prewarmIds.add(id);
+      }
+      for (const id of prewarmIds) prewarmAnimation(id);
       app.ticker.add(tick);
       attachInputListeners();
       ready = true;

@@ -32,6 +32,7 @@ import {
   getAnimationDef,
   getStateFrames,
   loadAnimationDef,
+  subscribeAnimations,
 } from './animations';
 
 type EntitySlot = {
@@ -110,6 +111,54 @@ function finalizeController(
   }
   slot.controller = new AnimationController(def, startState);
   slot.queuedState = null;
+  // Prewarm EVERY state's textures now, not on first play. Frame
+  // sheets load lazily per state, so without this the first fire /
+  // reload / hit of each state rendered the static placeholder for
+  // a frame or two while its sheet fetched. getStateFrames kicks
+  // the async load and caches; by the time the state first plays
+  // the textures are resident.
+  prewarmStates(slot.animationId, def);
+}
+
+function prewarmStates(animationId: string, def: AnimationDef): void {
+  for (const [stateName, st] of Object.entries(def.states)) {
+    getStateFrames(animationId, stateName, st.frames, st.source ?? 'sheet');
+  }
+}
+
+/**
+ * Fire-and-forget full prewarm of an animation: manifest + every
+ * state's frame textures. Call at boot for animations you know
+ * will play (weapon view-models, projectiles) so even their FIRST
+ * use renders real frames instead of the placeholder.
+ *
+ * Prewarmed ids are registered and re-attempted whenever the
+ * animation/override caches notify — a boot-time call can land
+ * before the texture-override manifest does, in which case the
+ * state URLs resolve empty and the initial attempt no-ops.
+ */
+const prewarmRegistry = new Map<string, AnimationDef>();
+let prewarmRetryHooked = false;
+
+export function prewarmAnimation(
+  animationId: string | null | undefined,
+): void {
+  if (!animationId) return;
+  if (!prewarmRetryHooked && typeof window !== 'undefined') {
+    prewarmRetryHooked = true;
+    subscribeAnimations(() => {
+      // getStateFrames self-dedupes (cache + pending map), so
+      // re-running registered prewarms on every notification is a
+      // handful of map lookups.
+      for (const [id, def] of prewarmRegistry) prewarmStates(id, def);
+    });
+  }
+  void loadAnimationDef(animationId).then((def) => {
+    if (def) {
+      prewarmRegistry.set(animationId, def);
+      prewarmStates(animationId, def);
+    }
+  });
 }
 
 /**
