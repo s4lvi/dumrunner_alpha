@@ -101,6 +101,11 @@ export type GameHandle = {
   // True while the local player is mid-jump / falling. Consumers
   // (footstep SFX gating) treat absence of data as grounded.
   isSelfAirborne(): boolean;
+  // Mirror of the local player's stamina — gates client-side sprint
+  // prediction so an empty tank doesn't predict 1.6× speed the
+  // server won't grant (which reads as rubber-banding while
+  // shift-held on empty).
+  setSelfStamina(stamina: number): void;
   setPlayerHp(
     characterId: string,
     hp: number,

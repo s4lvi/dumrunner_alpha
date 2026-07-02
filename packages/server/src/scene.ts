@@ -1464,6 +1464,7 @@ export class Scene {
   tick(dt: number, now: number): void {
     this.simulatePlayerMovement(dt, now);
     this.runEnemyAi(dt, now);
+    this.resolveEntityOverlaps(dt);
     this.tickTurrets(now);
     this.tickReloads(now);
     this.advanceProjectiles(dt, now);
@@ -1472,6 +1473,132 @@ export class Scene {
     this.handleHordeWaves(now);
     this.tickHazards(dt, now);
     this.respawnDeadEntities(now);
+  }
+
+  // Soft body separation — players and enemies are solid to each
+  // other. Overlapping circles push apart symmetrically at a capped
+  // resolve speed, so contact reads as bodies (a swarm crowds you,
+  // you can't stand inside a brute, an enemy can't walk through
+  // you) without the harsh feel of a hard wall. Melee is unaffected:
+  // attack range (36+) exceeds contact distance (~22-26). Pushes are
+  // gated on each side's own passability so neither party gets
+  // wedged into geometry, and Z-gated so a player standing on a
+  // bench top doesn't shove enemies at ground level. Player↔player
+  // uses the same rule (co-op shoulder-bumping, no hard blocks).
+  private resolveEntityOverlaps(dt: number): void {
+    // Max resolve rate: full overlap clears in a few ticks. Faster
+    // reads as a shove; slower lets fast enemies tunnel deep.
+    const maxPush = 140 * dt;
+    const rP = COMBAT.PLAYER_RADIUS;
+    const conns: { conn: SceneConnection; z: number }[] = [];
+    for (const id of this.members) {
+      const c = this.bindings.connection(id);
+      if (c && c.alive) conns.push({ conn: c, z: c.z });
+    }
+    if (conns.length === 0) return;
+
+    // player ↔ enemy
+    for (const enemy of this.enemies.values()) {
+      if (!enemy.alive) continue;
+      const rE = enemy.template.radius;
+      const minD = rP + rE;
+      for (const { conn } of conns) {
+        const dx = conn.x - enemy.x;
+        const dy = conn.y - enemy.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= minD * minD) continue;
+        // Z-gate: enemies are ground-bound; a player whose feet are
+        // above step-up height (bench top, wall top, mid-jump) isn't
+        // body-blocking them.
+        const enemyZ = this.floorAt(enemy.x, enemy.y, conn.z);
+        if (conn.z - enemyZ > COMBAT.STEP_UP_MAX) continue;
+        const d = Math.sqrt(d2);
+        const nx = d > 0.001 ? dx / d : 1;
+        const ny = d > 0.001 ? dy / d : 0;
+        const push = Math.min((minD - d) * 0.5, maxPush);
+        // Enemy yields its half (gated on its own collision).
+        const ex = enemy.x - nx * push;
+        const ey = enemy.y - ny * push;
+        if (this.circlePassable(ex, ey, rE)) {
+          enemy.x = ex;
+          enemy.y = ey;
+          const bdx = enemy.x - enemy.lastBroadcastX;
+          const bdy = enemy.y - enemy.lastBroadcastY;
+          if (bdx * bdx + bdy * bdy > 0.25) {
+            enemy.lastBroadcastX = enemy.x;
+            enemy.lastBroadcastY = enemy.y;
+            this.broadcast({
+              type: 'enemy_state',
+              id: enemy.id,
+              x: enemy.x,
+              y: enemy.y,
+            });
+          }
+        }
+        // Player takes their half (gated on player collision so the
+        // push can't shove them through a wall).
+        const px = conn.x + nx * push;
+        const py = conn.y + ny * push;
+        if (
+          this.circleSweepPassable(
+            conn.x,
+            conn.y,
+            px,
+            py,
+            rP,
+            conn.floorZ,
+            Math.max(0, conn.z - conn.floorZ),
+            conn.crouching,
+          )
+        ) {
+          conn.x = px;
+          conn.y = py;
+          conn.dirty = true;
+        }
+      }
+    }
+
+    // player ↔ player (same soft rule; halves to each side)
+    for (let i = 0; i < conns.length; i++) {
+      for (let j = i + 1; j < conns.length; j++) {
+        const a = conns[i].conn;
+        const b = conns[j].conn;
+        if (Math.abs(a.z - b.z) > COMBAT.STEP_UP_MAX) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const minD = rP * 2;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= minD * minD) continue;
+        const d = Math.sqrt(d2);
+        const nx = d > 0.001 ? dx / d : 1;
+        const ny = d > 0.001 ? dy / d : 0;
+        const push = Math.min((minD - d) * 0.5, maxPush);
+        const ax = a.x - nx * push;
+        const ay = a.y - ny * push;
+        if (
+          this.circleSweepPassable(
+            a.x, a.y, ax, ay, rP, a.floorZ,
+            Math.max(0, a.z - a.floorZ), a.crouching,
+          )
+        ) {
+          a.x = ax;
+          a.y = ay;
+          a.dirty = true;
+        }
+        const bx = b.x + nx * push;
+        const by = b.y + ny * push;
+        if (
+          this.circleSweepPassable(
+            b.x, b.y, bx, by, rP, b.floorZ,
+            Math.max(0, b.z - b.floorZ), b.crouching,
+          )
+        ) {
+          b.x = bx;
+          b.y = by;
+          b.dirty = true;
+        }
+      }
+    }
   }
 
   // Per-second environmental hazard pass. Sources the biome's
@@ -3894,9 +4021,17 @@ export class Scene {
     let best: import('@dumrunner/shared').Sector | null = null;
     let bestFloor = -Infinity;
     for (const s of this.sectorMap.sectors) {
-      if (s.buildingKind !== undefined) continue;
+      // Building cube tops are real standable floors: benches at
+      // half wall height are jumpable, walls reachable from a bench
+      // top (7DtD-style base traversal). Their ceilingZ:-1 means
+      // "open above", not "bounds sentinel", so they bypass the
+      // terrain-resolve below and use floorZ (= cube top) literally.
+      // The cap still gates them — a grounded player beside a bench
+      // (cap = floor + STEP_UP_MAX) can't step up; an airborne one
+      // (cap = floor + heightAboveFloor) lands on top.
+      const isBuildingTop = s.buildingKind !== undefined;
       const effFloor =
-        s.ceilingZ <= s.floorZ && terrain
+        !isBuildingTop && s.ceilingZ <= s.floorZ && terrain
           ? terrainHeightAt(terrain, x, y)
           : s.floorZ;
       if (effFloor > cap) continue;
@@ -4302,14 +4437,20 @@ export class Scene {
       let bestFloor: number | null = null;
       let bestSector: typeof this.sectorMap.sectors[number] | null = null;
       for (const s of this.sectorMap.sectors) {
-        if (s.buildingKind !== undefined) continue;
+        // Building cube tops are standable floors (see
+        // walkableSectorAt): they bypass the open-air-sentinel skip
+        // — their ceilingZ:-1 means "nothing above the cube", not
+        // "bounds marker" — and contribute floorZ (= cube top) like
+        // any authored platform, still cap-gated so you can't
+        // step-snap onto one from the ground.
+        const isBuildingTop = s.buildingKind !== undefined;
         // Open-air sentinel sectors (ceilingZ<=floorZ) are bounds
         // markers, not authored floors. Skip them so terrain wins
         // on the surface — otherwise the sector's flat floorZ:0
         // overrides terrain height and the player walks through
         // hills + projectiles spawn at z=0 instead of the shooter's
         // actual elevation.
-        if (s.ceilingZ <= s.floorZ) continue;
+        if (!isBuildingTop && s.ceilingZ <= s.floorZ) continue;
         if (s.floorZ > cap) continue;
         if (!pointInPolygon(s.verts, x, y)) continue;
         let a = 0;

@@ -68,12 +68,14 @@ import {
   WEAPON_VIEW_ANIM,
   WEAPON_FAMILY,
   biomeWallHeightTilesFor,
+  buildingCubeScale,
   buildingVisualFor,
   decodeTileGrid,
   enemyVisualFor,
   insideClearingPad,
   isTurretKind,
   isWalkableTileId,
+  isWallBarrierKind,
   materialTint,
   propVisualFor,
   tileIdAt,
@@ -231,6 +233,9 @@ export function runFpsV2Game(
   const PRED_PLAYER_RADIUS = 10; // mirror COMBAT.PLAYER_RADIUS
   // Predicted local move vector (normalized) + sprint/crouch state,
   // set each frame in tickInput, consumed in tickSelfSmoothing.
+  // Local mirror of the server's stamina broadcast — gates sprint
+  // prediction (server refuses the 1.6× multiplier on empty).
+  let selfStamina = 100;
   let predMoveX = 0;
   let predMoveY = 0;
   let predSprint = false;
@@ -454,10 +459,24 @@ export function runFpsV2Game(
   // toggles it off on dungeon transitions.
   let buildMode: PlaceableBuildingKind | null = null;
   let buildRadiusBonusTiles = 0;
-  // Debounce so one click doesn't fire build_request every frame
-  // while held.
+  // Placement cadence. 120ms lets a sprint-speed sweep (224 px/s)
+  // still hit every 32px tile — hold LMB and drag to lay a wall
+  // line, Minecraft-style.
   let lastBuildSentAt = 0;
-  const BUILD_DEBOUNCE_MS = 200;
+  const BUILD_DEBOUNCE_MS = 120;
+  // Drag dedupe — don't re-send the tile the held click just
+  // placed on. Reset on mouseup / build-mode change so a rejected
+  // click can be retried on the same tile.
+  let lastPlacedTileKey: string | null = null;
+  // Optimistic placements: the cube appears the frame you click,
+  // then reconciles against the server's building_placed (which
+  // replaces it) or rolls back on timeout (the server rejected
+  // silently — out of stock, race on the tile, etc.). Provisional
+  // entries live in the ordinary buildings map so rendering,
+  // prediction collision, and floor queries all treat them as real.
+  const pendingBuilds = new Map<string, { expiresAt: number }>();
+  let nextPendingId = 0;
+  const PENDING_BUILD_TTL_MS = 800;
   // Horde mode: surface skybox tints red when true. Drives
   // `setHordeActive` from the world-clock broadcast.
   let hordeActive = false;
@@ -1027,23 +1046,90 @@ export function runFpsV2Game(
     }
     if (e.button === 0) {
       mouseDown = true;
-      // Build mode swallows the click — sendBuild instead of
-      // fire. Debounced so a held click doesn't spam the server
-      // (which silently drops invalid placements).
-      if (buildMode !== null) {
-        const now = performance.now();
-        if (now - lastBuildSentAt > BUILD_DEBOUNCE_MS) {
-          const target = computeBuildTarget();
-          if (target && target.inRange) {
-            init.sendBuild(buildMode, target.tileX, target.tileY);
-            lastBuildSentAt = now;
-          }
-        }
-      }
+      // Build mode swallows the click — place instead of fire.
+      // Held clicks keep placing via the per-frame drag path.
+      if (buildMode !== null) tryPlaceBuild();
     }
   }
   function onMouseUp(e: MouseEvent): void {
-    if (e.button === 0) mouseDown = false;
+    if (e.button === 0) {
+      mouseDown = false;
+      lastPlacedTileKey = null;
+    }
+  }
+
+  // One placement attempt at the current reticle target. Shared by
+  // the initial click and the per-frame hold-drag path. Validity is
+  // the honest ghost check (computeBuildTarget), so an attempt only
+  // fires when the server will accept it — then the cube appears
+  // optimistically the same frame.
+  function tryPlaceBuild(): void {
+    if (buildMode === null) return;
+    const now = performance.now();
+    if (now - lastBuildSentAt <= BUILD_DEBOUNCE_MS) return;
+    const target = computeBuildTarget();
+    if (!target || !target.inRange) return;
+    const key = `${target.tileX},${target.tileY}`;
+    if (key === lastPlacedTileKey) return;
+    init.sendBuild(buildMode, target.tileX, target.tileY);
+    lastBuildSentAt = now;
+    lastPlacedTileKey = key;
+    spawnProvisionalBuilding(buildMode, target.tileX, target.tileY);
+  }
+
+  // Insert a provisional building so the placement is visible (and
+  // solid) the frame the player clicks. Reconciled/rolled back in
+  // spawnBuilding / tickPendingBuilds.
+  function spawnProvisionalBuilding(
+    kind: PlaceableBuildingKind,
+    tileX: number,
+    tileY: number,
+  ): void {
+    let mountIndex: number | undefined;
+    if (isTurretKind(kind)) {
+      // Mirror the server's mount snap so the provisional turret
+      // sits exactly where the confirmed one will.
+      const tileSize = layout?.tileSize ?? 32;
+      const mount = nearestFreeMount(
+        tileX * tileSize + tileSize * 0.5,
+        tileY * tileSize + tileSize * 0.5,
+        tileSize * 1.5,
+      );
+      if (!mount) return;
+      mountIndex = mount.index;
+      tileX = Math.floor(mount.x / tileSize);
+      tileY = Math.floor(mount.y / tileSize);
+    }
+    const id = `pending:${nextPendingId++}`;
+    const maxHp = BUILDING_REGISTRY[kind]?.maxHp ?? 100;
+    buildings.set(id, {
+      id,
+      kind,
+      tileX,
+      tileY,
+      width: 1,
+      height: 1,
+      hp: maxHp,
+      maxHp,
+      open: kind === 'wall_door' ? false : undefined,
+      mountIndex,
+    });
+    pendingBuilds.set(id, {
+      expiresAt: performance.now() + PENDING_BUILD_TTL_MS,
+    });
+    rebuildSectorGeometry();
+  }
+
+  // Roll back provisional builds the server never confirmed.
+  function tickPendingBuilds(now: number): void {
+    if (pendingBuilds.size === 0) return;
+    let changed = false;
+    for (const [pid, p] of pendingBuilds) {
+      if (now < p.expiresAt) continue;
+      pendingBuilds.delete(pid);
+      if (buildings.delete(pid)) changed = true;
+    }
+    if (changed) rebuildSectorGeometry();
   }
   function onMouseMove(e: MouseEvent): void {
     if (!pointerLocked) return;
@@ -1136,6 +1222,11 @@ export function runFpsV2Game(
     if (!ready || !canvasEl) return;
     tickInput();
     tickSelfSmoothing();
+    // Hold-drag placement: sweep the reticle with LMB held to lay
+    // a line of walls. tryPlaceBuild self-gates on debounce, tile
+    // dedupe, and ghost validity.
+    if (buildMode !== null && mouseDown && pointerLocked) tryPlaceBuild();
+    tickPendingBuilds(performance.now());
     revealAroundSelf();
     // Throttled fog persistence — only when exploration actually
     // uncovered new cells since the last write.
@@ -1614,15 +1705,27 @@ export function runFpsV2Game(
       return;
     }
     const tileSize = layout.tileSize > 0 ? layout.tileSize : 32;
-    const ox = target.tileX * tileSize;
-    const oy = target.tileY * tileSize;
+    // Ghost matches the REAL cube the placement produces (shared
+    // buildingCubeScale): benches preview as half-height inset
+    // cubes, walls as full cubes — what you see is what you place.
+    const scale = buildingCubeScale(buildMode);
+    const insetPx = scale.inset * tileSize;
+    const ox = target.tileX * tileSize + insetPx;
+    const oy = target.tileY * tileSize + insetPx;
     // Cube sits on the floor at the target tile's centre. Use
     // floor at centre so a partially-on-terrain tile picks the
     // most representative height.
-    const cx = ox + tileSize * 0.5;
-    const cy = oy + tileSize * 0.5;
+    const cx = target.tileX * tileSize + tileSize * 0.5;
+    const cy = target.tileY * tileSize + tileSize * 0.5;
     const oz = entityFloorAt(cx, cy);
-    ghostCube.setTransform(ox, oy, oz, tileSize, tileSize, tileSize);
+    ghostCube.setTransform(
+      ox,
+      oy,
+      oz,
+      tileSize - insetPx * 2,
+      tileSize - insetPx * 2,
+      BUILDING_WALL_HEIGHT * scale.heightFrac,
+    );
     const color = target.inRange ? 0x55ff88 : 0xff5555;
     ghostCube.setColor(color, 0.32);
     ghostCube.setVisible(true);
@@ -1780,8 +1883,79 @@ export function runFpsV2Game(
       const tileCenterY = ty * tileSize + tileSize * 0.5;
       onPad = insideClearingPad(layout.terrain, tileCenterX, tileCenterY);
     }
-    const inRange = withinRadius && onPad;
+    // The remaining server rejections, mirrored so the ghost is
+    // HONEST — green means the click will land, red means it won't.
+    // (The server rejects all of these silently, so without the
+    // mirror a green ghost can still refuse to build.)
+    // 1. Tile already occupied by any building (incl. a pending
+    //    optimistic placement, which lives in the same map).
+    let occupied = false;
+    for (const b of buildings.values()) {
+      if (b.tileX === tx && b.tileY === ty) {
+        occupied = true;
+        break;
+      }
+    }
+    // 2. A player's body overlaps the tile (server refuses to trap).
+    const tilePxX = tx * tileSize;
+    const tilePxY = ty * tileSize;
+    const pr = PRED_PLAYER_RADIUS;
+    let overlapped =
+      selfX + pr > tilePxX &&
+      selfX - pr < tilePxX + tileSize &&
+      selfY + pr > tilePxY &&
+      selfY - pr < tilePxY + tileSize;
+    if (!overlapped) {
+      for (const p of players.values()) {
+        if (p.characterId === init.self.characterId) continue;
+        if (
+          p.x + pr > tilePxX &&
+          p.x - pr < tilePxX + tileSize &&
+          p.y + pr > tilePxY &&
+          p.y - pr < tilePxY + tileSize
+        ) {
+          overlapped = true;
+          break;
+        }
+      }
+    }
+    // 3. Category capacity (base layouts P2). Mirrors the server's
+    //    baseBuildCategory counting. Playtest servers skip caps
+    //    server-side, so a red-at-cap ghost there is conservative.
+    let atCapacity = false;
+    const cap = layout.baseCapacity;
+    if (cap && buildMode !== null) {
+      const category = clientBuildCategory(buildMode);
+      const limit =
+        category === 'workstation'
+          ? cap.workstations
+          : category === 'storage'
+            ? cap.storage
+            : category === 'wall'
+              ? cap.walls
+              : Infinity;
+      if (limit !== Infinity) {
+        let count = 0;
+        for (const b of buildings.values()) {
+          if (clientBuildCategory(b.kind) === category) count++;
+        }
+        atCapacity = count >= limit;
+      }
+    }
+    const inRange =
+      withinRadius && onPad && !occupied && !overlapped && !atCapacity;
     return { tileX: tx, tileY: ty, inRange };
+  }
+
+  // Client mirror of the server's baseBuildCategory (scene.ts) for
+  // the capacity check above. Keep in sync.
+  function clientBuildCategory(
+    kind: import('@dumrunner/shared').BuildingKind,
+  ): 'workstation' | 'storage' | 'wall' | 'turret' | 'uncapped' {
+    if (kind === 'storage_chest') return 'storage';
+    if (isTurretKind(kind)) return 'turret';
+    if (isWallBarrierKind(kind)) return 'wall';
+    return BUILDING_REGISTRY[kind]?.isStation ? 'workstation' : 'uncapped';
   }
 
   // Texture aspect ratio (width / height). Pixi v8 Texture
@@ -2052,7 +2226,52 @@ export function runFpsV2Game(
         }
       }
     }
+    // Player-built cube tops are standable floors — mirror the
+    // server's floorAt, which resolves building-cube sectors. The
+    // static authoredSectorMap never includes live buildings, so
+    // query the buildings map directly. Cap-gated like every other
+    // floor source: grounded beside a bench (cap ≈ feet + step-up)
+    // skips it; a predicted jump raises cameraZ past the top and
+    // the camera locks onto the bench.
+    const bTop = buildingTopAt(x, y, cap);
+    if (bTop !== null && bTop > z) z = bTop;
     return z;
+  }
+
+  // Cube-top floor under a point, or null when no solid building
+  // footprint contains it. Mirrors the server's emitBuildingCubes
+  // exactly: inset footprint via the shared buildingCubeScale,
+  // terrain-anchored base (4-corner MIN), top at WALL_HEIGHT × the
+  // kind's heightFrac. Open doors have no cube.
+  const BUILDING_WALL_HEIGHT = 32; // server sectorBuild WALL_HEIGHT_WORLD
+  function buildingTopAt(x: number, y: number, cap: number): number | null {
+    const tileSize = layout?.tileSize ?? 32;
+    if (tileSize <= 0 || buildings.size === 0) return null;
+    const terrain = layout?.terrain;
+    let best: number | null = null;
+    for (const b of buildings.values()) {
+      if (b.kind === 'wall_door' && b.open === true) continue;
+      const scale = buildingCubeScale(b.kind);
+      const insetPx = scale.inset * tileSize;
+      const x0 = b.tileX * tileSize + insetPx;
+      const y0 = b.tileY * tileSize + insetPx;
+      const x1 = (b.tileX + b.width) * tileSize - insetPx;
+      const y1 = (b.tileY + b.height) * tileSize - insetPx;
+      if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+      let baseZ = 0;
+      if (terrain) {
+        baseZ = Math.min(
+          terrainHeightAt(terrain, x0, y0),
+          terrainHeightAt(terrain, x1, y0),
+          terrainHeightAt(terrain, x1, y1),
+          terrainHeightAt(terrain, x0, y1),
+        );
+      }
+      const top = baseZ + BUILDING_WALL_HEIGHT * scale.heightFrac;
+      if (top > cap) continue;
+      if (best === null || top > best) best = top;
+    }
+    return best;
   }
 
   // Local ray-casting point-in-polygon. Same shape as the
@@ -2149,10 +2368,13 @@ export function runFpsV2Game(
 
     // Stash the normalized move vector for client-side prediction in
     // tickSelfSmoothing (server normalizes diagonals, so we do too).
+    // Sprint prediction is stamina-gated: the server refuses the
+    // 1.6× multiplier on an empty tank, so predicting it would
+    // rubber-band every frame shift is held on empty.
     const mlen = Math.hypot(mx, my);
     predMoveX = mlen > 0 ? mx / mlen : 0;
     predMoveY = mlen > 0 ? my / mlen : 0;
-    predSprint = sprint && mlen > 0;
+    predSprint = sprint && mlen > 0 && selfStamina > 0;
     predCrouch = crouch;
 
     // Hold-to-fire while a weapon is equipped. Server gates by
@@ -2324,23 +2546,69 @@ export function runFpsV2Game(
 
   // Client passability for movement prediction. Tests the player
   // circle (centre + 4 cardinal edge points at radius) against the
-  // carved tile grid. Returns true (passable) when there's no tile
-  // grid — the open surface has no procgen walls, only buildings,
-  // which the server reconciliation handles. Approximate vs the
-  // server's swept-circle test, but enough to stop prediction from
-  // walking through walls.
+  // carved tile grid AND the solid building cubes. Approximate vs
+  // the server's swept-circle test, but enough to stop prediction
+  // from walking through walls or player-built structures (the
+  // latter is what kills the walk-into-your-own-wall rubber-band
+  // on the surface base, which has no tile grid).
   function predPassable(x: number, y: number): boolean {
+    const r = PRED_PLAYER_RADIUS;
     const tg = layout?.tileGrid;
     const tiles = getLayoutTiles();
-    if (!tg || !tiles) return true;
-    if (!isWalkableTileId(tileIdAt(tg, tiles, x, y))) return false;
-    const r = PRED_PLAYER_RADIUS;
+    if (tg && tiles) {
+      if (
+        !isWalkableTileId(tileIdAt(tg, tiles, x, y)) ||
+        !isWalkableTileId(tileIdAt(tg, tiles, x + r, y)) ||
+        !isWalkableTileId(tileIdAt(tg, tiles, x - r, y)) ||
+        !isWalkableTileId(tileIdAt(tg, tiles, x, y + r)) ||
+        !isWalkableTileId(tileIdAt(tg, tiles, x, y - r))
+      ) {
+        return false;
+      }
+    }
     return (
-      isWalkableTileId(tileIdAt(tg, tiles, x + r, y)) &&
-      isWalkableTileId(tileIdAt(tg, tiles, x - r, y)) &&
-      isWalkableTileId(tileIdAt(tg, tiles, x, y + r)) &&
-      isWalkableTileId(tileIdAt(tg, tiles, x, y - r))
+      !predBuildingBlocked(x, y) &&
+      !predBuildingBlocked(x + r, y) &&
+      !predBuildingBlocked(x - r, y) &&
+      !predBuildingBlocked(x, y + r) &&
+      !predBuildingBlocked(x, y - r)
     );
+  }
+
+  // True when a solid building cube blocks the point for prediction.
+  // Mirrors the cube geometry of buildingTopAt; the Z bypass lets a
+  // predicted jump arc cross a footprint whose top is at/below the
+  // predicted feet (landing on a bench), and lets a player already
+  // standing on a cube walk across it.
+  function predBuildingBlocked(x: number, y: number): boolean {
+    if (buildings.size === 0) return false;
+    const tileSize = layout?.tileSize ?? 32;
+    if (tileSize <= 0) return false;
+    const terrain = layout?.terrain;
+    for (const b of buildings.values()) {
+      if (b.kind === 'wall_door' && b.open === true) continue;
+      const scale = buildingCubeScale(b.kind);
+      const insetPx = scale.inset * tileSize;
+      const x0 = b.tileX * tileSize + insetPx;
+      const y0 = b.tileY * tileSize + insetPx;
+      const x1 = (b.tileX + b.width) * tileSize - insetPx;
+      const y1 = (b.tileY + b.height) * tileSize - insetPx;
+      if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+      let baseZ = 0;
+      if (terrain) {
+        baseZ = Math.min(
+          terrainHeightAt(terrain, x0, y0),
+          terrainHeightAt(terrain, x1, y0),
+          terrainHeightAt(terrain, x1, y1),
+          terrainHeightAt(terrain, x0, y1),
+        );
+      }
+      const top = baseZ + BUILDING_WALL_HEIGHT * scale.heightFrac;
+      // Feet at/above the top ⇒ over the cube, not into it.
+      if (cameraZ >= top - 0.5) continue;
+      return true;
+    }
+    return false;
   }
 
   function selfState(): Player {
@@ -2402,6 +2670,9 @@ export function runFpsV2Game(
       }
     },
     isSelfAirborne: () => selfAirborne || predVZ > 0,
+    setSelfStamina: (stamina: number) => {
+      selfStamina = stamina;
+    },
     setPlayerHp: (
       characterId: string,
       hp: number,
@@ -2460,6 +2731,7 @@ export function runFpsV2Game(
         predVZ = 0;
         camera.setSelfPosition(x, y, cameraZ);
         selfDead = false;
+        selfStamina = 100; // respawn restores the tank
         lastHpDropAt = 0;
         lastBigHpDropAt = 0;
       }
@@ -2596,6 +2868,22 @@ export function runFpsV2Game(
     spawnCorpse: (c: CorpseState) => corpses.set(c.id, c),
     removeCorpse: (id: string) => corpses.delete(id),
     spawnBuilding: (b: BuildingState) => {
+      // Optimistic reconcile: the server confirmation replaces the
+      // matching provisional (same tile + kind) so the cube never
+      // double-renders or flickers.
+      for (const pid of pendingBuilds.keys()) {
+        const pb = buildings.get(pid);
+        if (
+          pb &&
+          pb.tileX === b.tileX &&
+          pb.tileY === b.tileY &&
+          pb.kind === b.kind
+        ) {
+          buildings.delete(pid);
+          pendingBuilds.delete(pid);
+          break;
+        }
+      }
       buildings.set(b.id, b);
       buildingPrevHp.set(b.id, b.hp);
       rebuildSectorGeometry();
@@ -2708,6 +2996,7 @@ export function runFpsV2Game(
       loot.clear();
       corpses.clear();
       buildings.clear();
+      pendingBuilds.clear();
       props.clear();
       for (const p of [state.self, ...state.players]) {
         players.set(p.characterId, p);

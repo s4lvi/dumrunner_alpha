@@ -921,6 +921,9 @@ export function Game({
           stamina: msg.stamina,
           maxStamina: msg.maxStamina,
         }));
+        // Engine mirror — gates client-side sprint prediction so an
+        // empty tank doesn't predict speed the server won't grant.
+        gameRef.current?.setSelfStamina(msg.stamina);
         break;
       case 'player_died':
         gameRef.current?.setPlayerDead(msg.characterId);
