@@ -23,6 +23,7 @@ import {
   Graphics,
   Mesh,
   Sprite,
+  Text,
   Texture,
 } from 'pixi.js';
 import { biomeFallbackColors, convertLayoutToSectorMap } from './converter';
@@ -636,6 +637,23 @@ export function runFpsV2Game(
   const damageOverlay = new Graphics();
   damageOverlay.visible = false;
 
+  // Aim-inspect overlay — sci-fi corner brackets + "Name  hp/max"
+  // label around the building under the crosshair. Screen-space
+  // (projected from the cube's world corners each frame). Sits
+  // under the view-model so a raised weapon reads over it.
+  const inspectBrackets = new Graphics();
+  const inspectLabel = new Text({
+    text: '',
+    style: {
+      fontFamily: 'monospace',
+      fontSize: 13,
+      fill: 0x55ff88,
+      align: 'center',
+    },
+  });
+  inspectBrackets.visible = false;
+  inspectLabel.visible = false;
+
   const VIEW_MODEL_SCREEN_FRACTION = 0.42;
   const viewModel = new Sprite(Texture.EMPTY);
   viewModel.anchor.set(0.5, 1);
@@ -1205,6 +1223,8 @@ export function runFpsV2Game(
       app.stage.addChild(texturedSprites.container);
       app.stage.addChild(mountSockets.mesh);
       app.stage.addChild(ghostCube.mesh);
+      app.stage.addChild(inspectBrackets);
+      app.stage.addChild(inspectLabel);
       app.stage.addChild(damageOverlay);
       app.stage.addChild(crosshair);
       app.stage.addChild(viewModel);
@@ -1267,6 +1287,7 @@ export function runFpsV2Game(
     mountSockets.flushCamera();
     updateGhostCube();
     updateMountSockets();
+    updateAimInspect();
     // Fog params: camera world position + biome-derived colour.
     // Single write reaches every shader via the shared
     // fogUniforms group. Fog colour is the biome's wall hue
@@ -1729,6 +1750,193 @@ export function runFpsV2Game(
     const color = target.inRange ? 0x55ff88 : 0xff5555;
     ghostCube.setColor(color, 0.32);
     ghostCube.setVisible(true);
+  }
+
+  // ---- aim-inspect: name + HP + corner brackets on the aimed cube ----
+
+  // Solid cube extents for a building — the single geometry shared by
+  // the render cubes, floor queries, prediction collision, and the
+  // aim-inspect ray. Open doors have no cube.
+  function solidCubeOf(b: BuildingState): {
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+    baseZ: number;
+    topZ: number;
+  } | null {
+    if (b.kind === 'wall_door' && b.open === true) return null;
+    const tileSize = layout?.tileSize ?? 32;
+    if (tileSize <= 0) return null;
+    const scale = buildingCubeScale(b.kind);
+    const insetPx = scale.inset * tileSize;
+    const x0 = b.tileX * tileSize + insetPx;
+    const y0 = b.tileY * tileSize + insetPx;
+    const x1 = (b.tileX + b.width) * tileSize - insetPx;
+    const y1 = (b.tileY + b.height) * tileSize - insetPx;
+    let baseZ = 0;
+    const terrain = layout?.terrain;
+    if (terrain) {
+      baseZ = Math.min(
+        terrainHeightAt(terrain, x0, y0),
+        terrainHeightAt(terrain, x1, y0),
+        terrainHeightAt(terrain, x1, y1),
+        terrainHeightAt(terrain, x0, y1),
+      );
+    }
+    return {
+      x0,
+      y0,
+      x1,
+      y1,
+      baseZ,
+      topZ: baseZ + BUILDING_WALL_HEIGHT * scale.heightFrac,
+    };
+  }
+
+  // World → screen. Column-major viewProj (camera.ts); returns null
+  // when the point is at/behind the near plane.
+  function projectToScreen(
+    wx: number,
+    wy: number,
+    wz: number,
+  ): { x: number; y: number } | null {
+    if (!canvasEl) return null;
+    const m = camera.viewProj.m;
+    const cw = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
+    if (cw <= 0.05) return null;
+    const cx = m[0] * wx + m[4] * wy + m[8] * wz + m[12];
+    const cy = m[1] * wx + m[5] * wy + m[9] * wz + m[13];
+    return {
+      x: (cx / cw * 0.5 + 0.5) * canvasEl.width,
+      y: (0.5 - cy / cw * 0.5) * canvasEl.height,
+    };
+  }
+
+  // The building under the crosshair: slab ray-vs-AABB over every
+  // solid cube, nearest hit within range. The eye ray is the true
+  // 3D look direction (horizontal fwd × cos(pitch), vertical
+  // sin(pitch)).
+  const INSPECT_RANGE = 512;
+  function aimedBuilding(): BuildingState | null {
+    if (buildings.size === 0) return null;
+    const ox = selfX;
+    const oy = selfY;
+    const oz = cameraZ + camera.eyeHeightSmoothed;
+    const cp = Math.cos(camera.pitch);
+    const dx = camera.fwdX * cp;
+    const dy = camera.fwdY * cp;
+    const dz = Math.sin(camera.pitch);
+    let best: BuildingState | null = null;
+    let bestT = INSPECT_RANGE;
+    for (const b of buildings.values()) {
+      const c = solidCubeOf(b);
+      if (!c) continue;
+      // Slab test per axis; degenerate (parallel + outside) rejects.
+      let tMin = 0;
+      let tMax = bestT;
+      let ok = true;
+      const axes: [number, number, number, number][] = [
+        [ox, dx, c.x0, c.x1],
+        [oy, dy, c.y0, c.y1],
+        [oz, dz, c.baseZ, c.topZ],
+      ];
+      for (const [o, d, lo, hi] of axes) {
+        if (Math.abs(d) < 1e-6) {
+          if (o < lo || o > hi) {
+            ok = false;
+            break;
+          }
+          continue;
+        }
+        let t0 = (lo - o) / d;
+        let t1 = (hi - o) / d;
+        if (t0 > t1) {
+          const tmp = t0;
+          t0 = t1;
+          t1 = tmp;
+        }
+        if (t0 > tMin) tMin = t0;
+        if (t1 < tMax) tMax = t1;
+        if (tMin > tMax) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok || tMin >= bestT) continue;
+      best = b;
+      bestT = tMin;
+    }
+    return best;
+  }
+
+  // Draw / hide the inspect overlay for the aimed building. Brackets
+  // are the projected cube's screen AABB with L-shaped corners; the
+  // label reads "Name  hp/max" centered above. Hidden in build mode
+  // (the ghost owns the reticle there).
+  function updateAimInspect(): void {
+    const target = buildMode === null ? aimedBuilding() : null;
+    const cube = target ? solidCubeOf(target) : null;
+    if (!target || !cube || !canvasEl) {
+      inspectBrackets.visible = false;
+      inspectLabel.visible = false;
+      return;
+    }
+    // Project all 8 cube corners; any behind the near plane hides
+    // the overlay (extreme close-up — the E-prompt covers that).
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const wx of [cube.x0, cube.x1]) {
+      for (const wy of [cube.y0, cube.y1]) {
+        for (const wz of [cube.baseZ, cube.topZ]) {
+          const p = projectToScreen(wx, wy, wz);
+          if (!p) {
+            inspectBrackets.visible = false;
+            inspectLabel.visible = false;
+            return;
+          }
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        }
+      }
+    }
+    const color = 0x55ff88;
+    const len = Math.max(
+      8,
+      Math.min(20, (maxX - minX) * 0.22, (maxY - minY) * 0.22),
+    );
+    inspectBrackets.clear();
+    inspectBrackets
+      // top-left
+      .moveTo(minX, minY + len)
+      .lineTo(minX, minY)
+      .lineTo(minX + len, minY)
+      // top-right
+      .moveTo(maxX - len, minY)
+      .lineTo(maxX, minY)
+      .lineTo(maxX, minY + len)
+      // bottom-right
+      .moveTo(maxX, maxY - len)
+      .lineTo(maxX, maxY)
+      .lineTo(maxX - len, maxY)
+      // bottom-left
+      .moveTo(minX + len, maxY)
+      .lineTo(minX, maxY)
+      .lineTo(minX, maxY - len)
+      .stroke({ color, alpha: 0.85, width: 2 });
+    inspectBrackets.visible = true;
+
+    const label = BUILDING_REGISTRY[target.kind]?.label ?? target.kind;
+    const display = label.charAt(0).toUpperCase() + label.slice(1);
+    const nextText = `${display}\n${Math.ceil(target.hp)}/${target.maxHp}`;
+    if (inspectLabel.text !== nextText) inspectLabel.text = nextText;
+    inspectLabel.x = (minX + maxX) * 0.5 - inspectLabel.width * 0.5;
+    inspectLabel.y = minY - inspectLabel.height - 6;
+    inspectLabel.visible = true;
   }
 
   // Turret mount sockets (base layouts P3). The set of occupied mount
