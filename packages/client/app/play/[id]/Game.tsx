@@ -910,10 +910,21 @@ export function Game({
             msg.shield < prevSelfShieldRef.current
           ) {
             audio.playSfx('player-hit');
+            // Directional damage arc — points at the enemy body /
+            // projectile origin when the server attributed one.
+            if (msg.sourceX !== undefined && msg.sourceY !== undefined) {
+              gameRef.current?.showDamageFrom(msg.sourceX, msg.sourceY);
+            }
           }
           prevSelfHpRef.current = msg.hp;
           prevSelfShieldRef.current = msg.shield;
         }
+        break;
+      case 'hit_confirmed':
+        // Server-confirmed damage by the local player — hitmarker
+        // tick; kill confirm gets the heavier sample + red X.
+        gameRef.current?.showHitConfirm(msg.kill);
+        audio.playSfx(msg.kill ? 'robot-destroy' : 'robot-hit');
         break;
       case 'player_stamina':
         setSelfStats((s) => ({

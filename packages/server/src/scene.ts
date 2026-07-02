@@ -45,8 +45,10 @@ import {
   buildingMaxHp,
   computeWeaponImbues,
   consumeAmmo,
+  consumeMaterial,
   consumePlaceable,
   countAmmo,
+  countMaterial,
   effectiveWeaponStats,
   isStationKind,
   isWallBarrierKind,
@@ -1181,6 +1183,17 @@ export class Scene {
     ensureBuildingAsset(kind);
   }
 
+  // Kinds no player verb may demolish or repair-for-scrap: world
+  // fixtures (procgen doors/stairs/pads) and the Power Link (its
+  // lifecycle is the cycle's, not the player's — and demolishing it
+  // would fire the full dungeon reset).
+  private static readonly FIXTURE_KINDS = new Set<BuildingKind>([
+    'power_link',
+    'door',
+    'stairs_down',
+    'extract_pad',
+  ]);
+
   handleDemolishRequest(characterId: string, buildingId: string): void {
     if (this.kind !== 'surface') return;
     const conn = this.bindings.connection(characterId);
@@ -1188,6 +1201,33 @@ export class Scene {
     if (!this.members.has(characterId)) return;
     const b = this.buildings.get(buildingId);
     if (!b) return;
+    if (Scene.FIXTURE_KINDS.has(b.kind)) return;
+    // Range gate — same reach as station interaction.
+    const tileSize = this.layout?.tileSize ?? 32;
+    const cx = (b.tileX + b.width / 2) * tileSize;
+    const cy = (b.tileY + b.height / 2) * tileSize;
+    const dx = cx - conn.x;
+    const dy = cy - conn.y;
+    const reach = COMBAT.CRAFT_STATION_RANGE_PX;
+    if (dx * dx + dy * dy > reach * reach) return;
+    // A station holding finished output can't be reclaimed — the
+    // buffer's contents would be silently destroyed. Take All first.
+    if (b.output?.some((s) => s && s.kind !== 'empty')) {
+      this.bindings.send(characterId, {
+        type: 'error',
+        message: 'demolish_output_not_empty',
+      });
+      return;
+    }
+    // A station with an in-flight craft job can't be reclaimed either
+    // (the job would orphan). World-side check via bindings.
+    if (this.bindings.hasActiveCraftJob?.(buildingId)) {
+      this.bindings.send(characterId, {
+        type: 'error',
+        message: 'demolish_station_busy',
+      });
+      return;
+    }
     this.buildings.delete(buildingId);
     this.broadcast({ type: 'building_destroyed', id: buildingId });
     this.notifyBuildingsChanged();
@@ -1196,6 +1236,63 @@ export class Scene {
     // without losing the wall). Demolish doesn't refund any of the scrap
     // that originally crafted it.
     addPlaceable(conn.inventory, b.kind, 1);
+    conn.inventoryDirty = true;
+    this.bindings.send(conn.characterId, {
+      type: 'inventory_changed',
+      inventory: conn.inventory,
+    });
+  }
+
+  // Repair a damaged building to full for scrap: 1 scrap per
+  // REPAIR_HP_PER_SCRAP missing HP, rounded up. Fixtures (Power
+  // Link, procgen doors/stairs/pads) are excluded — the Link's HP is
+  // the horde's stake, and a scrap-trickle repair mid-horde would
+  // gut it. Walls/turrets/stations are exactly what the post-horde
+  // rebuild loop wants back.
+  static readonly REPAIR_HP_PER_SCRAP = 20;
+  handleRepairRequest(characterId: string, buildingId: string): void {
+    const conn = this.bindings.connection(characterId);
+    if (!conn || !conn.alive) return;
+    if (!this.members.has(characterId)) return;
+    const b = this.buildings.get(buildingId);
+    if (!b) return;
+    if (Scene.FIXTURE_KINDS.has(b.kind)) {
+      this.bindings.send(characterId, {
+        type: 'error',
+        message: 'repair_not_repairable',
+      });
+      return;
+    }
+    if (b.hp >= b.maxHp) {
+      this.bindings.send(characterId, {
+        type: 'error',
+        message: 'repair_not_damaged',
+      });
+      return;
+    }
+    const tileSize = this.layout?.tileSize ?? 32;
+    const cx = (b.tileX + b.width / 2) * tileSize;
+    const cy = (b.tileY + b.height / 2) * tileSize;
+    const dx = cx - conn.x;
+    const dy = cy - conn.y;
+    const reach = COMBAT.CRAFT_STATION_RANGE_PX;
+    if (dx * dx + dy * dy > reach * reach) return;
+    const cost = Math.ceil((b.maxHp - b.hp) / Scene.REPAIR_HP_PER_SCRAP);
+    if (countMaterial(conn.inventory, 'scrap') < cost) {
+      this.bindings.send(characterId, {
+        type: 'error',
+        message: 'repair_cant_afford',
+      });
+      return;
+    }
+    consumeMaterial(conn.inventory, 'scrap', cost);
+    b.hp = b.maxHp;
+    this.broadcast({
+      type: 'building_damaged',
+      id: b.id,
+      hp: b.hp,
+      maxHp: b.maxHp,
+    });
     conn.inventoryDirty = true;
     this.bindings.send(conn.characterId, {
       type: 'inventory_changed',
@@ -1436,7 +1533,7 @@ export class Scene {
       if (dist < 0.001) continue;
       const dot = (dx / dist) * nx + (dy / dist) * ny;
       if (dot < cosThreshold) continue;
-      this.damageEnemy(enemy, stats.damage, now);
+      this.damageEnemy(enemy, stats.damage, now, conn.characterId);
       for (const imb of imbues) {
         this.applyEnemyEffect(enemy.id, {
           id: `imbue_${imb.kind}`,
@@ -2338,7 +2435,7 @@ export class Scene {
       for (const hit of outcome.meleeDamage) {
         const target = this.bindings.connection(hit.targetCharacterId);
         if (!target || !target.alive) continue;
-        this.applyDamage(target, hit.amount, now);
+        this.applyDamage(target, hit.amount, now, { x: enemy.x, y: enemy.y });
         if (target.hp <= 0) {
           this.killPlayer(target, now);
         }
@@ -2798,7 +2895,7 @@ export class Scene {
             earliestT = t;
             hitKind = 'flesh';
             hitAction = () => {
-              this.damageEnemy(enemy, p.damage, now);
+              this.damageEnemy(enemy, p.damage, now, p.ownerCharacterId);
               // Apply each imbue to the enemy. burn_dps and
               // poison_dps push DoT into activeEffects; slow_pct
               // does the same and gets read by fsm's speed mult.
@@ -2902,8 +2999,10 @@ export class Scene {
             hitKind = 'flesh';
             const targetConn = conn;
             const killerId = p.ownerCharacterId;
+            const srcX = fromX;
+            const srcY = fromY;
             hitAction = () => {
-              this.applyDamage(targetConn, p.damage, now);
+              this.applyDamage(targetConn, p.damage, now, { x: srcX, y: srcY });
               if (targetConn.hp <= 0)
                 this.killPlayer(targetConn, now, killerId);
             };
@@ -2940,7 +3039,7 @@ export class Scene {
           earliestT = t;
           hitKind = 'flesh';
           hitAction = () => {
-            this.applyDamage(conn, p.damage, now);
+            this.applyDamage(conn, p.damage, now, { x: fromX, y: fromY });
             if (conn.hp <= 0) this.killPlayer(conn, now);
           };
         }
@@ -3140,7 +3239,17 @@ export class Scene {
     }
   }
 
-  private damageEnemy(enemy: EnemyRuntime, amount: number, now: number): void {
+  // attackerCharacterId: when the damage traces back to a player (their
+  // bullet, melee swing), that player gets a direct hit_confirmed for
+  // the client hitmarker. Turret-owned projectiles pass the building id
+  // here — the connection lookup misses and no marker is sent, which is
+  // right (nobody is aiming a turret).
+  private damageEnemy(
+    enemy: EnemyRuntime,
+    amount: number,
+    now: number,
+    attackerCharacterId?: string,
+  ): void {
     enemy.hp = Math.max(0, enemy.hp - amount);
     // Hit-stun: refresh (don't stack). Per-template duration; brutes set a
     // small value so they're effectively stun-resistant.
@@ -3154,7 +3263,14 @@ export class Scene {
       hp: enemy.hp,
       maxHp: enemy.maxHp,
     });
-    if (enemy.hp <= 0) {
+    const killed = enemy.hp <= 0;
+    if (attackerCharacterId && this.bindings.connection(attackerCharacterId)) {
+      this.bindings.send(attackerCharacterId, {
+        type: 'hit_confirmed',
+        kill: killed,
+      });
+    }
+    if (killed) {
       enemy.alive = false;
       enemy.fsm = 'dead';
       // No respawn — kills are permanent until perihelion (or a future
@@ -3298,7 +3414,15 @@ export class Scene {
   // Marks lastDamageAt so the shield regen delay restarts. Broadcasts the
   // resulting hp+shield to everyone in the scene (everyone needs to see HP
   // updates; shield is sent alongside since the wire shape carries both).
-  private applyDamage(conn: SceneConnection, amount: number, now: number): void {
+  // `source` = world position the damage came from (enemy body /
+  // projectile impact) — drives the client's directional damage arc.
+  // Omit for direction-less damage (hazards, DoT ticks).
+  private applyDamage(
+    conn: SceneConnection,
+    amount: number,
+    now: number,
+    source?: { x: number; y: number },
+  ): void {
     // Respawn-immunity grace window so a player who lands in a hot
     // surface doesn't get instantly re-killed before they can move.
     if (now < conn.respawnImmunityUntil) return;
@@ -3321,6 +3445,8 @@ export class Scene {
       maxHp: conn.maxHp,
       shield: conn.shield,
       maxShield: conn.maxShield,
+      sourceX: source?.x,
+      sourceY: source?.y,
     });
   }
 
@@ -3703,7 +3829,12 @@ export class Scene {
       if (!placed) continue; // inventory full — leave loot on the ground
       closest.inventoryDirty = true;
       this.loot.delete(id);
-      this.broadcast({ type: 'loot_despawned', id, reason: 'picked_up' });
+      this.broadcast({
+        type: 'loot_despawned',
+        id,
+        reason: 'picked_up',
+        pickerCharacterId: closest.characterId,
+      });
       this.bindings.send(closest.characterId, {
         type: 'inventory_changed',
         inventory: closest.inventory,
@@ -5501,6 +5632,11 @@ export interface SceneBindings {
   // Per-server world rule: true = bag + equipped suit drops as a corpse
   // on death (full-loot mode), false = both stay with the player.
   dropItemsOnDeath(): boolean;
+  // Read-only: whether a craft job is queued/running at this station
+  // building. Gates the reclaim/demolish verb so an in-flight job
+  // can't be orphaned. Optional so the editor sandbox bindings (no
+  // craft system) don't have to stub it.
+  hasActiveCraftJob?(buildingId: string): boolean;
   // Triggered when Scene mutates a player's equipment (currently only
   // killPlayer's death-drop). World recomputes suit stats and clamps
   // hp/shield/stamina against the new lower maxes; then broadcasts

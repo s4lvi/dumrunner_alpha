@@ -49,6 +49,11 @@ export const EYE_HEIGHT_CROUCH = 10;
 export class Camera {
   yaw = 0;
   pitch = 0;
+  // Visual-only recoil offset added to pitch in build(). Fire kicks
+  // it up; the renderer decays it back to 0 over ~100ms. Kept out
+  // of `pitch` so aim (fire direction reads camera.pitch) is never
+  // recoil-displaced — the kick is feel, not spread.
+  recoilPitch = 0;
   selfX = 0;
   selfY = 0;
   // Absolute world-z of the player's feet (smoothed by the
@@ -128,8 +133,12 @@ export class Camera {
     //   view = R_pitch * R_yaw * T(-eye)
     // R_yaw rotates world so that looking +Y is straight ahead;
     // R_pitch tilts the view up / down around the right axis.
-    const cp = Math.cos(this.pitch);
-    const sp = Math.sin(this.pitch);
+    const effPitch = Math.max(
+      -PITCH_LIMIT,
+      Math.min(PITCH_LIMIT, this.pitch + this.recoilPitch),
+    );
+    const cp = Math.cos(effPitch);
+    const sp = Math.sin(effPitch);
 
     // Combined view rotation columns. After R_pitch * R_yaw:
     //   row 0 = right axis      = ( cy,  sy,  0 )   actually ( sy, -cy, 0 )

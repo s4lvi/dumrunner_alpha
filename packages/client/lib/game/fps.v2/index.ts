@@ -485,6 +485,19 @@ export function runFpsV2Game(
   // Horde mode: surface skybox tints red when true. Drives
   // `setHordeActive` from the world-clock broadcast.
   let hordeActive = false;
+  // ---- combat feedback state ----
+  // Hitmarker timestamps (server-confirmed damage on an enemy).
+  let lastHitMarkerAt = 0;
+  let lastKillMarkerAt = 0;
+  // Directional damage: world position the last hit came from.
+  let dmgSrcX = 0;
+  let dmgSrcY = 0;
+  let dmgSrcAt = 0;
+  // Landing camera dip (world units, decays exponentially).
+  let landingDip = 0;
+  // Reload radial: start + duration of the in-flight reload.
+  let reloadRadialStart = 0;
+  let reloadRadialMs = 0;
   // Self HP — tracks deltas across setPlayerHp calls so a hit
   // can trigger a red damage overlay. selfDead drives a dimmer,
   // longer-lasting overlay variant.
@@ -691,6 +704,92 @@ export function runFpsV2Game(
       .moveTo(cx, cy + gap)
       .lineTo(cx, cy + gap + arm)
       .stroke({ color, alpha, width: 2 });
+
+    const now = performance.now();
+    // Hitmarker: 4 diagonal ticks that flare on server-confirmed
+    // damage and fade over 220ms.
+    const HIT_MS = 220;
+    const hitAge = now - lastHitMarkerAt;
+    if (hitAge < HIT_MS) {
+      const a = 0.9 * (1 - hitAge / HIT_MS);
+      const r0 = gap + 3;
+      const r1 = gap + 3 + 7;
+      const d = Math.SQRT1_2;
+      crosshair
+        .moveTo(cx - r1 * d, cy - r1 * d)
+        .lineTo(cx - r0 * d, cy - r0 * d)
+        .moveTo(cx + r0 * d, cy - r0 * d)
+        .lineTo(cx + r1 * d, cy - r1 * d)
+        .moveTo(cx - r1 * d, cy + r1 * d)
+        .lineTo(cx - r0 * d, cy + r0 * d)
+        .moveTo(cx + r0 * d, cy + r0 * d)
+        .lineTo(cx + r1 * d, cy + r1 * d)
+        .stroke({ color: 0xffffff, alpha: a, width: 2 });
+    }
+    // Kill confirm: a larger red X that lingers a bit longer.
+    const KILL_MS = 420;
+    const killAge = now - lastKillMarkerAt;
+    if (killAge < KILL_MS) {
+      const a = 0.95 * (1 - killAge / KILL_MS);
+      const r0 = gap + 5;
+      const r1 = gap + 5 + 11;
+      const d = Math.SQRT1_2;
+      crosshair
+        .moveTo(cx - r1 * d, cy - r1 * d)
+        .lineTo(cx - r0 * d, cy - r0 * d)
+        .moveTo(cx + r0 * d, cy - r0 * d)
+        .lineTo(cx + r1 * d, cy - r1 * d)
+        .moveTo(cx - r1 * d, cy + r1 * d)
+        .lineTo(cx - r0 * d, cy + r0 * d)
+        .moveTo(cx + r0 * d, cy + r0 * d)
+        .lineTo(cx + r1 * d, cy + r1 * d)
+        .stroke({ color: 0xff4444, alpha: a, width: 3 });
+    }
+    // Reload radial: progress sweep around the crosshair for the
+    // duration the server reported in reload_started.
+    if (reloadRadialMs > 0) {
+      const t = (now - reloadRadialStart) / reloadRadialMs;
+      if (t >= 1) {
+        reloadRadialMs = 0;
+      } else {
+        crosshair
+          .arc(cx, cy, gap + arm + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t)
+          .stroke({ color: 0xffd166, alpha: 0.85, width: 3 });
+      }
+    }
+  }
+
+  // Directional damage arc — a red wedge at a fixed radius from the
+  // crosshair pointing toward the damage source, fading over 900ms.
+  // Recomputed every frame so it tracks as the player turns.
+  const dmgDirGfx = new Graphics();
+  function updateDamageDirection(): void {
+    if (!canvasEl) return;
+    const now = performance.now();
+    const DIR_MS = 900;
+    const age = now - dmgSrcAt;
+    if (age >= DIR_MS || selfDead) {
+      dmgDirGfx.visible = false;
+      return;
+    }
+    // Bearing of the source relative to the camera's forward. 0 =
+    // dead ahead; positive = clockwise on screen (world right-hand
+    // convention matches the camera's right vector).
+    const worldAng = Math.atan2(dmgSrcY - selfY, dmgSrcX - selfX);
+    let rel = worldAng - camera.yaw;
+    while (rel > Math.PI) rel -= Math.PI * 2;
+    while (rel < -Math.PI) rel += Math.PI * 2;
+    const screenAng = rel - Math.PI / 2; // ahead = up
+    const cx = canvasEl.width / 2;
+    const cy = canvasEl.height / 2;
+    const radius = Math.min(canvasEl.width, canvasEl.height) * 0.16;
+    const half = 0.45; // wedge half-width in radians
+    const a = 0.7 * (1 - age / DIR_MS);
+    dmgDirGfx.clear();
+    dmgDirGfx
+      .arc(cx, cy, radius, screenAng - half, screenAng + half)
+      .stroke({ color: 0xdd2222, alpha: a, width: 6 });
+    dmgDirGfx.visible = true;
   }
 
   function updateDamageOverlay(): void {
@@ -732,11 +831,15 @@ export function runFpsV2Game(
         bumpRed(0.55 * (1 - ageBig / (DAMAGE_FLASH_MS * 1.5)));
       }
       // Low-HP background tint so the player feels the danger
-      // without needing to glance at the HUD bar.
+      // without needing to glance at the HUD bar. Pulses (~2s sine)
+      // so critical health BREATHES instead of sitting as a static
+      // wash the eye tunes out.
       if (lastSelfMaxHp > 0) {
         const hpFrac = Math.max(0, lastSelfHp) / lastSelfMaxHp;
         if (hpFrac < 0.3) {
-          bumpRed(0.14 * (1 - hpFrac / 0.3));
+          const urgency = 1 - hpFrac / 0.3;
+          const pulse = 0.5 + 0.5 * Math.sin(now / 300);
+          bumpRed(urgency * (0.1 + 0.12 * pulse));
         }
       }
     }
@@ -1230,6 +1333,7 @@ export function runFpsV2Game(
       app.stage.addChild(inspectBrackets);
       app.stage.addChild(inspectLabel);
       app.stage.addChild(damageOverlay);
+      app.stage.addChild(dmgDirGfx);
       app.stage.addChild(crosshair);
       app.stage.addChild(viewModel);
 
@@ -1278,8 +1382,11 @@ export function runFpsV2Game(
     if (canvasEl.width !== lastCanvasW || canvasEl.height !== lastCanvasH) {
       lastCanvasW = canvasEl.width;
       lastCanvasH = canvasEl.height;
-      updateCrosshair();
     }
+    // Crosshair redraws per frame now — hitmarkers, kill confirm,
+    // and the reload radial all animate through it.
+    updateCrosshair();
+    updateDamageDirection();
     // View-model needs a per-frame refresh — the animation
     // frame changes between ticks even when the weapon doesn't.
     updateViewModel();
@@ -2331,6 +2438,10 @@ export function runFpsV2Game(
         cameraZ <= targetFloor &&
         selfZ <= targetFloor + 0.01
       ) {
+        // Landing: kick a camera dip scaled by impact speed so
+        // touching down reads with weight. Capped small — a feel
+        // accent, not a screen lurch.
+        landingDip = Math.min(5, Math.abs(predVZ) * 0.035);
         cameraZ = targetFloor;
         predVZ = 0;
       }
@@ -2358,7 +2469,14 @@ export function runFpsV2Game(
         }
       }
     }
-    camera.setSelfPosition(selfX, selfY, cameraZ);
+    // Decay the visual recoil + landing dip toward rest. Time
+    // constants tuned for a snappy kick-and-recover (~100ms) and a
+    // slightly slower dip rebound.
+    camera.recoilPitch *= Math.exp(-dt / 90);
+    if (Math.abs(camera.recoilPitch) < 0.0004) camera.recoilPitch = 0;
+    landingDip *= Math.exp(-dt / 110);
+    if (landingDip < 0.05) landingDip = 0;
+    camera.setSelfPosition(selfX, selfY, cameraZ - landingDip);
     camera.setCrouching(selfCrouching);
   }
 
@@ -2972,6 +3090,8 @@ export function runFpsV2Game(
       // don't have a viewmodel to drive. Reuse the 'fire' state
       // since melee weapons author their swing as the same key.
       if (characterId !== init.self.characterId) return;
+      // Small swing kick — melee weight without gunfire's snap.
+      camera.recoilPitch = Math.min(0.045, camera.recoilPitch + 0.006);
       if (!equippedWeapon) return;
       playEntityState(
         WEAPON_VIEW_ANIM[equippedWeapon] ??
@@ -3053,6 +3173,11 @@ export function runFpsV2Game(
           'fire',
           { interrupt: true },
         );
+        // Visual recoil kick — server-confirmed shot (respects mag /
+        // reload / fire interval since the projectile actually
+        // spawned). Additive so rapid fire climbs a little; the
+        // decay in tickSelfSmoothing pulls it back.
+        camera.recoilPitch = Math.min(0.045, camera.recoilPitch + 0.012);
       }
     },
     despawnProjectile: (
@@ -3161,10 +3286,15 @@ export function runFpsV2Game(
       if (weaponId === null) mouseDown = false;
       updateViewModel();
     },
-    notifyReloadStarted: () => {
-      // Drive the view-model's reload anim. Server already gates
-      // reload validity (we wouldn't get reload_started without
-      // a real reload happening), so no client-side check here.
+    notifyReloadStarted: (durationMs?: number) => {
+      // Drive the view-model's reload anim + the crosshair radial.
+      // Server already gates reload validity (we wouldn't get
+      // reload_started without a real reload happening), so no
+      // client-side check here.
+      if (durationMs && durationMs > 0) {
+        reloadRadialStart = performance.now();
+        reloadRadialMs = durationMs;
+      }
       if (!equippedWeapon) return;
       playEntityState(
         WEAPON_VIEW_ANIM[equippedWeapon],
@@ -3172,6 +3302,16 @@ export function runFpsV2Game(
         'reload',
         { interrupt: true },
       );
+    },
+    showHitConfirm: (kill: boolean) => {
+      const now = performance.now();
+      lastHitMarkerAt = now;
+      if (kill) lastKillMarkerAt = now;
+    },
+    showDamageFrom: (x: number, y: number) => {
+      dmgSrcX = x;
+      dmgSrcY = y;
+      dmgSrcAt = performance.now();
     },
     setHordeActive: (active: boolean) => {
       hordeActive = active;

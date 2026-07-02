@@ -162,6 +162,12 @@ export type GameHandle = {
   setBuildRadiusBonus(tiles: number): void;
   setEquippedWeapon(weaponId: WeaponKind | null): void;
   notifyReloadStarted(durationMs: number): void;
+  // Server-confirmed damage on an enemy by the local player —
+  // drives the crosshair hitmarker (kill=true adds the red X).
+  showHitConfirm(kill: boolean): void;
+  // World position the local player was just damaged from — drives
+  // the directional damage arc around the crosshair.
+  showDamageFrom(x: number, y: number): void;
   setHordeActive(active: boolean): void;
   // Current world cycle from the world_clock / horde broadcasts.
   // The renderer uses it to tag persisted minimap fog and to

@@ -534,6 +534,12 @@ export class World {
         this.mode === 'deathmatch' &&
         this.deathmatchRound?.intermissionEndsAt == null,
       isPlaytest: () => this.worldConfig.isPlaytest,
+      hasActiveCraftJob: (buildingId: string) => {
+        for (const job of this.activeCraftJobs.values()) {
+          if (job.stationBuildingId === buildingId) return true;
+        }
+        return false;
+      },
       onDeathmatchKill: (killerId) => {
         // Round-state side effects only — the kill-feed line lands
         // in chat via `notifyPlayerDied`, which the existing
@@ -1800,6 +1806,13 @@ export class World {
     if (!conn) return;
     const scene = this.scenes.get(conn.sceneId);
     scene?.handleBuildRequest(characterId, kind, tileX, tileY);
+  }
+
+  handleRepairRequest(characterId: string, buildingId: string): void {
+    const conn = this.connections.get(characterId);
+    if (!conn) return;
+    const scene = this.scenes.get(conn.sceneId);
+    scene?.handleRepairRequest(characterId, buildingId);
   }
 
   handleDemolishRequest(characterId: string, buildingId: string): void {

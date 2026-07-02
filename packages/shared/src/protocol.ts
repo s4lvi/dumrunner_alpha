@@ -937,6 +937,15 @@ export const RerollAffixesMsgSchema = z.object({
   slot: slotIndex,
 });
 
+// Repair a damaged building for scrap (1 scrap per REPAIR_HP_PER_SCRAP
+// missing HP, rounded up — see crafting constants). Server validates
+// proximity, that the kind is player-repairable (procgen fixtures are
+// not), and the scrap cost; restores to full HP.
+export const RepairRequestMsgSchema = z.object({
+  type: z.literal('repair_request'),
+  buildingId: z.string(),
+});
+
 // Drop a slot's contents on the ground at the player's current
 // position. `all` = drop the whole stack; otherwise drop a single
 // unit (matches the inventory_discard semantics).
@@ -1103,6 +1112,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   GiveItemMsgSchema,
   SalvageRequestMsgSchema,
   RerollAffixesMsgSchema,
+  RepairRequestMsgSchema,
   SandboxSpawnEnemyMsgSchema,
   SandboxClearMsgSchema,
   SandboxSetLoadoutMsgSchema,
@@ -1311,7 +1321,14 @@ export type ServerMessage =
       // Absent ⇒ grounded.
       airborne?: boolean;
     }
-  | { type: 'player_damaged'; characterId: string; hp: number; maxHp: number; shield: number; maxShield: number }
+  // sourceX/sourceY: world position the damage came from (enemy body,
+  // projectile impact) — drives the client's directional damage arc.
+  // Omitted for direction-less damage (hazard ticks, DoT).
+  | { type: 'player_damaged'; characterId: string; hp: number; maxHp: number; shield: number; maxShield: number; sourceX?: number; sourceY?: number }
+  // Direct-to-attacker confirmation that their shot/swing damaged an
+  // enemy this tick. Drives hitmarkers; kill=true renders the kill
+  // confirm variant.
+  | { type: 'hit_confirmed'; kill: boolean }
   | { type: 'player_stamina'; stamina: number; maxStamina: number }
   | { type: 'player_died'; characterId: string }
   | { type: 'player_respawned'; characterId: string; x: number; y: number; hp: number; maxHp: number; stamina: number; maxStamina: number; shield: number; maxShield: number }
@@ -1338,7 +1355,10 @@ export type ServerMessage =
       hitKind?: 'flesh' | 'surface';
     }
   | { type: 'loot_spawned'; loot: LootState }
-  | { type: 'loot_despawned'; id: string; reason: 'picked_up' | 'expired' }
+  // pickerCharacterId set when reason='picked_up' — lets the picker's
+  // client resolve WHAT it grabbed (from its own loot map) for the
+  // pickup toast feed.
+  | { type: 'loot_despawned'; id: string; reason: 'picked_up' | 'expired'; pickerCharacterId?: string }
   | { type: 'corpse_spawned'; corpse: CorpseState }
   | { type: 'corpse_looted'; id: string; byCharacterId: string }
   | { type: 'building_placed'; building: BuildingState }
@@ -1529,4 +1549,4 @@ export type ServerMessage =
 
 // Bump on any wire-incompatible change. The auth handshake includes this
 // number; servers reject mismatched clients with a clear error.
-export const PROTOCOL_VERSION = 51;
+export const PROTOCOL_VERSION = 52;

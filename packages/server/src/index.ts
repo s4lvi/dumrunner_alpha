@@ -93,6 +93,7 @@ const MESSAGE_HANDLERS: ClientMessageHandlers = {
   build_request: (w, c, m) =>
     w.handleBuildRequest(c, m.kind, m.tileX, m.tileY),
   demolish_request: (w, c, m) => w.handleDemolishRequest(c, m.buildingId),
+  repair_request: (w, c, m) => w.handleRepairRequest(c, m.buildingId),
   select_hotbar: (w, c, m) => w.handleSelectHotbar(c, m.slot),
   inventory_swap: (w, c, m) => w.handleInventorySwap(c, m.from, m.to),
   inventory_discard: (w, c, m) => w.handleInventoryDiscard(c, m.slot, m.all),
