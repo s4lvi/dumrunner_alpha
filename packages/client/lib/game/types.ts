@@ -50,6 +50,10 @@ export type GameInit = {
     tileY: number,
   ) => void;
   sendDemolish: (buildingId: string) => void;
+  // Repair the aimed building to full for scrap (server validates
+  // cost/range/kind). Bound to F on the aim-inspect HUD. Optional —
+  // editor sandboxes don't wire it.
+  sendRepair?: (buildingId: string) => void;
   onNearInteractableChanged: (
     near: { id: string; label: string } | null,
   ) => void;

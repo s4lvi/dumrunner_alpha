@@ -201,6 +201,24 @@ export function Game({
     id: null,
     hp: 0,
   });
+  // Perihelion T-60s warning banner (edge-detected off world_clock).
+  const [perihelionWarnUntil, setPerihelionWarnUntil] = useState(0);
+  const prevSecondsToPerihelionRef = useRef<number | null>(null);
+  // Horde telegraphy: duration for the wave counter + per-horde
+  // kill/loss tally for the end-of-horde summary.
+  const hordeDurationSecRef = useRef(60);
+  const hordeActiveRef = useRef(false);
+  const hordeStatsRef = useRef({ kills: 0, buildingsLost: 0 });
+  const [hordeSummary, setHordeSummary] = useState<{
+    kills: number;
+    buildingsLost: number;
+    linkHp: number;
+  } | null>(null);
+  // Extraction recap banner (dungeon → surface with a live player).
+  const prevSceneIdRef = useRef('surface');
+  const [extractRecap, setExtractRecap] = useState<{
+    items: number;
+  } | null>(null);
   const lastLinkAlarmSfxRef = useRef(0);
   const syncPowerLinkRef = (bs: { id: string; kind: string; hp: number }[]) => {
     const link = bs.find((b) => b.kind === 'power_link');
@@ -479,6 +497,7 @@ export function Game({
     sendFire: (dx: number, dy: number, dz?: number) => void;
     sendBuild: (kind: PlaceableBuildingKind, tx: number, ty: number) => void;
     sendDemolish: (id: string) => void;
+    sendRepair: (id: string) => void;
     onNearInteractableChanged: (
       near: { id: string; label: string } | null
     ) => void;
@@ -817,6 +836,12 @@ export function Game({
             const m: ClientMessage = { type: 'demolish_request', buildingId };
             ws.send(JSON.stringify(m));
           },
+          sendRepair: (buildingId) => {
+            const ws = session.ws;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const m: ClientMessage = { type: 'repair_request', buildingId };
+            ws.send(JSON.stringify(m));
+          },
           onNearInteractableChanged: (near) => {
             nearInteractableRef.current = near;
             setNearInteractable(near);
@@ -944,9 +969,9 @@ export function Game({
         break;
       case 'hit_confirmed':
         // Server-confirmed damage by the local player — hitmarker
-        // tick; kill confirm gets the heavier sample + red X.
+        // tick / kill-confirm X. Visual only: the enemy_damaged /
+        // enemy_killed broadcasts already carry the audio.
         gameRef.current?.showHitConfirm(msg.kill);
-        audio.playSfx(msg.kill ? 'robot-destroy' : 'robot-hit');
         break;
       case 'player_stamina':
         setSelfStats((s) => ({
@@ -1040,6 +1065,22 @@ export function Game({
         }
         break;
       case 'scene_changed':
+        // Extraction recap: dungeon → surface with a live player is
+        // the extract-pad path (death arrives with hp 0). The payoff
+        // moment of the loop gets a beat instead of a bare teleport.
+        if (
+          prevSceneIdRef.current !== 'surface' &&
+          msg.sceneId === 'surface' &&
+          msg.self.hp > 0
+        ) {
+          const bag = prevInventoryRef.current;
+          const items = bag
+            ? bag.filter((s) => s.kind !== 'empty').length
+            : 0;
+          setExtractRecap({ items });
+          setTimeout(() => setExtractRecap(null), 5000);
+        }
+        prevSceneIdRef.current = msg.sceneId;
         setSceneId(msg.sceneId);
         setTransitionTick((t) => t + 1);
         setCurrentLayout(msg.layout);
@@ -1090,6 +1131,7 @@ export function Game({
       case 'enemy_killed':
         gameRef.current?.removeEnemy(msg.id);
         audio.playSfx('robot-destroy');
+        if (hordeActiveRef.current) hordeStatsRef.current.kills++;
         break;
       case 'projectile_spawned': {
         // Self-fired projectiles play the pistol report. Turret-fired
@@ -1201,6 +1243,7 @@ export function Game({
         break;
       case 'building_destroyed':
         gameRef.current?.removeBuilding(msg.id);
+        if (hordeActiveRef.current) hordeStatsRef.current.buildingsLost++;
         setBuildings((m) => {
           if (!m.has(msg.id)) return m;
           const next = new Map(m);
@@ -1234,6 +1277,19 @@ export function Game({
           secondsToPerihelion: msg.secondsToPerihelion,
           hordeActive: msg.hordeActive,
         });
+        // T-60s perihelion warning — edge-triggered so it fires
+        // exactly once per cycle as the countdown crosses a minute.
+        if (
+          !msg.hordeActive &&
+          msg.secondsToPerihelion <= 60 &&
+          (prevSecondsToPerihelionRef.current ?? Infinity) > 60
+        ) {
+          setPerihelionWarnUntil(Date.now() + 5000);
+          audio.playSfx('robot-detect');
+        }
+        prevSecondsToPerihelionRef.current = msg.hordeActive
+          ? null
+          : msg.secondsToPerihelion;
         // Feed the renderer so persisted minimap fog gets tagged
         // with (and invalidated by) the current cycle.
         gameRef.current?.setWorldCycle(msg.cycle);
@@ -1300,12 +1356,16 @@ export function Game({
           hordeActive: true,
         });
         gameRef.current?.setWorldCycle(msg.cycle);
+        hordeActiveRef.current = true;
+        hordeDurationSecRef.current = Math.ceil(msg.durationMs / 1000);
+        hordeStatsRef.current = { kills: 0, buildingsLost: 0 };
+        setHordeSummary(null);
         // Alarm stinger so the moment reads as a hostile shift —
         // the HUD-only red pulse on its own undersold the horde
         // start. robot-detect is the closest existing alert SFX.
         audio.playSfx('robot-detect');
         break;
-      case 'horde_ended':
+      case 'horde_ended': {
         setWorldClock((prev) =>
           prev
             ? { ...prev, cycle: msg.newCycle, hordeActive: false }
@@ -1314,7 +1374,15 @@ export function Game({
         // Cycle bump regenerates dungeon floors — the renderer
         // drops fog explored in the prior cycle.
         gameRef.current?.setWorldCycle(msg.newCycle);
+        // End-of-horde scoreboard: what this defense cost and paid.
+        hordeActiveRef.current = false;
+        setHordeSummary({
+          ...hordeStatsRef.current,
+          linkHp: powerLinkRef.current.hp,
+        });
+        setTimeout(() => setHordeSummary(null), 8000);
         break;
+      }
       case 'inventory_changed': {
         // Diff the new inventory against the previous snapshot to fire
         // pickup SFX. Pure state changes (sort, equip, swap) shouldn't
@@ -1965,6 +2033,52 @@ export function Game({
             </div>
           </div>
         )}
+        {perihelionWarnUntil > Date.now() && !worldClock?.hordeActive && (
+          <div className="absolute top-16 inset-x-0 pointer-events-none select-none z-40 flex justify-center">
+            <div className="text-sm font-bold px-3 py-1.5 rounded bg-amber-950/70 text-amber-300 tracking-widest">
+              ☀ PERIHELION IN 60s — GET TO THE SURFACE
+            </div>
+          </div>
+        )}
+        {worldClock?.hordeActive && (
+          <div className="absolute top-24 inset-x-0 pointer-events-none select-none z-40 flex justify-center">
+            <div className="text-xs font-bold px-2 py-1 rounded bg-black/50 text-red-300 tracking-widest">
+              WAVE{' '}
+              {Math.min(
+                Math.ceil(hordeDurationSecRef.current / 15),
+                1 +
+                  Math.floor(
+                    (hordeDurationSecRef.current -
+                      worldClock.secondsToPerihelion) /
+                      15
+                  )
+              )}
+              /{Math.ceil(hordeDurationSecRef.current / 15)}
+            </div>
+          </div>
+        )}
+        {hordeSummary && (
+          <div className="absolute top-24 inset-x-0 pointer-events-none select-none z-40 flex justify-center">
+            <div className="text-xs px-3 py-2 rounded bg-black/60 text-zinc-200 text-center leading-5">
+              <div className="font-bold text-red-300 tracking-widest">
+                PERIHELION SURVIVED
+              </div>
+              <div>
+                {hordeSummary.kills} kills · {hordeSummary.buildingsLost}{' '}
+                structures lost · Link{' '}
+                {powerLinkRef.current.id ? `${Math.ceil(hordeSummary.linkHp)} HP` : 'DESTROYED'}
+              </div>
+            </div>
+          </div>
+        )}
+        {extractRecap && (
+          <div className="absolute top-24 inset-x-0 pointer-events-none select-none z-40 flex justify-center">
+            <div className="text-xs px-3 py-2 rounded bg-black/60 text-emerald-200 text-center leading-5">
+              <div className="font-bold tracking-widest">EXTRACTED</div>
+              <div>{extractRecap.items} items banked</div>
+            </div>
+          </div>
+        )}
         <ChatPanel
           log={chatLog}
           onSend={(text) => sendOnLiveWs({ type: 'chat', text })}
@@ -2500,6 +2614,16 @@ function friendlyErrorMessage(code: string): string {
       return 'Only dropped parts can be rerolled.';
     case 'reroll_cant_afford':
       return 'Not enough materials to reroll.';
+    case 'repair_cant_afford':
+      return 'Not enough scrap to repair.';
+    case 'repair_not_damaged':
+      return 'Already at full health.';
+    case 'repair_not_repairable':
+      return 'This structure can\'t be repaired.';
+    case 'demolish_output_not_empty':
+      return 'Take the station\'s output first.';
+    case 'demolish_station_busy':
+      return 'A craft job is still running here.';
     case 'give_too_far':
       return 'Too far from the recipient.';
     case 'recipient_inventory_full':
@@ -2525,6 +2649,11 @@ function isExpectedServerError(code: string): boolean {
     code === 'reroll_needs_forge' ||
     code === 'reroll_not_part' ||
     code === 'reroll_cant_afford' ||
+    code === 'repair_cant_afford' ||
+    code === 'repair_not_damaged' ||
+    code === 'repair_not_repairable' ||
+    code === 'demolish_output_not_empty' ||
+    code === 'demolish_station_busy' ||
     code === 'give_too_far' ||
     code === 'recipient_inventory_full'
   );

@@ -1273,9 +1273,33 @@ export function runFpsV2Game(
       ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement
     );
   }
+  // Kinds the repair / reclaim verbs never touch — world fixtures
+  // plus the Power Link (mirrors the server's FIXTURE_KINDS).
+  function isFixtureKind(kind: BuildingState['kind']): boolean {
+    return (
+      kind === 'power_link' ||
+      kind === 'door' ||
+      kind === 'stairs_down' ||
+      kind === 'extract_pad'
+    );
+  }
+
   function onKeyDown(e: KeyboardEvent): void {
     if (isFormFocus()) return;
     keys.add(e.code);
+    // Aim-verb keys: F repairs / G reclaims the building under the
+    // crosshair (server validates range, cost, and kind — these are
+    // best-effort sends gated by the same client checks the inspect
+    // label shows).
+    if ((e.code === 'KeyF' || e.code === 'KeyG') && buildMode === null) {
+      const target = aimedBuilding();
+      if (!target || isFixtureKind(target.kind)) return;
+      if (e.code === 'KeyF' && target.hp < target.maxHp) {
+        init.sendRepair?.(target.id);
+      } else if (e.code === 'KeyG') {
+        init.sendDemolish(target.id);
+      }
+    }
   }
   function onKeyUp(e: KeyboardEvent): void {
     if (isFormFocus()) return;
@@ -2070,7 +2094,17 @@ export function runFpsV2Game(
 
     const label = BUILDING_REGISTRY[target.kind]?.label ?? target.kind;
     const display = label.charAt(0).toUpperCase() + label.slice(1);
-    const nextText = `${display}\n${Math.ceil(target.hp)}/${target.maxHp}`;
+    let nextText = `${display}\n${Math.ceil(target.hp)}/${target.maxHp}`;
+    // Verb hints — mirror the server's gates so the hint only shows
+    // when the key will actually work. Repair cost mirrors
+    // REPAIR_HP_PER_SCRAP (20 missing HP per scrap).
+    if (!isFixtureKind(target.kind)) {
+      if (target.hp < target.maxHp) {
+        const cost = Math.ceil((target.maxHp - target.hp) / 20);
+        nextText += `\n[F] Repair (${cost} scrap)`;
+      }
+      nextText += '\n[G] Reclaim';
+    }
     if (inspectLabel.text !== nextText) inspectLabel.text = nextText;
     inspectLabel.x = (minX + maxX) * 0.5 - inspectLabel.width * 0.5;
     inspectLabel.y = minY - inspectLabel.height - 6;
