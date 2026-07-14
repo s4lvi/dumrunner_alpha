@@ -67,8 +67,12 @@ import {
 
 import type { GameHandle, GameInit, SceneState } from '../types';
 import {
+  ATTACHMENT_DEFS,
   BUILDING_REGISTRY,
   INTERACTABLE_RADIUS,
+  MATERIALS,
+  partDisplayName,
+  weaponDisplayName,
   WEAPON_PROJECTILE_ANIM,
   WEAPON_VIEW_ANIM,
   WEAPON_FAMILY,
@@ -1330,6 +1334,10 @@ export function runFpsV2Game(
       app.stage.addChild(texturedSprites.container);
       app.stage.addChild(mountSockets.mesh);
       app.stage.addChild(ghostCube.mesh);
+      app.stage.addChild(lootBeams);
+      app.stage.addChild(corpseMarker);
+      app.stage.addChild(corpseLabel);
+      app.stage.addChild(compassGfx);
       app.stage.addChild(inspectBrackets);
       app.stage.addChild(inspectLabel);
       app.stage.addChild(damageOverlay);
@@ -1415,6 +1423,9 @@ export function runFpsV2Game(
     updateGhostCube();
     updateMountSockets();
     updateAimInspect();
+    updateLootBeams();
+    updateCorpseMarker();
+    updateCompass();
     // Fog params: camera world position + biome-derived colour.
     // Single write reaches every shader via the shared
     // fogUniforms group. Fog colour is the biome's wall hue
@@ -2064,6 +2075,237 @@ export function runFpsV2Game(
     inspectLabel.x = (minX + maxX) * 0.5 - inspectLabel.width * 0.5;
     inspectLabel.y = minY - inspectLabel.height - 6;
     inspectLabel.visible = true;
+  }
+
+  // ---- loot rarity beams / corpse waypoint / compass ----
+
+  // Tier-coloured vertical beams over dropped loot ("the chase is
+  // the drop" needs drops visible across a room). Screen-space
+  // lines from the drop's ground point to a point ~40 units up.
+  const lootBeams = new Graphics();
+  function lootTint(l: LootState): number {
+    const c = l.content;
+    if (c.kind === 'part') return TIER_COLORS_NUM[c.part.tier] ?? 0xffffff;
+    if (c.kind === 'material') return materialTint(c.materialId);
+    if (c.kind === 'slot') {
+      const s = c.slot;
+      if (s.kind === 'attachment') {
+        return TIER_COLORS_NUM[s.instance.tier] ?? 0xffffff;
+      }
+      if (s.kind === 'part') return TIER_COLORS_NUM[s.part.tier] ?? 0xffffff;
+    }
+    return 0xbbbbbb;
+  }
+  function updateLootBeams(): void {
+    lootBeams.clear();
+    if (loot.size === 0 || !canvasEl) {
+      lootBeams.visible = false;
+      return;
+    }
+    let drew = false;
+    for (const l of loot.values()) {
+      const gz = entityFloorAt(l.x, l.y);
+      const base = projectToScreen(l.x, l.y, gz + 2);
+      const top = projectToScreen(l.x, l.y, gz + 42);
+      if (!base || !top) continue;
+      const color = lootTint(l);
+      lootBeams
+        .moveTo(base.x, base.y)
+        .lineTo(top.x, top.y)
+        .stroke({ color, alpha: 0.35, width: 5 });
+      lootBeams
+        .moveTo(base.x, base.y)
+        .lineTo(top.x, top.y)
+        .stroke({ color, alpha: 0.85, width: 1.5 });
+      drew = true;
+    }
+    lootBeams.visible = drew;
+  }
+
+  // Human-readable label for a loot entry — resolved by Game.tsx
+  // right before despawn for the pickup toast feed.
+  function describeLoot(id: string): string | null {
+    const l = loot.get(id);
+    if (!l) return null;
+    const c = l.content;
+    if (c.kind === 'material') {
+      const name = MATERIALS[c.materialId]?.name ?? c.materialId;
+      return c.count > 1 ? `+${c.count} ${name}` : `+1 ${name}`;
+    }
+    if (c.kind === 'part') return partDisplayName(c.part);
+    const s = c.slot;
+    switch (s.kind) {
+      case 'attachment': {
+        const def = ATTACHMENT_DEFS[s.instance.defId];
+        return `${s.instance.tier} ${def?.displayName ?? s.instance.defId}`;
+      }
+      case 'part':
+        return partDisplayName(s.part);
+      case 'weapon':
+        return weaponDisplayName(s.weapon);
+      case 'material': {
+        const name = MATERIALS[s.materialId]?.name ?? s.materialId;
+        return `+${s.count} ${name}`;
+      }
+      case 'ammo':
+        return `+${s.count} ammo`;
+      case 'consumable':
+        return s.consumableId;
+      case 'placeable':
+        return BUILDING_REGISTRY[s.buildingKind]?.label ?? s.buildingKind;
+      default:
+        return 'item';
+    }
+  }
+
+  // Own-corpse waypoint: a red diamond + distance readout, clamped
+  // to the screen edge when the corpse is off-screen / behind. Only
+  // for the local player's corpse in the CURRENT scene — the
+  // corpse-run's navigation aid.
+  const corpseMarker = new Graphics();
+  const corpseLabel = new Text({
+    text: '',
+    style: { fontFamily: 'monospace', fontSize: 12, fill: 0xff7766 },
+  });
+  function updateCorpseMarker(): void {
+    if (!canvasEl) return;
+    let own: CorpseState | null = null;
+    for (const c of corpses.values()) {
+      if (c.ownerCharacterId === init.self.characterId) {
+        own = c;
+        break;
+      }
+    }
+    if (!own) {
+      corpseMarker.visible = false;
+      corpseLabel.visible = false;
+      return;
+    }
+    const W = canvasEl.width;
+    const H = canvasEl.height;
+    const gz = entityFloorAt(own.x, own.y);
+    const p = projectToScreen(own.x, own.y, gz + 14);
+    let sx: number;
+    let sy: number;
+    if (p && p.x >= 0 && p.x <= W && p.y >= 0 && p.y <= H) {
+      sx = p.x;
+      sy = p.y;
+    } else {
+      // Off-screen / behind: clamp along the bearing to the screen
+      // edge so the marker points the way.
+      const worldAng = Math.atan2(own.y - selfY, own.x - selfX);
+      let rel = worldAng - camera.yaw;
+      while (rel > Math.PI) rel -= Math.PI * 2;
+      while (rel < -Math.PI) rel += Math.PI * 2;
+      const ang = rel - Math.PI / 2;
+      const cx = W / 2;
+      const cy = H / 2;
+      const rEdge = Math.min(W, H) * 0.42;
+      sx = cx + Math.cos(ang) * rEdge;
+      sy = cy + Math.sin(ang) * rEdge;
+    }
+    const dist = Math.round(Math.hypot(own.x - selfX, own.y - selfY) / 32);
+    corpseMarker.clear();
+    corpseMarker
+      .moveTo(sx, sy - 8)
+      .lineTo(sx + 8, sy)
+      .lineTo(sx, sy + 8)
+      .lineTo(sx - 8, sy)
+      .lineTo(sx, sy - 8)
+      .stroke({ color: 0xff5544, alpha: 0.95, width: 2 });
+    corpseMarker.visible = true;
+    corpseLabel.text = `${dist}m`;
+    corpseLabel.x = sx - corpseLabel.width / 2;
+    corpseLabel.y = sy + 11;
+    corpseLabel.visible = true;
+  }
+
+  // Compass strip — a top-center bearing tape with objective
+  // markers: Power Link (P, cyan), stairs down (S, amber), extract
+  // pad (E, green), own corpse (C, red). Markers slide across the
+  // tape as the player turns; the notch is dead ahead.
+  const compassGfx = new Graphics();
+  const compassMarks: { key: string; text: Text }[] = [];
+  function compassMark(key: string, color: number): Text {
+    let m = compassMarks.find((m) => m.key === key);
+    if (!m) {
+      m = {
+        key,
+        text: new Text({
+          text: key,
+          style: {
+            fontFamily: 'monospace',
+            fontSize: 13,
+            fontWeight: 'bold',
+            fill: color,
+          },
+        }),
+      };
+      compassMarks.push(m);
+      app?.stage.addChild(m.text);
+    }
+    return m.text;
+  }
+  function updateCompass(): void {
+    if (!canvasEl) return;
+    const W = canvasEl.width;
+    const cx = W / 2;
+    const tapeHalf = W * 0.17;
+    const y = 14;
+    compassGfx.clear();
+    compassGfx
+      .moveTo(cx - tapeHalf, y)
+      .lineTo(cx + tapeHalf, y)
+      .stroke({ color: 0xffffff, alpha: 0.18, width: 2 })
+      .moveTo(cx, y - 5)
+      .lineTo(cx, y + 5)
+      .stroke({ color: 0xffffff, alpha: 0.5, width: 2 });
+    compassGfx.visible = true;
+
+    // Collect the markers present in this scene.
+    const targets: { key: string; color: number; x: number; y: number }[] = [];
+    for (const b of buildings.values()) {
+      const tileSize = layout?.tileSize ?? 32;
+      const bx = (b.tileX + b.width / 2) * tileSize;
+      const by = (b.tileY + b.height / 2) * tileSize;
+      if (b.kind === 'power_link') {
+        targets.push({ key: 'P', color: 0x55ddff, x: bx, y: by });
+      } else if (b.kind === 'stairs_down') {
+        targets.push({ key: 'S', color: 0xffd166, x: bx, y: by });
+      } else if (b.kind === 'extract_pad') {
+        targets.push({ key: 'E', color: 0x55ff88, x: bx, y: by });
+      }
+    }
+    for (const c of corpses.values()) {
+      if (c.ownerCharacterId === init.self.characterId) {
+        targets.push({ key: 'C', color: 0xff5544, x: c.x, y: c.y });
+        break;
+      }
+    }
+    const ARC = (75 * Math.PI) / 180;
+    const seen = new Set<string>();
+    for (const t of targets) {
+      const mark = compassMark(t.key, t.color);
+      seen.add(t.key);
+      const worldAng = Math.atan2(t.y - selfY, t.x - selfX);
+      let rel = worldAng - camera.yaw;
+      while (rel > Math.PI) rel -= Math.PI * 2;
+      while (rel < -Math.PI) rel += Math.PI * 2;
+      if (Math.abs(rel) > ARC) {
+        // Pin at the tape edge so out-of-arc objectives still show
+        // which side to turn toward.
+        rel = Math.sign(rel) * ARC;
+        mark.alpha = 0.45;
+      } else {
+        mark.alpha = 1;
+      }
+      mark.x = cx + (rel / ARC) * tapeHalf - mark.width / 2;
+      mark.y = y + 6;
+      mark.visible = true;
+    }
+    for (const m of compassMarks) {
+      if (!seen.has(m.key)) m.text.visible = false;
+    }
   }
 
   // Turret mount sockets (base layouts P3). The set of occupied mount
@@ -3313,6 +3555,7 @@ export function runFpsV2Game(
       dmgSrcY = y;
       dmgSrcAt = performance.now();
     },
+    describeLoot: (id: string) => describeLoot(id),
     setHordeActive: (active: boolean) => {
       hordeActive = active;
     },

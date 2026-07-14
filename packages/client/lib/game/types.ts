@@ -168,6 +168,9 @@ export type GameHandle = {
   // World position the local player was just damaged from — drives
   // the directional damage arc around the crosshair.
   showDamageFrom(x: number, y: number): void;
+  // Human-readable label for a live loot entry (call BEFORE
+  // despawning it) — feeds the pickup toast feed.
+  describeLoot(id: string): string | null;
   setHordeActive(active: boolean): void;
   // Current world cycle from the world_clock / horde broadcasts.
   // The renderer uses it to tag persisted minimap fog and to

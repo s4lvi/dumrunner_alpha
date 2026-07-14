@@ -187,6 +187,27 @@ export function Game({
   // Epoch ms when an in-progress reload completes; null = not reloading.
   // Set on reload_started for the local player; cleared on weapon_reloaded.
   const [reloadEndsAt, setReloadEndsAt] = useState<number | null>(null);
+  // Pickup toast feed — short-lived "+3 Scrap" lines stacked above
+  // the hotbar. Ids are monotonic; each toast self-expires.
+  const [pickupToasts, setPickupToasts] = useState<
+    { id: number; text: string }[]
+  >([]);
+  const nextToastIdRef = useRef(0);
+  // Power-Link-under-attack alarm. Ref mirror of the Link's id+hp so
+  // the WS handler (stale-closure prone) can detect damage without
+  // reading React state; the banner clears itself via the timestamp.
+  const [linkAlarmUntil, setLinkAlarmUntil] = useState(0);
+  const powerLinkRef = useRef<{ id: string | null; hp: number }>({
+    id: null,
+    hp: 0,
+  });
+  const lastLinkAlarmSfxRef = useRef(0);
+  const syncPowerLinkRef = (bs: { id: string; kind: string; hp: number }[]) => {
+    const link = bs.find((b) => b.kind === 'power_link');
+    powerLinkRef.current = link
+      ? { id: link.id, hp: link.hp }
+      : { id: null, hp: 0 };
+  };
   // Chat log. Capped to a sliding window so old messages roll off; the
   // visible panel always shows the most recent few. System messages
   // (joins, leaves, deaths) and player-typed lines are stored here
@@ -742,6 +763,7 @@ export function Game({
         setKnownBlueprints(new Set(msg.knownBlueprints));
         if (msg.baseLayoutId) setBaseLayoutId(msg.baseLayoutId);
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
+        syncPowerLinkRef(msg.buildings);
         selfIdRef.current = msg.self.characterId;
         prevSelfHpRef.current = msg.self.hp;
         prevSelfShieldRef.current = msg.self.shield;
@@ -1024,6 +1046,7 @@ export function Game({
         if (msg.baseLayoutId) setBaseLayoutId(msg.baseLayoutId);
         setEquipment(msg.equipment);
         setBuildings(new Map(msg.buildings.map((b) => [b.id, b])));
+        syncPowerLinkRef(msg.buildings);
         // Server uses scene_changed (not player_respawned) when a
         // dungeon death sends the player back to the surface — the
         // self payload reflects the post-respawn alive/hp state.
@@ -1105,6 +1128,22 @@ export function Game({
         gameRef.current?.spawnLoot(msg.loot);
         break;
       case 'loot_despawned':
+        // Pickup toast: resolve the label from the engine's loot map
+        // BEFORE despawning removes it.
+        if (
+          msg.reason === 'picked_up' &&
+          msg.pickerCharacterId === selfIdRef.current
+        ) {
+          const text = gameRef.current?.describeLoot(msg.id);
+          if (text) {
+            const toastId = nextToastIdRef.current++;
+            setPickupToasts((t) => [...t.slice(-5), { id: toastId, text }]);
+            setTimeout(
+              () => setPickupToasts((t) => t.filter((x) => x.id !== toastId)),
+              2600
+            );
+          }
+        }
         gameRef.current?.despawnLoot(msg.id);
         break;
       case 'corpse_spawned':
@@ -1115,6 +1154,12 @@ export function Game({
         break;
       case 'building_placed':
         gameRef.current?.spawnBuilding(msg.building);
+        if (msg.building.kind === 'power_link') {
+          powerLinkRef.current = {
+            id: msg.building.id,
+            hp: msg.building.hp,
+          };
+        }
         // building_placed double-duties as "building state changed" —
         // server re-emits when output buffers shift. Replace by id.
         setBuildings((m) => {
@@ -1125,6 +1170,23 @@ export function Game({
         break;
       case 'building_damaged':
         gameRef.current?.setBuildingHp(msg.id, msg.hp, msg.maxHp);
+        // Power-Link-under-attack alarm: banner + throttled klaxon.
+        // The Link falling mid-cycle resets the whole dungeon push —
+        // nobody should learn it's under fire from the death screen.
+        if (
+          msg.id === powerLinkRef.current.id &&
+          msg.hp < powerLinkRef.current.hp
+        ) {
+          setLinkAlarmUntil(Date.now() + 3000);
+          const now = Date.now();
+          if (now - lastLinkAlarmSfxRef.current > 4000) {
+            lastLinkAlarmSfxRef.current = now;
+            audio.playSfx('robot-detect');
+          }
+        }
+        if (msg.id === powerLinkRef.current.id) {
+          powerLinkRef.current.hp = msg.hp;
+        }
         setBuildings((m) => {
           const existing = m.get(msg.id);
           if (!existing) return m;
@@ -1882,6 +1944,27 @@ export function Game({
           hotbarSelection={hotbarSelection}
           reloadEndsAt={reloadEndsAt}
         />
+        {pickupToasts.length > 0 && (
+          <div className="absolute bottom-24 right-4 pointer-events-none select-none z-40 flex flex-col items-end gap-1">
+            {pickupToasts.map((t) => (
+              <div
+                key={t.id}
+                className="text-xs px-2 py-1 rounded bg-black/55 text-emerald-200 toast-in"
+              >
+                {t.text}
+              </div>
+            ))}
+          </div>
+        )}
+        {linkAlarmUntil > Date.now() && (
+          <div className="absolute top-16 inset-x-0 pointer-events-none select-none z-40 flex justify-center">
+            <div
+              className="text-sm font-bold px-3 py-1.5 rounded bg-red-950/70 text-red-300 tracking-widest animate-pulse"
+            >
+              ⚠ POWER LINK UNDER ATTACK
+            </div>
+          </div>
+        )}
         <ChatPanel
           log={chatLog}
           onSend={(text) => sendOnLiveWs({ type: 'chat', text })}
