@@ -434,6 +434,10 @@ export class World {
   // Last clock broadcast time, throttled to WORLD_CLOCK_INTERVAL_MS.
   private lastClockBroadcastAt = 0;
   private lastTickWarnAt = 0;
+  // World-status heartbeat → registry DB (servers.world_status).
+  // 0 forces a publish on the first tick after boot/resume.
+  private lastStatusPublishAt = 0;
+  private lastStatusErrLogAt = 0;
 
   private readonly bindings: SceneBindings;
 
@@ -3558,6 +3562,65 @@ export class World {
       this.lastClockBroadcastAt = now;
       this.broadcastWorldClock(now);
     }
+
+    // World-status heartbeat → registry (server browser reads it).
+    // 15s cadence; horde start/end also force a publish so the phase
+    // chip flips without waiting out the interval.
+    if (now - this.lastStatusPublishAt >= 15_000) {
+      this.publishWorldStatus(now);
+    }
+  }
+
+  // Snapshot the world state the server browser cares about and
+  // write it to the `servers` row (service role — bypasses RLS).
+  // Fire-and-forget: a failed write never touches the sim, and
+  // errors log at most once per minute. Freshness is the signal —
+  // the web side treats a stale `world_status_at` as "asleep", so
+  // there's no explicit live/asleep flag to keep in sync.
+  private publishWorldStatus(now: number): void {
+    if (this.isSandbox) return;
+    this.lastStatusPublishAt = now;
+
+    const status: import('@dumrunner/shared').WorldStatus = {
+      v: 1,
+      mode: this.mode,
+      players: this.connections.size,
+    };
+    if (this.mode === 'live') {
+      const cycleLengthMs =
+        this.worldConfig.daysPerCycle * this.worldConfig.dayDurationMs;
+      status.cycle = this.cycle;
+      status.hordeActive = this.hordeActive;
+      status.secondsToPerihelion = this.hordeActive
+        ? Math.max(0, Math.ceil((this.hordeEndsAt - now) / 1000))
+        : Math.max(
+            0,
+            Math.ceil((cycleLengthMs - (now - this.cycleStartedAt)) / 1000),
+          );
+      status.deepestFloor = this.deepestFloorReached;
+      const link = this.scenes
+        .get(SURFACE_SCENE_ID)
+        ?.findBuildingByKind('power_link');
+      status.linkHp = link ? Math.ceil(link.hp) : null;
+      status.linkMaxHp = link ? link.maxHp : null;
+    }
+
+    void supabase
+      .from('servers')
+      .update({
+        world_status: status,
+        world_status_at: new Date(now).toISOString(),
+      })
+      .eq('id', this.serverId)
+      .then(({ error }) => {
+        if (error && now - this.lastStatusErrLogAt > 60_000) {
+          this.lastStatusErrLogAt = now;
+          console.warn(
+            `[world ${this.serverId}] world_status publish failed ` +
+              `(migration 0013 applied?): ${error.message}`,
+          );
+        }
+      });
   }
 
   // Drives the day-clock + perihelion + horde state machine.
@@ -3714,6 +3777,8 @@ export class World {
       const scene = this.scenes.get(conn.sceneId);
       scene?.killMemberInPlace(characterId, now);
     }
+
+    this.publishWorldStatus(now);
   }
 
   private endHorde(_now: number): void {
@@ -3774,6 +3839,8 @@ export class World {
     // Schematics are NOT wiped at cycle reset — knowledge is permanent
     // (GDD §The Economy Law). The per-cycle wipe that used to live here
     // was an implementation artifact, never design.
+
+    this.publishWorldStatus(Date.now());
   }
 
   private broadcastWorldClock(now: number): void {
@@ -4306,6 +4373,10 @@ export class World {
       clearInterval(this.persistTimer);
       this.persistTimer = null;
     }
+    // Final heartbeat as the world goes to sleep, so the browser's
+    // last-known snapshot reflects the sleep boundary (players: 0)
+    // and staleness starts counting from here.
+    this.publishWorldStatus(Date.now());
   }
 
   private scheduleIdleShutdown(): void {

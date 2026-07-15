@@ -155,6 +155,25 @@ export type InteractableKind = 'stairs_down' | 'extract_pad' | 'dm_spawn';
 // and players respawn at `dm_spawn` interactables.
 export type WorldMode = 'live' | 'sandbox' | 'deathmatch';
 
+// World-status heartbeat published by the game server into the
+// registry DB (`servers.world_status` jsonb, ~15s cadence + on
+// horde transitions) so the server browser can render live colony
+// state without a socket. NOT a WS message — no protocol bump when
+// this changes; the web side gates on `v` instead. Cycle fields are
+// only present for `live` worlds; `linkHp` is null when the Power
+// Link is destroyed or the surface scene isn't loaded.
+export type WorldStatus = {
+  v: 1;
+  mode: WorldMode;
+  players: number;
+  cycle?: number;
+  secondsToPerihelion?: number;
+  hordeActive?: boolean;
+  linkHp?: number | null;
+  linkMaxHp?: number | null;
+  deepestFloor?: number;
+};
+
 export type Interactable = {
   id: string;
   kind: InteractableKind;
