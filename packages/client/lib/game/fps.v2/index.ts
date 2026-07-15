@@ -974,7 +974,30 @@ export function runFpsV2Game(
   // shell's edges.
   let lastTexturedBuildingKinds = new Set<string>();
 
+  // Cached solid-cube index state (see getSolidCubes below). The
+  // `let` lives up here because rebuildSectorGeometry — called
+  // top-level during setup for the initial layout — invalidates it;
+  // declaring it after that call site would TDZ-crash the boot.
+  type SolidCube = {
+    id: string;
+    kind: BuildingState['kind'];
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+    baseZ: number;
+    topZ: number;
+  };
+  let solidCubes: SolidCube[] | null = null;
+  function invalidateSolidCubes(): void {
+    solidCubes = null;
+  }
+
   function rebuildSectorGeometry(): void {
+    // Every building mutation routes through here (spawn / remove /
+    // provisional rollback / scene swap) — drop the solid-cube index
+    // alongside the render geometry so both stay in lockstep.
+    invalidateSolidCubes();
     if (!layout) return;
     const result = convertLayoutToSectorMap(layout, [...buildings.values()]);
     if (!result) return;
@@ -1916,44 +1939,12 @@ export function runFpsV2Game(
 
   // ---- aim-inspect: name + HP + corner brackets on the aimed cube ----
 
-  // Solid cube extents for a building — the single geometry shared by
-  // the render cubes, floor queries, prediction collision, and the
-  // aim-inspect ray. Open doors have no cube.
-  function solidCubeOf(b: BuildingState): {
-    x0: number;
-    y0: number;
-    x1: number;
-    y1: number;
-    baseZ: number;
-    topZ: number;
-  } | null {
-    if (b.kind === 'wall_door' && b.open === true) return null;
-    const tileSize = layout?.tileSize ?? 32;
-    if (tileSize <= 0) return null;
-    const scale = buildingCubeScale(b.kind);
-    const insetPx = scale.inset * tileSize;
-    const x0 = b.tileX * tileSize + insetPx;
-    const y0 = b.tileY * tileSize + insetPx;
-    const x1 = (b.tileX + b.width) * tileSize - insetPx;
-    const y1 = (b.tileY + b.height) * tileSize - insetPx;
-    let baseZ = 0;
-    const terrain = layout?.terrain;
-    if (terrain) {
-      baseZ = Math.min(
-        terrainHeightAt(terrain, x0, y0),
-        terrainHeightAt(terrain, x1, y0),
-        terrainHeightAt(terrain, x1, y1),
-        terrainHeightAt(terrain, x0, y1),
-      );
+  // Cube extents for one building — reads the cached index.
+  function solidCubeOf(b: BuildingState): SolidCube | null {
+    for (const c of getSolidCubes()) {
+      if (c.id === b.id) return c;
     }
-    return {
-      x0,
-      y0,
-      x1,
-      y1,
-      baseZ,
-      topZ: baseZ + BUILDING_WALL_HEIGHT * scale.heightFrac,
-    };
+    return null;
   }
 
   // World → screen. Column-major viewProj (camera.ts); returns null
@@ -1991,9 +1982,7 @@ export function runFpsV2Game(
     const dz = Math.sin(camera.pitch);
     let best: BuildingState | null = null;
     let bestT = INSPECT_RANGE;
-    for (const b of buildings.values()) {
-      const c = solidCubeOf(b);
-      if (!c) continue;
+    for (const c of getSolidCubes()) {
       // Slab test per axis; degenerate (parallel + outside) rejects.
       let tMin = 0;
       let tMax = bestT;
@@ -2026,7 +2015,7 @@ export function runFpsV2Game(
         }
       }
       if (!ok || tMin >= bestT) continue;
-      best = b;
+      best = buildings.get(c.id) ?? null;
       bestT = tMin;
     }
     return best;
@@ -2860,38 +2849,64 @@ export function runFpsV2Game(
     return z;
   }
 
-  // Cube-top floor under a point, or null when no solid building
-  // footprint contains it. Mirrors the server's emitBuildingCubes
-  // exactly: inset footprint via the shared buildingCubeScale,
-  // terrain-anchored base (4-corner MIN), top at WALL_HEIGHT × the
-  // kind's heightFrac. Open doors have no cube.
+  // ---- solid-cube index (perf-critical) ----
+  //
+  // Every floor query (entityFloorAt runs per billboard per frame),
+  // prediction sample, and the aim-inspect ray needs the buildings'
+  // solid cube extents. Computing them inline burned 4 terrain-noise
+  // samples × N buildings PER QUERY — tens of thousands of noise
+  // evals per frame on a built-out base ("EXTREMELY laggy"). Cubes
+  // only change when buildings change, so build the array once and
+  // invalidate on spawn/remove/swap (all of which already call
+  // rebuildSectorGeometry — invalidation rides the same sites).
   const BUILDING_WALL_HEIGHT = 32; // server sectorBuild WALL_HEIGHT_WORLD
-  function buildingTopAt(x: number, y: number, cap: number): number | null {
+  function getSolidCubes(): SolidCube[] {
+    if (solidCubes) return solidCubes;
+    const out: SolidCube[] = [];
     const tileSize = layout?.tileSize ?? 32;
-    if (tileSize <= 0 || buildings.size === 0) return null;
-    const terrain = layout?.terrain;
-    let best: number | null = null;
-    for (const b of buildings.values()) {
-      if (b.kind === 'wall_door' && b.open === true) continue;
-      const scale = buildingCubeScale(b.kind);
-      const insetPx = scale.inset * tileSize;
-      const x0 = b.tileX * tileSize + insetPx;
-      const y0 = b.tileY * tileSize + insetPx;
-      const x1 = (b.tileX + b.width) * tileSize - insetPx;
-      const y1 = (b.tileY + b.height) * tileSize - insetPx;
-      if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
-      let baseZ = 0;
-      if (terrain) {
-        baseZ = Math.min(
-          terrainHeightAt(terrain, x0, y0),
-          terrainHeightAt(terrain, x1, y0),
-          terrainHeightAt(terrain, x1, y1),
-          terrainHeightAt(terrain, x0, y1),
-        );
+    if (tileSize > 0) {
+      const terrain = layout?.terrain;
+      for (const b of buildings.values()) {
+        if (b.kind === 'wall_door' && b.open === true) continue;
+        const scale = buildingCubeScale(b.kind);
+        const insetPx = scale.inset * tileSize;
+        const x0 = b.tileX * tileSize + insetPx;
+        const y0 = b.tileY * tileSize + insetPx;
+        const x1 = (b.tileX + b.width) * tileSize - insetPx;
+        const y1 = (b.tileY + b.height) * tileSize - insetPx;
+        let baseZ = 0;
+        if (terrain) {
+          baseZ = Math.min(
+            terrainHeightAt(terrain, x0, y0),
+            terrainHeightAt(terrain, x1, y0),
+            terrainHeightAt(terrain, x1, y1),
+            terrainHeightAt(terrain, x0, y1),
+          );
+        }
+        out.push({
+          id: b.id,
+          kind: b.kind,
+          x0,
+          y0,
+          x1,
+          y1,
+          baseZ,
+          topZ: baseZ + BUILDING_WALL_HEIGHT * scale.heightFrac,
+        });
       }
-      const top = baseZ + BUILDING_WALL_HEIGHT * scale.heightFrac;
-      if (top > cap) continue;
-      if (best === null || top > best) best = top;
+    }
+    solidCubes = out;
+    return out;
+  }
+
+  // Cube-top floor under a point, or null when no solid building
+  // footprint contains it. Cap-gated like every floor source.
+  function buildingTopAt(x: number, y: number, cap: number): number | null {
+    let best: number | null = null;
+    for (const c of getSolidCubes()) {
+      if (x < c.x0 || x >= c.x1 || y < c.y0 || y >= c.y1) continue;
+      if (c.topZ > cap) continue;
+      if (best === null || c.topZ > best) best = c.topZ;
     }
     return best;
   }
@@ -3198,36 +3213,14 @@ export function runFpsV2Game(
   }
 
   // True when a solid building cube blocks the point for prediction.
-  // Mirrors the cube geometry of buildingTopAt; the Z bypass lets a
-  // predicted jump arc cross a footprint whose top is at/below the
-  // predicted feet (landing on a bench), and lets a player already
-  // standing on a cube walk across it.
+  // The Z bypass lets a predicted jump arc cross a footprint whose
+  // top is at/below the predicted feet (landing on a bench), and
+  // lets a player already standing on a cube walk across it.
   function predBuildingBlocked(x: number, y: number): boolean {
-    if (buildings.size === 0) return false;
-    const tileSize = layout?.tileSize ?? 32;
-    if (tileSize <= 0) return false;
-    const terrain = layout?.terrain;
-    for (const b of buildings.values()) {
-      if (b.kind === 'wall_door' && b.open === true) continue;
-      const scale = buildingCubeScale(b.kind);
-      const insetPx = scale.inset * tileSize;
-      const x0 = b.tileX * tileSize + insetPx;
-      const y0 = b.tileY * tileSize + insetPx;
-      const x1 = (b.tileX + b.width) * tileSize - insetPx;
-      const y1 = (b.tileY + b.height) * tileSize - insetPx;
-      if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
-      let baseZ = 0;
-      if (terrain) {
-        baseZ = Math.min(
-          terrainHeightAt(terrain, x0, y0),
-          terrainHeightAt(terrain, x1, y0),
-          terrainHeightAt(terrain, x1, y1),
-          terrainHeightAt(terrain, x0, y1),
-        );
-      }
-      const top = baseZ + BUILDING_WALL_HEIGHT * scale.heightFrac;
+    for (const c of getSolidCubes()) {
+      if (x < c.x0 || x >= c.x1 || y < c.y0 || y >= c.y1) continue;
       // Feet at/above the top ⇒ over the cube, not into it.
-      if (cameraZ >= top - 0.5) continue;
+      if (cameraZ >= c.topZ - 0.5) continue;
       return true;
     }
     return false;
