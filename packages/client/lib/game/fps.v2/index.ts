@@ -2119,6 +2119,34 @@ export function runFpsV2Game(
     }
     return 0xbbbbbb;
   }
+  // Tile-sampled line-of-sight from the camera to a point. Walls in
+  // this renderer are exactly the non-walkable tiles of the carved
+  // grid, so stepping the ray at half-tile intervals and testing
+  // walkability is a faithful (and cheap) occlusion check. Scenes
+  // without a tile grid (surface base) have no walls to occlude.
+  function losClearTo(tx: number, ty: number): boolean {
+    const tg = layout?.tileGrid;
+    const tiles = getLayoutTiles();
+    if (!tg || !tiles) return true;
+    const dx = tx - selfX;
+    const dy = ty - selfY;
+    const dist = Math.hypot(dx, dy);
+    const step = tg.tileSize * 0.5;
+    if (dist <= step) return true;
+    const n = Math.ceil(dist / step);
+    for (let i = 1; i < n; i++) {
+      const t = i / n;
+      if (
+        !isWalkableTileId(
+          tileIdAt(tg, tiles, selfX + dx * t, selfY + dy * t),
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   function updateLootBeams(): void {
     lootBeams.clear();
     if (loot.size === 0 || !canvasEl) {
@@ -2127,6 +2155,7 @@ export function runFpsV2Game(
     }
     let drew = false;
     for (const l of loot.values()) {
+      if (!losClearTo(l.x, l.y)) continue;
       const gz = entityFloorAt(l.x, l.y);
       const base = projectToScreen(l.x, l.y, gz + 2);
       const top = projectToScreen(l.x, l.y, gz + 42);
