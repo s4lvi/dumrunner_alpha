@@ -433,6 +433,7 @@ export class World {
   private nextCraftJobId = 0;
   // Last clock broadcast time, throttled to WORLD_CLOCK_INTERVAL_MS.
   private lastClockBroadcastAt = 0;
+  private lastTickWarnAt = 0;
 
   private readonly bindings: SceneBindings;
 
@@ -3535,6 +3536,21 @@ export class World {
 
     for (const scene of this.scenes.values()) {
       scene.tick(dt, now);
+    }
+
+    // Tick-overrun telemetry. A 20Hz sim has a 50ms budget; when a
+    // tick blows past it the event loop backlogs and every client
+    // reads it as netlag (queued inputs, rubberbanding, teleporting
+    // enemies). Log the overrun (throttled to 1/5s) so a saturated
+    // deploy is diagnosable from `fly logs` instead of guesswork.
+    const tickDurMs = Date.now() - now;
+    if (tickDurMs > COMBAT.TICK_MS && now - this.lastTickWarnAt > 5000) {
+      this.lastTickWarnAt = now;
+      console.warn(
+        `[world ${this.serverId}] tick overrun: ${tickDurMs}ms ` +
+          `(budget ${COMBAT.TICK_MS}ms, ${this.connections.size} players, ` +
+          `${this.scenes.size} scenes)`,
+      );
     }
 
     // Throttled world_clock broadcast (1 Hz).

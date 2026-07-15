@@ -1582,40 +1582,69 @@ export class Scene {
   // wedged into geometry, and Z-gated so a player standing on a
   // bench top doesn't shove enemies at ground level. Player↔player
   // uses the same rule (co-op shoulder-bumping, no hard blocks).
+  //
+  // PERF: this runs every tick and enemies in melee contact overlap
+  // PERMANENTLY, so per-pair geometry is the enemy of the tick
+  // budget. The original version did a full-sector floorAt + a
+  // 16-sample circlePassable + a swept-circle wall test PER PAIR —
+  // a chaser swarm on one player saturated the small Fly VM's tick
+  // loop (inputs queued for seconds; everything read as netlag).
+  // Now: the enemy ground floor is computed at most once per enemy
+  // per tick, player pushes ACCUMULATE across pairs and resolve
+  // with a single sweep test per player, and the enemy-side
+  // passability gate runs only on the enemy's one net push.
   private resolveEntityOverlaps(dt: number): void {
     // Max resolve rate: full overlap clears in a few ticks. Faster
     // reads as a shove; slower lets fast enemies tunnel deep.
     const maxPush = 140 * dt;
     const rP = COMBAT.PLAYER_RADIUS;
-    const conns: { conn: SceneConnection; z: number }[] = [];
+    const conns: SceneConnection[] = [];
     for (const id of this.members) {
       const c = this.bindings.connection(id);
-      if (c && c.alive) conns.push({ conn: c, z: c.z });
+      if (c && c.alive) conns.push(c);
     }
     if (conns.length === 0) return;
+
+    // Accumulated net push per player this tick (index-aligned with
+    // conns). Applied once at the end with a single sweep test.
+    const pushX = new Array<number>(conns.length).fill(0);
+    const pushY = new Array<number>(conns.length).fill(0);
 
     // player ↔ enemy
     for (const enemy of this.enemies.values()) {
       if (!enemy.alive) continue;
       const rE = enemy.template.radius;
       const minD = rP + rE;
-      for (const { conn } of conns) {
+      const minD2 = minD * minD;
+      // Lazy per-enemy state — only computed when a pair actually
+      // overlaps, and at most once per enemy per tick.
+      let enemyZ: number | null = null;
+      let ePushX = 0;
+      let ePushY = 0;
+      for (let i = 0; i < conns.length; i++) {
+        const conn = conns[i];
         const dx = conn.x - enemy.x;
         const dy = conn.y - enemy.y;
         const d2 = dx * dx + dy * dy;
-        if (d2 >= minD * minD) continue;
+        if (d2 >= minD2) continue;
         // Z-gate: enemies are ground-bound; a player whose feet are
         // above step-up height (bench top, wall top, mid-jump) isn't
         // body-blocking them.
-        const enemyZ = this.floorAt(enemy.x, enemy.y, conn.z);
+        if (enemyZ === null) enemyZ = this.floorAt(enemy.x, enemy.y, conn.z);
         if (conn.z - enemyZ > COMBAT.STEP_UP_MAX) continue;
         const d = Math.sqrt(d2);
         const nx = d > 0.001 ? dx / d : 1;
         const ny = d > 0.001 ? dy / d : 0;
         const push = Math.min((minD - d) * 0.5, maxPush);
-        // Enemy yields its half (gated on its own collision).
-        const ex = enemy.x - nx * push;
-        const ey = enemy.y - ny * push;
+        ePushX -= nx * push;
+        ePushY -= ny * push;
+        pushX[i] += nx * push;
+        pushY[i] += ny * push;
+      }
+      // Enemy takes its one net push, gated on its own collision.
+      if (ePushX !== 0 || ePushY !== 0) {
+        const ex = enemy.x + ePushX;
+        const ey = enemy.y + ePushY;
         if (this.circlePassable(ex, ey, rE)) {
           enemy.x = ex;
           enemy.y = ey;
@@ -1632,34 +1661,14 @@ export class Scene {
             });
           }
         }
-        // Player takes their half (gated on player collision so the
-        // push can't shove them through a wall).
-        const px = conn.x + nx * push;
-        const py = conn.y + ny * push;
-        if (
-          this.circleSweepPassable(
-            conn.x,
-            conn.y,
-            px,
-            py,
-            rP,
-            conn.floorZ,
-            Math.max(0, conn.z - conn.floorZ),
-            conn.crouching,
-          )
-        ) {
-          conn.x = px;
-          conn.y = py;
-          conn.dirty = true;
-        }
       }
     }
 
-    // player ↔ player (same soft rule; halves to each side)
+    // player ↔ player (same soft rule; halves into the accumulators)
     for (let i = 0; i < conns.length; i++) {
       for (let j = i + 1; j < conns.length; j++) {
-        const a = conns[i].conn;
-        const b = conns[j].conn;
+        const a = conns[i];
+        const b = conns[j];
         if (Math.abs(a.z - b.z) > COMBAT.STEP_UP_MAX) continue;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
@@ -1670,30 +1679,42 @@ export class Scene {
         const nx = d > 0.001 ? dx / d : 1;
         const ny = d > 0.001 ? dy / d : 0;
         const push = Math.min((minD - d) * 0.5, maxPush);
-        const ax = a.x - nx * push;
-        const ay = a.y - ny * push;
-        if (
-          this.circleSweepPassable(
-            a.x, a.y, ax, ay, rP, a.floorZ,
-            Math.max(0, a.z - a.floorZ), a.crouching,
-          )
-        ) {
-          a.x = ax;
-          a.y = ay;
-          a.dirty = true;
-        }
-        const bx = b.x + nx * push;
-        const by = b.y + ny * push;
-        if (
-          this.circleSweepPassable(
-            b.x, b.y, bx, by, rP, b.floorZ,
-            Math.max(0, b.z - b.floorZ), b.crouching,
-          )
-        ) {
-          b.x = bx;
-          b.y = by;
-          b.dirty = true;
-        }
+        pushX[i] -= nx * push;
+        pushY[i] -= ny * push;
+        pushX[j] += nx * push;
+        pushY[j] += ny * push;
+      }
+    }
+
+    // Apply each player's net push with ONE sweep test. The cap
+    // keeps a surrounded player's summed push from tunneling.
+    for (let i = 0; i < conns.length; i++) {
+      let px = pushX[i];
+      let py = pushY[i];
+      if (px === 0 && py === 0) continue;
+      const mag = Math.hypot(px, py);
+      if (mag > maxPush) {
+        px = (px / mag) * maxPush;
+        py = (py / mag) * maxPush;
+      }
+      const conn = conns[i];
+      const nx = conn.x + px;
+      const ny = conn.y + py;
+      if (
+        this.circleSweepPassable(
+          conn.x,
+          conn.y,
+          nx,
+          ny,
+          rP,
+          conn.floorZ,
+          Math.max(0, conn.z - conn.floorZ),
+          conn.crouching,
+        )
+      ) {
+        conn.x = nx;
+        conn.y = ny;
+        conn.dirty = true;
       }
     }
   }
