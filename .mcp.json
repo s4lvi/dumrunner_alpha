@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sprite-editor": {
+      "command": "npx",
+      "args": ["tsx", "packages/asset_gen/scripts/sprite-editor-mcp.ts"]
+    }
+  }
+}
