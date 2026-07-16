@@ -257,6 +257,7 @@ async function main(): Promise<void> {
   }
 
   console.log(`jobs: ${jobs.map((j) => j.key).join(', ') || '(none)'}`);
+  let consecutiveFailures = 0;
   for (const slot of jobs) {
     const prompt = buildJobPrompt(slot, direction, review);
     if (dryRun) {
@@ -276,6 +277,15 @@ async function main(): Promise<void> {
     console.log(
       `----- ${slot.key}: exit ${code}, audit ${slot.status} → ${after?.status ?? '?'} ${okNow ? '✓' : '✗'}`,
     );
+    // Usage-limit exits fail instantly and would burn the rest of
+    // the queue as no-ops — bail after 3 in a row.
+    consecutiveFailures = okNow ? 0 : consecutiveFailures + 1;
+    if (consecutiveFailures >= 3) {
+      console.error(
+        'aborting: 3 consecutive failures (usage limit?) — re-run later to resume',
+      );
+      process.exit(1);
+    }
   }
 }
 
