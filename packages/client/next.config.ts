@@ -41,7 +41,7 @@ function buildStamp(): string {
 const buildNumber = buildStamp();
 
 const config: NextConfig = {
-  transpilePackages: ['@dumrunner/shared'],
+  transpilePackages: ['@dumrunner/shared', '@dumrunner/asset_gen'],
   reactStrictMode: true,
   env: {
     NEXT_PUBLIC_BUILD_NUMBER: buildNumber,

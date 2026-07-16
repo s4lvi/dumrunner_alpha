@@ -444,3 +444,36 @@ export async function loadArtDirection(
     return {};
   }
 }
+
+// ---- human review state (art/review.json) ----
+//
+// The audit page writes verdicts here; the worker reads them:
+// approved slots are never re-queued, rejected slots re-queue even
+// when their audit status looks covered, and the reviewer note is
+// appended to the regenerated job's brief.
+
+export type ReviewVerdict = {
+  verdict: 'approved' | 'rejected';
+  note?: string;
+  at: string;
+};
+
+export type ReviewFile = Record<string, ReviewVerdict>;
+
+export async function loadReview(path: string): Promise<ReviewFile> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as ReviewFile;
+  } catch {
+    return {};
+  }
+}
+
+export async function saveReview(
+  path: string,
+  review: ReviewFile,
+): Promise<void> {
+  const { writeFile, mkdir } = await import('node:fs/promises');
+  const { dirname } = await import('node:path');
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(review, null, 2)}\n`);
+}

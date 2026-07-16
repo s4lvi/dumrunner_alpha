@@ -16,8 +16,10 @@ import {
   auditArtSlots,
   buildArtSlots,
   loadArtDirection,
+  loadReview,
   type ArtDirectionFile,
   type AuditedSlot,
+  type ReviewFile,
 } from '../src/artManifest.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,6 +27,7 @@ const REPO_ROOT = join(here, '..', '..', '..');
 const TEXTURES_DIR = join(REPO_ROOT, 'packages', 'client', 'public', 'textures');
 const CONTENT_DIR = join(REPO_ROOT, 'packages', 'shared', 'content');
 const DIRECTION_PATH = join(here, '..', 'art', 'direction.json');
+const REVIEW_PATH = join(here, '..', 'art', 'review.json');
 const MCP_CONFIG = join(REPO_ROOT, '.mcp.json');
 
 const argv = process.argv.slice(2);
@@ -81,6 +84,7 @@ const DEFAULT_STATE_FRAMES: Record<string, Record<string, number>> = {
 function buildJobPrompt(
   slot: AuditedSlot,
   direction: ArtDirectionFile,
+  review?: ReviewFile,
 ): string {
   const d = direction.slots?.[slot.key];
   const dest = destinationOf(slot);
@@ -146,6 +150,16 @@ function buildJobPrompt(
     );
   }
 
+  const verdict = review?.[slot.key];
+  if (verdict?.verdict === 'rejected' && verdict.note) {
+    lines.push(
+      ``,
+      `## Reviewer feedback on the previous attempt (MUST address)`,
+      verdict.note,
+      `The previous sprite doc may still exist under id "${spriteId}" — load it with get_sprite and decide whether to fix it or start over.`,
+    );
+  }
+
   lines.push(
     ``,
     `When done, reply with a one-line summary. If a tool errors repeatedly, stop and report the error instead of guessing.`,
@@ -185,6 +199,7 @@ async function auditOne(key: string): Promise<AuditedSlot | null> {
 
 async function main(): Promise<void> {
   const direction = await loadArtDirection(DIRECTION_PATH);
+  const review = await loadReview(REVIEW_PATH);
   const slots = await buildArtSlots(direction);
   const audited = await auditArtSlots(slots, TEXTURES_DIR, direction);
 
@@ -196,11 +211,15 @@ async function main(): Promise<void> {
       return s;
     });
   } else if (flags.has('--missing')) {
+    // Human verdicts trump the audit: approved never re-queues,
+    // rejected re-queues even when the slot audits as covered.
     jobs = audited
-      .filter(
-        (s) =>
-          s.required && (s.status === 'missing' || s.status === 'partial'),
-      )
+      .filter((s) => {
+        const v = review[s.key]?.verdict;
+        if (v === 'approved') return false;
+        if (v === 'rejected') return true;
+        return s.required && (s.status === 'missing' || s.status === 'partial');
+      })
       .sort((a, b) => a.key.localeCompare(b.key))
       .slice(0, limit);
   } else {
@@ -212,7 +231,7 @@ async function main(): Promise<void> {
 
   console.log(`jobs: ${jobs.map((j) => j.key).join(', ') || '(none)'}`);
   for (const slot of jobs) {
-    const prompt = buildJobPrompt(slot, direction);
+    const prompt = buildJobPrompt(slot, direction, review);
     if (dryRun) {
       console.log(`\n===== ${slot.key} =====\n${prompt}`);
       continue;
