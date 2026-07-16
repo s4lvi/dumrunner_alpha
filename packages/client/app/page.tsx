@@ -41,8 +41,12 @@ export default async function Landing({
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-6">
+    <main className="scanlines min-h-screen flex flex-col items-center justify-center px-6">
       <div className="max-w-xl text-center">
+        <p className="font-mono text-[11px] tracking-[0.35em] text-zinc-500 mb-4">
+          DÛM ORBITAL RELAY · INCOMING TRANSMISSION
+          <span className="cursor-blink">▮</span>
+        </p>
         <h1 className="text-6xl font-black tracking-tight mb-2" style={{ color: 'var(--accent)' }}>
           DÛM RUNNER
         </h1>
@@ -56,15 +60,15 @@ export default async function Landing({
         <div className="flex gap-3 justify-center">
           <Link
             href="/login"
-            className="px-6 py-3 rounded font-semibold border border-[color:var(--panel-border)] hover:bg-[color:var(--panel)]"
+            className="px-6 py-3 rounded-sm font-mono font-semibold tracking-[0.15em] border border-[color:var(--panel-border)] hover:bg-[color:var(--panel)]"
           >
-            Sign in
+            SIGN IN
           </Link>
           <Link
             href="/register"
-            className="px-6 py-3 rounded font-semibold bg-[color:var(--accent)] text-black hover:opacity-90"
+            className="px-6 py-3 rounded-sm font-mono font-bold tracking-[0.15em] bg-[color:var(--accent)] text-black hover:brightness-110"
           >
-            Create account
+            ENLIST
           </Link>
         </div>
         <div className="mt-12 flex gap-4 justify-center text-xs text-zinc-500">

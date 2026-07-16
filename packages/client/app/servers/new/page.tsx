@@ -27,12 +27,22 @@ export default async function NewServerPage() {
       <AppNav />
       <main className="min-h-screen px-6 py-10 max-w-2xl mx-auto">
         <div className="mb-6">
-          <Link href="/servers" className="text-sm text-zinc-400">
-            ← Back to servers
+          <Link
+            href="/servers"
+            className="font-mono text-xs tracking-[0.2em] text-zinc-400 hover:text-zinc-200"
+          >
+            ← MISSION CONTROL
           </Link>
         </div>
 
-        <h1 className="text-3xl font-bold mb-6">Create server</h1>
+        <header className="mb-6">
+          <h1 className="font-mono font-bold tracking-[0.3em] text-2xl text-zinc-100">
+            FOUND COLONY
+          </h1>
+          <p className="font-mono text-[11px] text-zinc-500 tracking-widest mt-1">
+            COLONY CHARTER · DÛM ORBITAL RELAY
+          </p>
+        </header>
 
         <NewServerForm defaultName={defaultName} scenes={scenes} />
       </main>

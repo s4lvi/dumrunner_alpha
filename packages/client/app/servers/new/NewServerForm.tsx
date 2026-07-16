@@ -27,10 +27,10 @@ export function NewServerForm({
   return (
     <form
       action={formAction}
-      className="space-y-5 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded-lg p-6"
+      className="scanlines space-y-6 bg-[color:var(--panel)] border border-[color:var(--panel-border)] rounded p-6"
     >
       <Field
-        label="Server name"
+        label="COLONY NAME"
         name="name"
         type="text"
         required
@@ -40,21 +40,21 @@ export function NewServerForm({
       />
 
       <div>
-        <span className="block text-sm text-zinc-400 mb-2">Game mode</span>
+        <SectionLabel>MODE</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <ModeCard
             value="live"
             current={mode}
             onSelect={setMode}
             dotClass="bg-emerald-500"
-            title="Live"
+            title="LIVE WORLD"
           />
           <ModeCard
             value="deathmatch"
             current={mode}
             onSelect={setMode}
             dotClass="bg-red-500"
-            title="Deathmatch"
+            title="DEATHMATCH"
           />
         </div>
         <input type="hidden" name="mode" value={mode} />
@@ -62,7 +62,7 @@ export function NewServerForm({
 
       {isDeathmatch && (
         <div>
-          <span className="block text-sm text-zinc-400 mb-1">Arena map</span>
+          <SectionLabel>ARENA MAP</SectionLabel>
           {scenes.length === 0 ? (
             <p className="text-sm text-amber-400">
               No authored scenes yet.{' '}
@@ -94,7 +94,7 @@ export function NewServerForm({
       )}
 
       <div>
-        <span className="block text-sm text-zinc-400 mb-1">Visibility</span>
+        <SectionLabel>ACCESS</SectionLabel>
         <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 text-sm">
           <label className="flex items-center gap-2">
             <input
@@ -120,7 +120,9 @@ export function NewServerForm({
       </div>
 
       <Field
-        label={visibility === 'private' ? 'Password (invite code)' : 'Password (optional)'}
+        label={
+          visibility === 'private' ? 'PASSWORD (INVITE CODE)' : 'PASSWORD (OPTIONAL)'
+        }
         name="password"
         type="password"
         autoComplete="new-password"
@@ -128,7 +130,7 @@ export function NewServerForm({
       />
 
       <Field
-        label="Max player slots (5–10)"
+        label="MAX CREW (5–10)"
         name="max_slots"
         type="number"
         min={5}
@@ -140,19 +142,17 @@ export function NewServerForm({
       {!isDeathmatch && (
         <>
           <Field
-            label="World seed (optional)"
+            label="WORLD SEED (OPTIONAL)"
             name="world_seed"
             type="number"
             placeholder="Leave blank for random"
           />
 
-          <div className="pt-2 border-t border-[color:var(--panel-border)]">
-            <h3 className="text-sm uppercase tracking-wider text-zinc-500 mb-3">
-              World tuning
-            </h3>
+          <div className="pt-4 border-t border-[color:var(--panel-border)]">
+            <SectionLabel>WORLD PARAMETERS</SectionLabel>
             <div className="grid grid-cols-2 gap-4">
               <Field
-                label="Day length (sec)"
+                label="DAY LENGTH (SEC)"
                 name="day_duration_sec"
                 type="number"
                 min={30}
@@ -161,7 +161,7 @@ export function NewServerForm({
                 required
               />
               <Field
-                label="Days per perihelion"
+                label="DAYS PER PERIHELION"
                 name="days_per_cycle"
                 type="number"
                 min={1}
@@ -193,11 +193,19 @@ export function NewServerForm({
       <button
         type="submit"
         disabled={pending || (isDeathmatch && scenes.length === 0)}
-        className="w-full py-2.5 rounded bg-[color:var(--accent)] text-black font-semibold disabled:opacity-50"
+        className="w-full py-2.5 rounded-sm bg-[color:var(--accent)] text-black font-mono font-bold tracking-[0.2em] disabled:opacity-50 hover:brightness-110"
       >
-        {pending ? 'Creating…' : 'Create and enter'}
+        {pending ? 'FOUNDING…' : 'SIGN CHARTER & DROP IN'}
       </button>
     </form>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="block font-mono text-[10px] tracking-[0.25em] text-zinc-500 mb-2">
+      {children}
+    </span>
   );
 }
 
@@ -207,7 +215,9 @@ function Field({
 }: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <label className="block">
-      <span className="block text-sm text-zinc-400 mb-1">{label}</span>
+      <span className="block font-mono text-[10px] tracking-[0.25em] text-zinc-500 mb-1.5">
+        {label}
+      </span>
       <input
         {...rest}
         className="w-full bg-[color:var(--bg)] border border-[color:var(--panel-border)] rounded px-3 py-2 outline-none focus:border-[color:var(--accent)]"
@@ -242,7 +252,9 @@ function ModeCard({
     >
       <div className="flex items-center gap-2">
         <span className={`inline-block w-2 h-2 rounded-full ${dotClass}`} />
-        <span className="font-semibold">{title}</span>
+        <span className="font-mono font-semibold text-sm tracking-widest">
+          {title}
+        </span>
       </div>
     </button>
   );
