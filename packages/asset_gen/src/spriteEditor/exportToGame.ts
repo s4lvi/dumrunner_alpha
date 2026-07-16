@@ -138,19 +138,30 @@ export async function exportAnimation(
 }
 
 // Point an entity's content JSON at an animation manifest.
-// Area is the content subdir holding the entity ('enemies'/'props').
+// Area is the content subdir holding the entity. Weapons use
+// dedicated fields (viewAnimationId / projectileAnimationId);
+// enemies and props use `animationId` (the default).
 export async function wireEntityAnimation(
   contentDir: string,
-  area: 'enemies' | 'props',
+  area: 'enemies' | 'props' | 'weapons',
   entityId: string,
   animId: string,
+  field:
+    | 'animationId'
+    | 'viewAnimationId'
+    | 'projectileAnimationId' = 'animationId',
 ): Promise<string> {
+  if (area === 'weapons' && field === 'animationId') {
+    throw new Error(
+      'weapons wire via viewAnimationId or projectileAnimationId',
+    );
+  }
   const path = join(contentDir, area, `${entityId}.json`);
   const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<
     string,
     unknown
   >;
-  parsed.animationId = animId;
+  parsed[field] = animId;
   await writeFile(path, `${JSON.stringify(parsed, null, 2)}\n`);
   return path;
 }

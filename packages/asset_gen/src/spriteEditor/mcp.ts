@@ -352,16 +352,25 @@ export function buildSpriteEditorServer(spritesDir: string): McpServer {
 
   server.tool(
     'wire_entity',
-    "Set an entity content JSON's animationId so the game plays the exported animation (area: enemies|props).",
+    "Point an entity content JSON at the exported animation. enemies/props use field animationId (default); weapons use viewAnimationId or projectileAnimationId.",
     {
       contentDir: z.string(),
-      area: z.enum(['enemies', 'props']),
+      area: z.enum(['enemies', 'props', 'weapons']),
       entityId: z.string(),
       animId: z.string(),
+      field: z
+        .enum(['animationId', 'viewAnimationId', 'projectileAnimationId'])
+        .default('animationId'),
     },
-    async ({ contentDir, area, entityId, animId }) => {
-      const path = await wireEntityAnimation(contentDir, area, entityId, animId);
-      return ok(`wired ${area}/${entityId} → ${animId} (${path})`);
+    async ({ contentDir, area, entityId, animId, field }) => {
+      const path = await wireEntityAnimation(
+        contentDir,
+        area,
+        entityId,
+        animId,
+        field,
+      );
+      return ok(`wired ${area}/${entityId}.${field} → ${animId} (${path})`);
     },
   );
 
