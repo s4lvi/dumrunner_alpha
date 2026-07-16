@@ -266,8 +266,13 @@ async function main(): Promise<void> {
     console.log(`\n===== ${slot.key} (was: ${slot.status}) =====`);
     const code = await runClaude(prompt);
     const after = await auditOne(slot.key);
+    // Success needs BOTH a clean session exit and a covered audit —
+    // a restyle slot audits as covered even when the session died
+    // before touching it (e.g. usage-limit exits).
     const okNow =
-      after && (after.status === 'animated' || after.status === 'static');
+      code === 0 &&
+      after !== null &&
+      (after.status === 'animated' || after.status === 'static');
     console.log(
       `----- ${slot.key}: exit ${code}, audit ${slot.status} → ${after?.status ?? '?'} ${okNow ? '✓' : '✗'}`,
     );
