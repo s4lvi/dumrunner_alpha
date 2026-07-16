@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "prewarm": "tsx scripts/prewarm.ts",
+    "art-audit": "tsx scripts/art-audit.ts",
     "smoke": "tsx scripts/smoke.ts",
     "build": "tsc -p tsconfig.json",
     "start": "tsx src/server.ts",

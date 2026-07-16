@@ -1,0 +1,46 @@
+{
+  "global": {
+    "style": "16px-tile pixel art, hard 1px black outline, readable silhouette at native size, transparent background, no anti-aliasing, no dithering gradients wider than 2 colors",
+    "palette": ["#0b0d10", "#111827", "#f97316", "#e6e8eb", "#6b7280"],
+    "notes": [
+      "DÛM RUNNER: sun-scorched alien ruin, scrap-industrial survivors, CRT terminal accents",
+      "world sprites are billboards in a 2.5D raycaster — silhouette reads from any yaw",
+      "light source top-left unless the slot says otherwise"
+    ]
+  },
+  "slots": {
+    "enemy:chaser_melee": {
+      "subject": "rat-like tunnel scavenger, hunched quadruped, matted fur over exposed scrap-metal spine implants, glowing purple eyes",
+      "palette": ["#a855f7", "#3f3f46", "#78716c", "#111827"],
+      "mustInclude": ["low lunging posture", "bared teeth"],
+      "mustAvoid": ["cute", "upright stance"],
+      "states": {
+        "idle": { "frames": 2 },
+        "walk": { "frames": 4 },
+        "attack": { "frames": 3 },
+        "death": { "frames": 4 }
+      }
+    },
+    "building:workbench": {
+      "subject": "scrap-built workbench: steel table, bolted legs, vise on one corner, scattered tools, oil stains",
+      "palette": ["#94a3b8", "#f59e0b", "#52525b", "#111827"],
+      "tiles": { "w": 2, "h": 2 },
+      "mustInclude": ["reads as a crafting surface"],
+      "mustAvoid": ["floor tile background", "human figure"]
+    },
+    "material:scrap": {
+      "subject": "small pile of jagged salvaged metal plates and bent rebar",
+      "palette": ["#94a3b8", "#52525b", "#d6d3d1", "#111827"],
+      "mustInclude": ["stackable pickup silhouette"],
+      "mustAvoid": ["coins", "text"]
+    },
+    "prop:prop_tree": {
+      "subject": "sun-bleached dead tree, twisted bare branches, cracked pale bark",
+      "palette": ["#d6d3d1", "#a8a29e", "#57534e", "#111827"],
+      "tiles": { "w": 2, "h": 6 },
+      "mustInclude": ["tall narrow silhouette", "branches read against sky"],
+      "mustAvoid": ["green foliage"]
+    }
+  },
+  "extraSlots": {}
+}
