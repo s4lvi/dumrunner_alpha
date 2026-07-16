@@ -10,6 +10,7 @@
 //   ... -- --dry-run               print job prompts, run nothing
 
 import { spawn } from 'node:child_process';
+import { readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
@@ -70,6 +71,16 @@ function destinationOf(slot: AuditedSlot): Destination {
         animCategory: 'projectile',
         wire: { area: 'weapons', field: 'projectileAnimationId' },
       };
+    case 'prop':
+      // Props that already animate must be remade as animations —
+      // a static override would be ignored while animationId wins.
+      return slot.animationId
+        ? {
+            kind: 'animation',
+            animCategory: 'prop',
+            wire: { area: 'props', field: 'animationId' },
+          }
+        : { kind: 'static', category: 'prop' };
     default:
       return { kind: 'static', category: slot.category };
   }
@@ -79,6 +90,7 @@ const DEFAULT_STATE_FRAMES: Record<string, Record<string, number>> = {
   enemy: { idle: 2, walk: 4, attack: 3, death: 4 },
   weapon_view: { idle: 1, fire: 3, reload: 4 },
   projectile: { idle: 2 },
+  prop: { idle: 2 },
 };
 
 function buildJobPrompt(
@@ -210,21 +222,36 @@ async function main(): Promise<void> {
       if (!s) throw new Error(`unknown slot '${key}' (see art-audit)`);
       return s;
     });
-  } else if (flags.has('--missing')) {
+  } else if (flags.has('--missing') || flags.has('--restyle')) {
     // Human verdicts trump the audit: approved never re-queues,
     // rejected re-queues even when the slot audits as covered.
+    // --missing takes the gaps; --restyle takes the covered slots
+    // (old-style art getting remade in the pixel style). The two
+    // sets are disjoint, so both workers can run concurrently.
+    const restyle = flags.has('--restyle');
+    // Slots with a saved sprite doc were already produced by this
+    // pipeline (new style) — restyle skips them so it only remakes
+    // legacy art, even while a --missing worker runs concurrently.
+    const pixelDone = new Set(
+      (await readdir(join(here, '..', 'art', 'sprites')).catch(() => []))
+        .filter((f) => f.endsWith('.json'))
+        .map((f) => f.slice(0, -5).replaceAll('__', ':')),
+    );
     jobs = audited
       .filter((s) => {
         const v = review[s.key]?.verdict;
         if (v === 'approved') return false;
-        if (v === 'rejected') return true;
-        return s.required && (s.status === 'missing' || s.status === 'partial');
+        if (v === 'rejected') return !restyle;
+        if (!s.required) return false;
+        if (restyle && pixelDone.has(s.key)) return false;
+        const gap = s.status === 'missing' || s.status === 'partial';
+        return restyle ? !gap : gap;
       })
       .sort((a, b) => a.key.localeCompare(b.key))
       .slice(0, limit);
   } else {
     console.error(
-      'usage: art-worker <slot-key ...> | --missing [--limit N] [--model m] [--dry-run]',
+      'usage: art-worker <slot-key ...> | --missing | --restyle [--limit N] [--model m] [--dry-run]',
     );
     process.exit(2);
   }

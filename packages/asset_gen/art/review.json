@@ -2,5 +2,13 @@
   "material:crystal": {
     "verdict": "approved",
     "at": "2026-07-16T15:48:49.439Z"
+  },
+  "building:workbench": {
+    "verdict": "approved",
+    "at": "2026-07-16T15:54:39.183Z"
+  },
+  "prop:prop_tree": {
+    "verdict": "approved",
+    "at": "2026-07-16T15:54:39.183Z"
   }
 }
