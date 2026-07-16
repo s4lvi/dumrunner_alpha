@@ -124,7 +124,16 @@ export function setRows(
   if (y0 < 0 || y0 + rows.length > h) {
     throw new Error(`rows [${y0}, ${y0 + rows.length}) outside height ${h}`);
   }
-  for (const row of rows) validateRow(doc, row);
+  const w = spriteWidth(doc);
+  rows.forEach((row, i) => {
+    if (row.length !== w) {
+      throw new Error(
+        `row ${y0 + i} must be exactly ${w} chars, got ${row.length} ` +
+          `(${row.length > w ? 'trim' : 'pad'} ${Math.abs(row.length - w)})`,
+      );
+    }
+    validateRow(doc, row);
+  });
   for (let i = 0; i < rows.length; i++) f[y0 + i] = rows[i];
 }
 
@@ -279,6 +288,66 @@ export function shiftFrame(
     if (dx > 0) row = '.'.repeat(dx) + row.slice(0, w - dx);
     else if (dx < 0) row = row.slice(-dx) + '.'.repeat(-dx);
     f[y] = row;
+  }
+}
+
+// Blit a block of rows at (x,y). ' ' (space) skips the pixel
+// (transparent stamp), '.' writes transparency, chars write color.
+// For placing small props (tools, bolts) without hand-merging rows.
+export function stamp(
+  doc: SpriteDoc,
+  frame: string,
+  x: number,
+  y: number,
+  rows: string[],
+): void {
+  const f = frameOf(doc, frame);
+  for (const row of rows) {
+    for (const ch of row) {
+      if (ch === ' ') continue;
+      const idx = charToIndex(ch);
+      if (idx !== null && idx >= doc.palette.length) {
+        throw new Error(`stamp char '${ch}' indexes past palette`);
+      }
+    }
+  }
+  for (let dy = 0; dy < rows.length; dy++) {
+    for (let dx = 0; dx < rows[dy].length; dx++) {
+      const ch = rows[dy][dx];
+      if (ch === ' ') continue;
+      setPixel(doc, f, x + dx, y + dy, ch);
+    }
+  }
+}
+
+// Dilate a 1px outline: every transparent pixel 8-adjacent to an
+// opaque pixel becomes `ch`. Draw the fill masses first, outline
+// last — this is the "hard 1px outline" style rule as one op.
+export function outline(doc: SpriteDoc, frame: string, ch: string): void {
+  const f = frameOf(doc, frame);
+  checkChar(doc, ch);
+  if (ch === '.') throw new Error('outline char cannot be transparent');
+  const w = spriteWidth(doc);
+  const h = spriteHeight(doc);
+  const src = [...f];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (src[y][x] !== '.') continue;
+      let touches = false;
+      for (let dy = -1; dy <= 1 && !touches; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const ny = y + dy;
+          const nx = x + dx;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          if (src[ny][nx] !== '.' && src[ny][nx] !== ch) {
+            touches = true;
+            break;
+          }
+        }
+      }
+      if (touches) setPixel(doc, f, x, y, ch);
+    }
   }
 }
 

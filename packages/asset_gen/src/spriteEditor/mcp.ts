@@ -19,15 +19,23 @@ import {
   drawRect,
   floodFill,
   mirrorX,
+  outline,
   renderNative,
   renderReview,
   setRows,
   shiftFrame,
+  stamp,
   SpriteStore,
   spriteHeight,
   spriteWidth,
   type SpriteDoc,
 } from './engine.js';
+import {
+  exportAnimation,
+  exportStatic,
+  wireEntityAnimation,
+} from './exportToGame.js';
+import { ANIMATION_CATEGORIES } from '@dumrunner/shared';
 
 const HEX = z.string().regex(/^#[0-9a-f]{6}$/i);
 
@@ -259,6 +267,101 @@ export function buildSpriteEditorServer(spritesDir: string): McpServer {
       shiftFrame(d, frame, dx, dy);
       await persist(d);
       return ok(`shifted ${frame} by (${dx},${dy})`);
+    },
+  );
+
+  server.tool(
+    'stamp',
+    'Blit a block of rows at (x,y). Space skips a pixel (nothing painted), "." paints transparency, palette chars paint color. For placing small props (tools, bolts) without merging rows by hand.',
+    {
+      id: z.string(),
+      frame: z.string(),
+      x: z.number().int(),
+      y: z.number().int(),
+      rows: z.array(z.string()).min(1),
+    },
+    async ({ id, frame, x, y, rows }) => {
+      const d = await doc(id);
+      stamp(d, frame, x, y, rows);
+      await persist(d);
+      return ok(`stamped ${rows.length} rows at (${x},${y}) on ${frame}`);
+    },
+  );
+
+  server.tool(
+    'outline',
+    'Dilate a 1px outline: every transparent pixel touching (8-adjacent) an opaque pixel becomes the given char. Paint fill masses first, outline last. Note: limbs that only touch diagonally get visually severed by the outline — overlap segments by 1px.',
+    { id: z.string(), frame: z.string(), char: z.string().length(1) },
+    async ({ id, frame, char }) => {
+      const d = await doc(id);
+      outline(d, frame, char);
+      await persist(d);
+      return ok(`outlined ${frame} with '${char}'`);
+    },
+  );
+
+  server.tool(
+    'export_static',
+    'Export one frame as the static texture override the game consumes: <texturesDir>/<category>/<gameId>.png.',
+    {
+      id: z.string(),
+      frame: z.string(),
+      texturesDir: z.string(),
+      category: z.string(),
+      gameId: z.string(),
+    },
+    async ({ id, frame, texturesDir, category, gameId }) => {
+      const d = await doc(id);
+      const path = await exportStatic(d, frame, texturesDir, category, gameId);
+      return ok(`wrote ${path}`);
+    },
+  );
+
+  server.tool(
+    'export_animation',
+    'Export every frame into the game animation pipeline: frame PNGs at <texturesDir>/anim/<animId>/<state>/<i>.png plus a validated content manifest at <contentDir>/animations/<animId>.json. Frames must be named <state>/<index> with dense indexes; state names are gated per category (enemy: idle/walk/attack/hit/death, prop: idle/destroy, weapon_view: idle/fire/reload, projectile/biome_*: idle). Wire the entity with wire_entity afterwards.',
+    {
+      id: z.string(),
+      animId: z.string().regex(/^[a-z0-9_-]+$/),
+      name: z.string(),
+      category: z.enum(ANIMATION_CATEGORIES),
+      texturesDir: z.string(),
+      contentDir: z.string(),
+      fps: z.record(z.string(), z.number().positive().max(120)).optional(),
+      loop: z.record(z.string(), z.boolean()).optional(),
+    },
+    async ({ id, animId, name, category, texturesDir, contentDir, fps, loop }) => {
+      const d = await doc(id);
+      const res = await exportAnimation(d, {
+        texturesDir,
+        contentDir,
+        animId,
+        name,
+        category,
+        fps,
+        loop,
+      });
+      return ok(
+        `wrote ${res.manifestPath}\nstates: ` +
+          Object.entries(res.states)
+            .map(([s, n]) => `${s}(${n})`)
+            .join(' '),
+      );
+    },
+  );
+
+  server.tool(
+    'wire_entity',
+    "Set an entity content JSON's animationId so the game plays the exported animation (area: enemies|props).",
+    {
+      contentDir: z.string(),
+      area: z.enum(['enemies', 'props']),
+      entityId: z.string(),
+      animId: z.string(),
+    },
+    async ({ contentDir, area, entityId, animId }) => {
+      const path = await wireEntityAnimation(contentDir, area, entityId, animId);
+      return ok(`wired ${area}/${entityId} → ${animId} (${path})`);
     },
   );
 

@@ -1,0 +1,19 @@
+{
+  "id": "chaser_melee_px",
+  "name": "Chaser (pixel)",
+  "category": "enemy",
+  "states": {
+    "idle": {
+      "frames": 1,
+      "fps": 2,
+      "loop": true,
+      "source": "frames"
+    },
+    "walk": {
+      "frames": 1,
+      "fps": 6,
+      "loop": true,
+      "source": "frames"
+    }
+  }
+}
