@@ -136,6 +136,16 @@ function buildJobPrompt(
     `3. render and LOOK at it. Critique hard: silhouette readable? light from top-left? outline unbroken? Iterate at least 3 times — do not settle for the first draft.`,
   );
 
+  if (slot.category === 'weapon_view') {
+    lines.push(
+      ``,
+      `## FIRST-PERSON VIEW-MODEL — this is not a side-view or icon`,
+      `This sprite is the weapon as seen by the player HOLDING it in an FPS — drawn from behind and slightly above, anchored at the bottom of the screen, barrel/blade foreshortened pointing AWAY from the viewer toward screen center (up and slightly left on the canvas). Think Doom/Wolfenstein weapon sprites. The grip/stock sits at the bottom edge of the canvas (it reads as continuing off-screen into the player's hands); the muzzle/tip is the smallest, most distant part. A gloved hand on the grip is allowed but optional. NEVER a full side profile, never floating centered like an inventory icon.`,
+      `- fire: muzzle flash at the far tip + 1-2px recoil kick toward the viewer (down-right)`,
+      `- reload: magazine/mechanism motion below the weapon body`,
+    );
+  }
+
   if (dest.kind === 'animation') {
     const frames =
       d?.states ??

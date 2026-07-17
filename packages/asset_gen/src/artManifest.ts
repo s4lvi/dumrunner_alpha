@@ -232,11 +232,14 @@ export async function buildArtSlots(
   }
 
   for (const w of weapons) {
+    // 1x1 on purpose: view-models upscale fine (nearest filtering)
+    // and generation quality falls apart on larger canvases for
+    // anything but simple props.
     push({
       category: 'weapon_view',
       id: w.id,
       label: `${w.id.replaceAll('_', ' ')} view-model`,
-      tiles: { w: 4, h: 3 },
+      tiles: { w: 1, h: 1 },
       wantsAnimation: true,
       requiredStates: WEAPON_VIEW_STATES,
       animationId: w.viewAnimationId ?? null,
@@ -280,14 +283,15 @@ export async function buildArtSlots(
   }
 
   // The renderer looks up ('player', 'default') for other-player
-  // billboards.
+  // billboards — a static texture; there's no player animation
+  // wiring, so the slot is satisfied by the override alone.
   push({
     category: 'player',
     id: 'default',
     label: 'player character',
     tiles: { w: 1, h: 2 },
-    wantsAnimation: true,
-    requiredStates: ENEMY_STATES,
+    wantsAnimation: false,
+    requiredStates: [],
     animationId: null,
     required: true,
     hints: {},

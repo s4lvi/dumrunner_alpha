@@ -11,5 +11,6 @@
     "range": 80,
     "arcRad": 0.8,
     "color": 2282478
-  }
+  },
+  "viewAnimationId": "energy_blade_px"
 }

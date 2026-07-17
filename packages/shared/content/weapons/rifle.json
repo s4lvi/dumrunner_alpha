@@ -21,5 +21,6 @@
     "projectile": {
       "kind": "single"
     }
-  }
+  },
+  "viewAnimationId": "rifle_px"
 }

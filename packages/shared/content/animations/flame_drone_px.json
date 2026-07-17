@@ -1,0 +1,31 @@
+{
+  "id": "flame_drone_px",
+  "name": "Flame Drone (pixel)",
+  "category": "enemy",
+  "states": {
+    "idle": {
+      "frames": 2,
+      "fps": 4,
+      "loop": true,
+      "source": "frames"
+    },
+    "walk": {
+      "frames": 4,
+      "fps": 8,
+      "loop": true,
+      "source": "frames"
+    },
+    "attack": {
+      "frames": 3,
+      "fps": 10,
+      "loop": false,
+      "source": "frames"
+    },
+    "death": {
+      "frames": 4,
+      "fps": 8,
+      "loop": false,
+      "source": "frames"
+    }
+  }
+}

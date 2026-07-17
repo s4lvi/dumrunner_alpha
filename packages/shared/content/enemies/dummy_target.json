@@ -9,14 +9,30 @@
     "moveSpeed": 0,
     "senseRadius": 80
   },
-  "movement": { "kind": "stationary" },
+  "movement": {
+    "kind": "stationary"
+  },
   "attacks": [
-    { "kind": "melee", "range": 44, "damagePerSec": 30 }
+    {
+      "kind": "melee",
+      "range": 44,
+      "damagePerSec": 30
+    }
   ],
   "fleeBelowHpRatio": null,
   "stunDurationOnHitMs": 200,
-  "visual": { "shape": "square", "color": "#ef4444", "size": 18 },
+  "visual": {
+    "shape": "square",
+    "color": "#ef4444",
+    "size": 18
+  },
   "lootTable": [
-    { "materialId": "scrap", "chance": 1.0, "min": 1, "max": 2 }
-  ]
+    {
+      "materialId": "scrap",
+      "chance": 1,
+      "min": 1,
+      "max": 2
+    }
+  ],
+  "animationId": "dummy_target_px"
 }

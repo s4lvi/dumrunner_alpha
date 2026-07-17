@@ -1,0 +1,25 @@
+{
+  "id": "heavy_px",
+  "name": "heavy view-model (pixel)",
+  "category": "weapon_view",
+  "states": {
+    "idle": {
+      "frames": 1,
+      "fps": 4,
+      "loop": true,
+      "source": "frames"
+    },
+    "fire": {
+      "frames": 3,
+      "fps": 12,
+      "loop": false,
+      "source": "frames"
+    },
+    "reload": {
+      "frames": 4,
+      "fps": 8,
+      "loop": false,
+      "source": "frames"
+    }
+  }
+}

@@ -21,5 +21,6 @@
     "projectile": {
       "kind": "single"
     }
-  }
+  },
+  "viewAnimationId": "smg_px"
 }

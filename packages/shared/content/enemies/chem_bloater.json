@@ -2,16 +2,24 @@
   "id": "chem_bloater",
   "label": "Chem Bloater",
   "faction": "catacombs",
-  "biomeAffinity": ["catacombs"],
+  "biomeAffinity": [
+    "catacombs"
+  ],
   "stats": {
     "hp": 130,
     "radius": 18,
     "moveSpeed": 75,
     "senseRadius": 320
   },
-  "movement": { "kind": "chase" },
+  "movement": {
+    "kind": "chase"
+  },
   "attacks": [
-    { "kind": "melee", "range": 40, "damagePerSec": 18 },
+    {
+      "kind": "melee",
+      "range": 40,
+      "damagePerSec": 18
+    },
     {
       "kind": "aoe_cone",
       "range": 140,
@@ -37,11 +45,36 @@
   ],
   "fleeBelowHpRatio": null,
   "stunDurationOnHitMs": 200,
-  "visual": { "shape": "square", "color": "#84cc16", "size": 22 },
+  "visual": {
+    "shape": "square",
+    "color": "#84cc16",
+    "size": 22
+  },
   "lootTable": [
-    { "materialId": "scrap",    "chance": 1.0,  "min": 2, "max": 3 },
-    { "materialId": "biotic",   "chance": 0.85, "min": 1, "max": 3 },
-    { "materialId": "crystal",  "chance": 0.06, "min": 1, "max": 1 },
-    { "materialId": "artifact", "chance": 0.08, "min": 1, "max": 1 }
-  ]
+    {
+      "materialId": "scrap",
+      "chance": 1,
+      "min": 2,
+      "max": 3
+    },
+    {
+      "materialId": "biotic",
+      "chance": 0.85,
+      "min": 1,
+      "max": 3
+    },
+    {
+      "materialId": "crystal",
+      "chance": 0.06,
+      "min": 1,
+      "max": 1
+    },
+    {
+      "materialId": "artifact",
+      "chance": 0.08,
+      "min": 1,
+      "max": 1
+    }
+  ],
+  "animationId": "chem_bloater_px"
 }
