@@ -18,6 +18,7 @@ import {
   buildArtSlots,
   loadArtDirection,
   loadReview,
+  saveReview,
   type ArtDirectionFile,
   type AuditedSlot,
   type ReviewFile,
@@ -287,6 +288,15 @@ async function main(): Promise<void> {
     console.log(
       `----- ${slot.key}: exit ${code}, audit ${slot.status} → ${after?.status ?? '?'} ${okNow ? '✓' : '✗'}`,
     );
+    // A successful regen consumes the rejection — otherwise every
+    // future --missing pass would remake the slot again. The fresh
+    // art goes back to un-reviewed on the board.
+    if (okNow && review[slot.key]?.verdict === 'rejected') {
+      const latest = await loadReview(REVIEW_PATH);
+      delete latest[slot.key];
+      await saveReview(REVIEW_PATH, latest);
+      delete review[slot.key];
+    }
     // Usage-limit exits fail instantly and would burn the rest of
     // the queue as no-ops — bail after 3 in a row.
     consecutiveFailures = okNow ? 0 : consecutiveFailures + 1;

@@ -1,0 +1,13 @@
+{
+  "id": "barrel_px",
+  "name": "Barrel (pixel)",
+  "category": "prop",
+  "states": {
+    "idle": {
+      "frames": 2,
+      "fps": 4,
+      "loop": true,
+      "source": "frames"
+    }
+  }
+}

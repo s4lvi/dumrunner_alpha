@@ -11,11 +11,6 @@
     "verdict": "approved",
     "at": "2026-07-16T15:54:39.183Z"
   },
-  "material:scrap": {
-    "verdict": "rejected",
-    "note": "remake in new style",
-    "at": "2026-07-16T18:52:51.642Z"
-  },
   "biome_floor:biome_mox8bles": {
     "verdict": "approved",
     "at": "2026-07-16T18:56:27.997Z"
@@ -24,16 +19,6 @@
     "verdict": "approved",
     "at": "2026-07-16T18:56:29.992Z"
   },
-  "biome_floor:catacombs": {
-    "verdict": "rejected",
-    "note": "looks like a window, should look like stone floor",
-    "at": "2026-07-16T18:56:42.622Z"
-  },
-  "biome_floor:sun_bleached": {
-    "verdict": "rejected",
-    "note": "should look like sand",
-    "at": "2026-07-16T18:56:51.408Z"
-  },
   "biome_floor:default": {
     "verdict": "approved",
     "at": "2026-07-16T18:56:56.287Z"
@@ -41,11 +26,6 @@
   "biome_skybox:alien_core": {
     "verdict": "approved",
     "at": "2026-07-16T18:56:58.224Z"
-  },
-  "biome_skybox:default": {
-    "verdict": "rejected",
-    "note": "remake",
-    "at": "2026-07-16T18:57:11.021Z"
   },
   "biome_skybox:frozen": {
     "verdict": "approved",
@@ -58,26 +38,6 @@
   "biome_skybox:catacombs": {
     "verdict": "approved",
     "at": "2026-07-16T18:57:16.274Z"
-  },
-  "biome_skybox:sun_bleached": {
-    "verdict": "rejected",
-    "note": "remake",
-    "at": "2026-07-16T18:57:19.939Z"
-  },
-  "biome_ceiling:alien_core": {
-    "verdict": "rejected",
-    "note": "remake",
-    "at": "2026-07-16T18:58:13.855Z"
-  },
-  "biome_ceiling:catacombs": {
-    "verdict": "rejected",
-    "note": "remake",
-    "at": "2026-07-16T18:58:16.942Z"
-  },
-  "biome_ceiling:default": {
-    "verdict": "rejected",
-    "note": "remake",
-    "at": "2026-07-16T18:58:20.167Z"
   },
   "enemy:armored": {
     "verdict": "approved",
@@ -115,108 +75,8 @@
     "verdict": "approved",
     "at": "2026-07-16T18:59:48.247Z"
   },
-  "projectile:pistol": {
-    "verdict": "rejected",
-    "note": "remake",
-    "at": "2026-07-16T18:59:54.822Z"
-  },
-  "prop:prop_mouixmbe": {
-    "verdict": "rejected",
-    "note": "a curled and weathered alien tree",
-    "at": "2026-07-16T19:00:23.764Z"
-  },
-  "prop:prop_tree2": {
-    "verdict": "rejected",
-    "note": "a dead and weathered alien tree",
-    "at": "2026-07-16T19:00:32.993Z"
-  },
-  "prop:prop_mox9mxbs": {
-    "verdict": "rejected",
-    "note": "a curled, dead, and weathered alien tree",
-    "at": "2026-07-16T19:00:43.128Z"
-  },
-  "prop:rock": {
-    "verdict": "rejected",
-    "note": "a rocky outcropping",
-    "at": "2026-07-16T19:00:52.321Z"
-  },
-  "prop:prop_grass": {
-    "verdict": "rejected",
-    "note": "sparse alien grass stalks",
-    "at": "2026-07-16T19:01:07.992Z"
-  },
-  "prop:barrel": {
-    "verdict": "rejected",
-    "note": "ancient barrel",
-    "at": "2026-07-16T19:01:19.585Z"
-  },
-  "prop:crate": {
-    "verdict": "rejected",
-    "note": "ancient crate",
-    "at": "2026-07-16T19:01:26.776Z"
-  },
-  "prop:explosive_barrel": {
-    "verdict": "rejected",
-    "note": "ancient barrel filled with explosives",
-    "at": "2026-07-16T19:01:35.191Z"
-  },
-  "weapon_view:energy": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:heavy": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:hammer": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:pistol": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
   "player:default": {
     "verdict": "approved",
     "at": "2026-07-16T19:03:07.649Z"
-  },
-  "weapon_view:smg": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:rifle": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:shotgun": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:sniper": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:energy_blade": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:knife": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
-  },
-  "weapon_view:sword": {
-    "verdict": "rejected",
-    "note": "Previous attempt was a side view on a larger canvas. Remake at 16x16 as a FIRST-PERSON view-model per the brief (from behind the weapon, grip at bottom edge, foreshortened muzzle toward screen center). Do NOT load the old doc — create_sprite fresh.",
-    "at": "2026-07-17T01:55:10.460Z"
   }
 }
